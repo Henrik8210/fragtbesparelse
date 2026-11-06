@@ -69,101 +69,35 @@ export function BillDesk({ customer }: { customer: Customer }) {
       {hasBills ? (
         <div className="bill-toolbar">
           <h2>On this account</h2>
-          <button
-            type="button"
-            className="bill-plus is-small"
-            aria-expanded={mode !== "closed"}
-            aria-controls={formId}
-            onClick={openChooser}
-          >
-            <span aria-hidden="true">+</span>
-            <span className="sr-only">Add a bill</span>
-          </button>
+          <AddBillMenu
+            mode={mode}
+            formId={formId}
+            reading={reading}
+            errors={errors}
+            compact
+            label="Add a bill"
+            onToggle={openChooser}
+            onChoose={setMode}
+            onManual={addManual}
+            onFile={addFile}
+          />
         </div>
       ) : (
         <div className="bill-empty">
-          <button
-            type="button"
-            className="bill-plus"
-            aria-expanded={mode !== "closed"}
-            aria-controls={formId}
-            onClick={openChooser}
-          >
-            <span aria-hidden="true">+</span>
-            <span className="sr-only">Add the first bill</span>
-          </button>
+          <AddBillMenu
+            mode={mode}
+            formId={formId}
+            reading={reading}
+            errors={errors}
+            label="Add the first bill"
+            onToggle={openChooser}
+            onChoose={setMode}
+            onManual={addManual}
+            onFile={addFile}
+          />
           <p>Add the first bill. Type the amount, or upload the file.</p>
         </div>
       )}
-
-      {mode !== "closed" ? (
-        <div className="bill-panel" id={formId}>
-          {mode === "choose" ? (
-            <div className="bill-choices">
-              <button type="button" className="bill-choice" onClick={() => setMode("manual")}>
-                Type the amount
-              </button>
-              <button type="button" className="bill-choice" onClick={() => setMode("upload")}>
-                Upload a bill
-              </button>
-            </div>
-          ) : null}
-          {mode === "manual" ? (
-            <form className="bill-form" onSubmit={addManual}>
-              <label className="bill-field">
-                <span>Description</span>
-                <input name="label" type="text" maxLength={120} placeholder="Carrier or invoice number" />
-              </label>
-              <label className="bill-field">
-                <span>Amount</span>
-                <input name="amount" type="text" inputMode="decimal" required placeholder="12.400" />
-              </label>
-              <div className="bill-actions">
-                <button type="submit" className="bill-choice">
-                  Add bill
-                </button>
-                <button type="button" className="bill-back" onClick={() => setMode("choose")}>
-                  Back
-                </button>
-              </div>
-            </form>
-          ) : null}
-          {mode === "upload" ? (
-            <div className="bill-form">
-              <label className="bill-field">
-                <span>Bill file</span>
-                <input
-                  type="file"
-                  accept=".pdf,.csv,.txt,text/plain,text/csv,application/pdf"
-                  multiple
-                  disabled={reading}
-                  onChange={(event) => {
-                    const input = event.currentTarget;
-                    void addFile(input.files).finally(() => {
-                      input.value = "";
-                    });
-                  }}
-                />
-              </label>
-              <p className="hint">
-                {reading
-                  ? "Reading the file…"
-                  : "Text PDF, CSV, or plain text. A scanned image can be typed in instead."}
-              </p>
-              <button type="button" className="bill-back" onClick={() => setMode("choose")}>
-                Back
-              </button>
-            </div>
-          ) : null}
-          {errors.length > 0 ? (
-            <ul className="bill-errors">
-              {errors.map((error, index) => (
-                <li key={`${index}-${error}`}>{error}</li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
 
       {hasBills ? (
         <section className="bill-lines" aria-label={`Bills added for ${customer.name}`}>
@@ -190,5 +124,126 @@ export function BillDesk({ customer }: { customer: Customer }) {
         </section>
       ) : null}
     </>
+  );
+}
+
+function AddBillMenu({
+  mode,
+  formId,
+  reading,
+  errors,
+  compact = false,
+  label,
+  onToggle,
+  onChoose,
+  onManual,
+  onFile,
+}: {
+  mode: Mode;
+  formId: string;
+  reading: boolean;
+  errors: string[];
+  compact?: boolean;
+  label: string;
+  onToggle: () => void;
+  onChoose: (mode: Mode) => void;
+  onManual: (event: FormEvent<HTMLFormElement>) => void;
+  onFile: (files: FileList | null) => Promise<void>;
+}) {
+  const open = mode !== "closed";
+  return (
+    <div className="bill-add">
+      {open ? (
+        <button type="button" className="bill-pop-backdrop" aria-label="Close add bill" onClick={() => onChoose("closed")} />
+      ) : null}
+      <button
+        type="button"
+        className={compact ? "bill-plus is-small" : "bill-plus"}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls={formId}
+        onClick={onToggle}
+      >
+        <span aria-hidden="true">+</span>
+        <span className="sr-only">{label}</span>
+      </button>
+      {open ? (
+        <div
+          className="bill-pop"
+          id={formId}
+          role="dialog"
+          aria-label="Add a bill"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") onChoose("closed");
+          }}
+        >
+          {mode === "choose" ? (
+            <div className="bill-choices">
+              <button type="button" className="bill-choice" autoFocus onClick={() => onChoose("manual")}>
+                Type the amount
+              </button>
+              <button type="button" className="bill-choice" onClick={() => onChoose("upload")}>
+                Upload a bill
+              </button>
+            </div>
+          ) : null}
+          {mode === "manual" ? (
+            <form className="bill-form" onSubmit={onManual}>
+              <label className="bill-field">
+                <span>Description</span>
+                <input name="label" type="text" maxLength={120} placeholder="Carrier or invoice number" autoFocus />
+              </label>
+              <label className="bill-field">
+                <span>Amount</span>
+                <input name="amount" type="text" inputMode="decimal" required placeholder="12.400" />
+              </label>
+              <div className="bill-actions">
+                <button type="submit" className="bill-choice is-submit">
+                  Add bill
+                </button>
+                <button type="button" className="bill-back" onClick={() => onChoose("choose")}>
+                  Back
+                </button>
+              </div>
+            </form>
+          ) : null}
+          {mode === "upload" ? (
+            <div className="bill-form">
+              <label className="bill-field">
+                <span>Bill file</span>
+                <input
+                  type="file"
+                  accept=".pdf,.csv,.txt,text/plain,text/csv,application/pdf"
+                  multiple
+                  disabled={reading}
+                  autoFocus
+                  onChange={(event) => {
+                    const input = event.currentTarget;
+                    void onFile(input.files).finally(() => {
+                      input.value = "";
+                    });
+                  }}
+                />
+              </label>
+              <p className="hint">
+                {reading
+                  ? "Reading the file…"
+                  : "Text PDF, CSV, or plain text. A scanned image can be typed in instead."}
+              </p>
+              <button type="button" className="bill-back" onClick={() => onChoose("choose")}>
+                Back
+              </button>
+            </div>
+          ) : null}
+          {errors.length > 0 ? (
+            <ul className="bill-errors">
+              {errors.map((error, index) => (
+                <li key={`${index}-${error}`}>{error}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }

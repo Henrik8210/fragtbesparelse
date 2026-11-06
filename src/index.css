@@ -1121,10 +1121,60 @@ tfoot td {
   margin: 0;
 }
 
-.bill-panel {
-  max-width: 36rem;
-  margin-top: 1.1rem;
-  padding-top: 0.2rem;
+.bill-add {
+  position: relative;
+}
+
+.bill-pop-backdrop {
+  position: fixed;
+  z-index: 4;
+  inset: 0;
+}
+
+.bill-plus {
+  position: relative;
+  z-index: 6;
+}
+
+.bill-pop {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.45rem);
+  left: 0;
+  width: min(18rem, calc(100vw - 2rem));
+  padding: 0.4rem;
+  background: #ffffff;
+  border: 1px solid #e2e8ef;
+  box-shadow: 0 14px 32px rgba(13, 33, 55, 0.16);
+}
+
+.bill-toolbar .bill-pop {
+  right: 0;
+  left: auto;
+}
+
+.bill-pop .bill-choices {
+  flex-direction: column;
+}
+
+.bill-pop .bill-choices .bill-choice {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  background: transparent;
+  color: #0d2137;
+  text-align: left;
+}
+
+.bill-pop .bill-choices .bill-choice:hover,
+.bill-pop .bill-choices .bill-choice:focus-visible {
+  background: #f4f7fa;
+}
+
+.bill-pop .bill-choice.is-submit {
+  background: #0d2137;
+  color: #ffffff;
 }
 
 .bill-choices,
