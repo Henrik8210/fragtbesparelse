@@ -70,9 +70,6 @@ export function Sidebar() {
       <aside id="sidebar" className="sidebar">
         <div className="sidebar-head">
           <NavLink to={home} end className="brand sidebar-brand" aria-label="Fairlane home" onClick={closeOnNarrow}>
-            <span className="brand-mark" aria-hidden="true">
-              F
-            </span>
             <span className="brand-name">Fairlane</span>
           </NavLink>
           <button
