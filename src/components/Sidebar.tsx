@@ -41,8 +41,6 @@ export function Sidebar() {
   const accountId = signedInCustomer?.id ?? accountFromPath(pathname);
   const base = accountId ? `/customers/${accountId}` : "";
   const home = accountId ? base : "/";
-  const tag =
-    session?.role === "admin" ? (session.name ?? "Admin") : signedInCustomer ? signedInCustomer.name : "Sign in to continue";
 
   function toggle() {
     setCollapsed((current) => {
@@ -75,10 +73,7 @@ export function Sidebar() {
             <span className="brand-mark" aria-hidden="true">
               F
             </span>
-            <span className="brand-text">
-              <span className="brand-name">Fairlane</span>
-              <span className="brand-tag">{tag}</span>
-            </span>
+            <span className="brand-name">Fairlane</span>
           </NavLink>
           <button
             type="button"
