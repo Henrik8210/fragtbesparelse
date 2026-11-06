@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import { withBillSpend } from "../bills/spend.ts";
 import { useBills } from "../bills.tsx";
 import { BillDesk } from "../components/BillDesk.tsx";
@@ -22,7 +22,7 @@ export function BillingPage() {
 
 export function BillsPage() {
   return (
-    <Space title="Bills">
+    <Space title="Bills" path="billing/bills">
       {(customer, role) =>
         customer ? <BillDesk customer={customer} /> : <ChooseAccount role={role} space="bills" />
       }
@@ -48,9 +48,11 @@ export function SettingsPage() {
 
 function Space({
   title,
+  path,
   children,
 }: {
   title: string;
+  path?: string;
   children: (customer: Customer | null, role: "admin" | "customer" | null) => ReactNode;
 }) {
   const { customerId } = useParams();
@@ -62,7 +64,7 @@ function Space({
   }, [title]);
 
   if (session?.role === "customer" && !customerId) {
-    return <Navigate to={`/customers/${session.customerId}/${title.toLowerCase()}`} replace />;
+    return <Navigate to={`/customers/${session.customerId}/${path ?? title.toLowerCase()}`} replace />;
   }
   if (customerId && !customer) {
     return (
@@ -109,8 +111,15 @@ function BillingDetail({ customer }: { customer: Customer }) {
       <p className="meta">{customer.name}</p>
       <p className="lede">
         {LATEST_MONTH} statement. Spend is the sample invoices
-        {total > 0 ? ` plus ${formatKr(total)} from bills on this account` : ""}. The budget is the
-        amount projected for the month. Nothing here can be paid, and this is not a real invoice.
+        {total > 0 ? ` plus ${formatKr(total)} from bills on this account` : ""}. The same total is
+        on the overview. The budget is the amount projected for the month. Nothing here can be paid,
+        and this is not a real invoice.
+      </p>
+      <p className="wayfinding">
+        <Link className="text-link" to={`/customers/${customer.id}/billing/bills`}>
+          Bills
+        </Link>{" "}
+        under this menu are included in freight spend.
       </p>
       <div className="table-wrap">
         <table className="months">

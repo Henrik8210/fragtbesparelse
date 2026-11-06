@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useBillTotals } from "../bills.tsx";
 import { Figures } from "../components/Figures.tsx";
 import { LATEST_MONTH, customers, latestFromLanes, portfolioTotals } from "../data/portfolio.ts";
 import { formatKr, formatPercent } from "../format.ts";
@@ -10,6 +11,8 @@ type SortDir = "asc" | "desc";
 export function PortfolioPage() {
   const navigate = useNavigate();
   const totals = portfolioTotals();
+  const billTotals = useBillTotals();
+  const billsAdded = customers.reduce((sum, customer) => sum + (billTotals[customer.id] ?? 0), 0);
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
     key: "savings",
     dir: "desc",
@@ -22,7 +25,8 @@ export function PortfolioPage() {
   const rows = useMemo(() => {
     const next = customers.map((customer) => {
       const latest = latestFromLanes(customer);
-      return { customer, ...latest, rate: latest.savings / latest.paid };
+      const paid = latest.paid + (billTotals[customer.id] ?? 0);
+      return { customer, ...latest, paid, rate: latest.savings / paid };
     });
     const factor = sort.dir === "asc" ? 1 : -1;
     next.sort((a, b) => {
@@ -32,7 +36,7 @@ export function PortfolioPage() {
       return (a[sort.key] - b[sort.key]) * factor;
     });
     return next;
-  }, [sort]);
+  }, [billTotals, sort]);
 
   const maxRate = Math.max(...rows.map((row) => row.rate));
 
@@ -61,12 +65,18 @@ export function PortfolioPage() {
       <p className="lede">
         Admin view of every fictional company. Open an account to see what that company paid, a
         sample fair price for the same shipments, and the gap. {LATEST_MONTH} is the latest month.
-        Every figure on this screen is Fairlane sample data.
+        {billsAdded > 0
+          ? `Paid includes ${formatKr(billsAdded)} from bills added on this browser.`
+          : "Every figure on this screen is Fairlane sample data."}
       </p>
       <Figures
         kicker={`${LATEST_MONTH} · ${customers.length} companies`}
         items={[
-          { label: "Paid", value: formatKr(totals.paid), hint: "Sample invoices" },
+          {
+            label: "Paid",
+            value: formatKr(totals.paid + billsAdded),
+            hint: billsAdded > 0 ? `Sample invoices plus ${formatKr(billsAdded)} from bills` : "Sample invoices",
+          },
           {
             label: "Benchmark",
             value: formatKr(totals.benchmark),
@@ -75,7 +85,7 @@ export function PortfolioPage() {
           {
             label: "Addressable savings",
             value: formatKr(totals.savings),
-            hint: `${formatPercent(totals.savings / totals.paid)} of paid`,
+            hint: `${formatPercent(totals.savings / (totals.paid + billsAdded))} of paid`,
             emphasis: true,
           },
         ]}

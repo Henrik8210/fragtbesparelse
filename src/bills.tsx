@@ -18,6 +18,7 @@ type BillStore = Record<string, Bill[]>;
 
 type BillsContextValue = {
   billsFor: (customerId: string) => Bill[];
+  totals: Record<string, number>;
   addBill: (customerId: string, draft: { label: string; amount: number; source: BillSource }) => void;
   removeBill: (customerId: string, billId: string) => void;
 };
@@ -81,7 +82,13 @@ export function BillsProvider({ children }: { children: ReactNode }) {
     }
   }, [store]);
 
+  const totals: Record<string, number> = {};
+  for (const [customerId, bills] of Object.entries(store)) {
+    totals[customerId] = bills.reduce((sum, bill) => sum + bill.amount, 0);
+  }
+
   const value: BillsContextValue = {
+    totals,
     billsFor(customerId) {
       return store[customerId] ?? [];
     },
@@ -111,6 +118,12 @@ export function BillsProvider({ children }: { children: ReactNode }) {
   };
 
   return <BillsContext.Provider value={value}>{children}</BillsContext.Provider>;
+}
+
+export function useBillTotals(): Record<string, number> {
+  const context = useContext(BillsContext);
+  if (!context) throw new Error("useBillTotals must be used within BillsProvider");
+  return context.totals;
 }
 
 export function useBills(customerId: string) {

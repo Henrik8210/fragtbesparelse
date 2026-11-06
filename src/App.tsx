@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Shell } from "./components/Shell.tsx";
 import { BillsProvider } from "./bills.tsx";
 import { PeopleProvider } from "./people.tsx";
@@ -19,12 +19,14 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/billing" element={<BillingPage />} />
-                <Route path="/bills" element={<BillsPage />} />
+                <Route path="/billing/bills" element={<BillsPage />} />
+                <Route path="/bills" element={<Navigate to="/billing/bills" replace />} />
                 <Route path="/users" element={<UsersPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/customers/:customerId" element={<CustomerPage />} />
                 <Route path="/customers/:customerId/billing" element={<BillingPage />} />
-                <Route path="/customers/:customerId/bills" element={<BillsPage />} />
+                <Route path="/customers/:customerId/billing/bills" element={<BillsPage />} />
+                <Route path="/customers/:customerId/bills" element={<LegacyBillsRedirect />} />
                 <Route path="/customers/:customerId/users" element={<UsersPage />} />
                 <Route path="/customers/:customerId/settings" element={<SettingsPage />} />
                 <Route path="*" element={<NotFound />} />
@@ -35,6 +37,11 @@ export default function App() {
       </SessionProvider>
     </BrowserRouter>
   );
+}
+
+function LegacyBillsRedirect() {
+  const { customerId } = useParams();
+  return <Navigate to={`/customers/${customerId}/billing/bills`} replace />;
 }
 
 function HomePage() {

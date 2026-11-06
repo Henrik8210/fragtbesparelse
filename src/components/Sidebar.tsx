@@ -55,12 +55,9 @@ export function Sidebar() {
     setCollapsed(true);
   }
 
-  const items = [
-    { to: home, label: "Overview", meta: "Dashboard", icon: <GridIcon /> },
-    { to: `${base}/billing`, label: "Billing", meta: "Spend and budget", icon: <BillingIcon /> },
-    { to: `${base}/bills`, label: "Bills", meta: "Freight invoices", icon: <BillsIcon /> },
-    { to: `${base}/users`, label: "Users", meta: "People on the account", icon: <UsersIcon /> },
-  ];
+  const billingTo = `${base}/billing`;
+  const billsTo = `${base}/billing/bills`;
+  const usersTo = `${base}/users`;
 
   return (
     <div className={collapsed ? "sidebar-slot is-collapsed" : "sidebar-slot"}>
@@ -89,19 +86,52 @@ export function Sidebar() {
         <nav id="sidebar-nav" className="sidebar-nav" aria-label="Main">
           <p className="sidebar-label">Menu</p>
           <ul className="sidebar-list">
-            {items.map((item) => (
-              <li key={item.label}>
-                <NavLink to={item.to} end className={linkClass} onClick={closeOnNarrow}>
-                  <span className="nav-glyph" aria-hidden="true">
-                    {item.icon}
-                  </span>
-                  <span className="nav-copy">
-                    <span className="nav-label">{item.label}</span>
-                    <span className="nav-meta">{item.meta}</span>
-                  </span>
-                </NavLink>
-              </li>
-            ))}
+            <li>
+              <NavLink to={home} end className={linkClass} onClick={closeOnNarrow}>
+                <span className="nav-glyph" aria-hidden="true">
+                  <GridIcon />
+                </span>
+                <span className="nav-copy">
+                  <span className="nav-label">Overview</span>
+                  <span className="nav-meta">Dashboard</span>
+                </span>
+              </NavLink>
+            </li>
+            <li className="nav-group">
+              <NavLink to={billingTo} end className={linkClass} onClick={closeOnNarrow}>
+                <span className="nav-glyph" aria-hidden="true">
+                  <BillingIcon />
+                </span>
+                <span className="nav-copy">
+                  <span className="nav-label">Billing</span>
+                  <span className="nav-meta">Spend and budget</span>
+                </span>
+              </NavLink>
+              <ul className="nav-sub">
+                <li>
+                  <NavLink to={billsTo} end className={linkClass} onClick={closeOnNarrow}>
+                    <span className="nav-glyph" aria-hidden="true">
+                      <BillsIcon />
+                    </span>
+                    <span className="nav-copy">
+                      <span className="nav-label">Bills</span>
+                      <span className="nav-meta">Added to this spend</span>
+                    </span>
+                  </NavLink>
+                </li>
+              </ul>
+            </li>
+            <li>
+              <NavLink to={usersTo} end className={linkClass} onClick={closeOnNarrow}>
+                <span className="nav-glyph" aria-hidden="true">
+                  <UsersIcon />
+                </span>
+                <span className="nav-copy">
+                  <span className="nav-label">Users</span>
+                  <span className="nav-meta">People on the account</span>
+                </span>
+              </NavLink>
+            </li>
           </ul>
         </nav>
         <div className="sidebar-foot">

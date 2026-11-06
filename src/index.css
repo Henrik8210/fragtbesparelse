@@ -219,6 +219,25 @@ a {
   list-style: none;
 }
 
+.nav-sub {
+  display: flex;
+  flex-direction: column;
+  margin: 0.1rem 0 0.2rem 1.45rem;
+  padding: 0 0 0.15rem 0.65rem;
+  list-style: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.nav-sub .nav-link {
+  min-height: 2.35rem;
+}
+
+.sidebar-slot.is-collapsed .nav-sub {
+  margin: 0.1rem 0 0;
+  padding: 0;
+  border-left: 0;
+}
+
 .nav-link {
   display: flex;
   align-items: center;

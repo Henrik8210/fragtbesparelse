@@ -161,7 +161,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
           {
             label: "Addressable savings",
             value: formatKr(latest.savings),
-            hint: `${formatPercent(latest.savings / latest.paid)} of this month's paid freight`,
+            hint: `${formatPercent(latest.savings / latest.paid)} of the sample invoices`,
             emphasis: true,
           },
         ]}
@@ -170,7 +170,8 @@ function CustomerDetail({ customer }: { customer: Customer }) {
       <section className="block" id="trend">
         <h2>Twelve-month trend</h2>
         <p className="section-intro">
-          {rangeLabel}. The shaded gap is the addressable savings in each month.
+          {rangeLabel}. The shaded gap is the sample addressable savings in each month.
+          {billTotal > 0 ? ` Paid in ${LATEST_MONTH} includes ${formatKr(billTotal)} from bills.` : ""}
         </p>
         <TrendChart
           labels={MONTHS.map((month) => month.short)}
@@ -180,8 +181,9 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         <ul className="month-cards">
           {customer.months.map((month, index) => {
             const label = MONTHS[index];
-            const savings = month.paid - month.benchmark;
             const isLatest = index === customer.months.length - 1;
+            const paid = isLatest ? month.paid + billTotal : month.paid;
+            const savings = month.paid - month.benchmark;
             return (
               <li key={label.id} className={isLatest ? "card is-latest" : "card"}>
                 <span className="card-title">
@@ -191,7 +193,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
                 <span className="card-stats">
                   <span>
                     <span className="card-label">Paid</span>
-                    {formatKr(month.paid)}
+                    {formatKr(paid)}
                   </span>
                   <span>
                     <span className="card-label">Benchmark</span>
@@ -227,16 +229,17 @@ function CustomerDetail({ customer }: { customer: Customer }) {
             </thead>
             <tbody>
               {customer.months.map((month, index) => {
-                const savings = month.paid - month.benchmark;
                 const label = MONTHS[index];
                 const isLatest = index === customer.months.length - 1;
+                const paid = isLatest ? month.paid + billTotal : month.paid;
+                const savings = month.paid - month.benchmark;
                 return (
                   <tr key={label.id} className={isLatest ? "is-latest" : undefined}>
                     <th scope="row">
                       {label.label}
                       {isLatest ? <span className="latest-tag">Latest</span> : null}
                     </th>
-                    <td className="num">{formatKr(month.paid)}</td>
+                    <td className="num">{formatKr(paid)}</td>
                     <td className="num">{formatKr(month.benchmark)}</td>
                     <td className="num">{formatKr(savings)}</td>
                   </tr>
