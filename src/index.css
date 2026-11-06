@@ -1,14 +1,14 @@
 :root {
   --paper: #ffffff;
-  --ink: #3e4650;
-  --ink-soft: #52606c;
-  --muted: #7d8b96;
-  --line: #d5ebf5;
-  --green: #6eb3d4;
-  --oxide: #9ccfe6;
-  --banner: #e7f5fb;
-  --banner-ink: #3e4650;
-  --wash: #f4fafd;
+  --ink: #0d2137;
+  --ink-soft: #1c3a56;
+  --muted: #5c7388;
+  --line: #e2e8ef;
+  --green: #0d2137;
+  --oxide: #5d7c99;
+  --banner: #0d2137;
+  --banner-ink: #ffffff;
+  --wash: #f4f7fa;
   color: var(--ink);
   background: var(--paper);
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
@@ -53,6 +53,10 @@ a {
   outline-offset: 3px;
 }
 
+.sidebar :focus-visible {
+  outline-color: #ffffff;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -76,7 +80,7 @@ a {
   padding: 0.6rem 1rem;
   background: var(--banner);
   color: var(--banner-ink);
-  border-bottom: 1px solid #d5ebf5;
+  border-bottom: 1px solid #0a1c30;
   text-align: center;
 }
 
@@ -128,13 +132,11 @@ a {
   min-height: calc(100vh - 4.3rem);
   max-height: calc(100vh - 4.3rem);
   padding: 0.85rem 0.7rem 0.75rem;
-  background: #e7f5fb;
-  color: #3e4650;
-  border: 1px solid #d5ebf5;
+  background: #0d2137;
+  color: #ffffff;
+  border: 1px solid #0d2137;
   border-radius: 20px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.75),
-    0 14px 34px rgba(180, 210, 220, 0.45);
+  box-shadow: 0 14px 34px rgba(13, 33, 55, 0.16);
 }
 
 .sidebar-head {
@@ -152,15 +154,15 @@ a {
 .sidebar-brand .brand-mark {
   border-radius: 10px;
   background: #ffffff;
-  color: #6eb3d4;
+  color: #0d2137;
 }
 
 .sidebar-brand .brand-name {
-  color: #3e4650;
+  color: #ffffff;
 }
 
 .sidebar-brand .brand-tag {
-  color: #7d8b96;
+  color: rgba(255, 255, 255, 0.68);
 }
 
 .sidebar-toggle {
@@ -173,13 +175,13 @@ a {
   height: 2.15rem;
   margin-left: auto;
   border-radius: 999px;
-  background: #ffffff;
-  color: #6eb3d4;
-  box-shadow: 0 1px 2px rgba(180, 210, 220, 0.5);
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  box-shadow: none;
 }
 
 .sidebar-toggle:hover {
-  background: #fff;
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .toggle-icon {
@@ -205,12 +207,12 @@ a {
 .sidebar-foot {
   margin-top: auto;
   padding-top: 0.7rem;
-  border-top: 1px solid #d5ebf5;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .sidebar-foot .nav-link {
   min-height: 2.2rem;
-  color: #6a7782;
+  color: rgba(255, 255, 255, 0.86);
 }
 
 .sidebar-foot .cog {
@@ -228,7 +230,7 @@ a {
 
 .sidebar-label {
   margin: 0.85rem 0.45rem 0.35rem;
-  color: #7d8b96;
+  color: rgba(255, 255, 255, 0.58);
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -251,18 +253,18 @@ a {
   min-height: 2.65rem;
   padding: 0.35rem 0.45rem;
   border-radius: 12px;
-  color: #3e4650;
+  color: #ffffff;
   text-decoration: none;
 }
 
 .nav-link:hover {
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .nav-link.is-active {
   background: #ffffff;
-  color: #3e4650;
-  box-shadow: 0 6px 16px rgba(180, 210, 220, 0.45);
+  color: #0d2137;
+  box-shadow: none;
 }
 
 .nav-glyph {
@@ -272,15 +274,20 @@ a {
   width: 2rem;
   height: 2rem;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.72);
-  color: #6eb3d4;
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 
 .nav-link.is-active .nav-glyph {
-  background: #e7f5fb;
+  background: #e8eef4;
+  color: #0d2137;
+}
+
+.nav-link.is-active .nav-meta {
+  color: #5c7388;
 }
 
 .nav-copy {
@@ -300,7 +307,7 @@ a {
 }
 
 .nav-meta {
-  color: #7d8b96;
+  color: rgba(255, 255, 255, 0.68);
   font-size: 0.75rem;
   line-height: 1.25;
 }
@@ -353,15 +360,15 @@ a {
   gap: 0.5rem;
   min-height: 2.45rem;
   padding: 0.2rem 0.75rem 0.2rem 0.28rem;
-  border: 1px solid #d5ebf5;
+  border: 1px solid #e2e8ef;
   border-radius: 999px;
   background: #fff;
-  box-shadow: 0 1px 2px rgba(180, 210, 220, 0.45);
+  box-shadow: 0 1px 2px rgba(13, 33, 55, 0.06);
 }
 
 .account-button.is-open,
 .account-button:hover {
-  border-color: #b7ddf0;
+  border-color: #0d2137;
 }
 
 .account-name {
@@ -381,8 +388,8 @@ a {
   height: 1.9rem;
   padding: 0 0.35rem;
   border-radius: 999px;
-  background: #e7f5fb;
-  color: #6eb3d4;
+  background: #0d2137;
+  color: #ffffff;
   font-size: 0.68rem;
   font-weight: 700;
 }
@@ -404,14 +411,14 @@ a {
   overflow: auto;
   padding: 0.75rem;
   background: #fff;
-  border: 1px solid #d5ebf5;
+  border: 1px solid #e2e8ef;
   border-radius: 16px;
-  box-shadow: 0 18px 40px rgba(180, 210, 220, 0.55);
+  box-shadow: 0 18px 40px rgba(13, 33, 55, 0.12);
 }
 
 .account-kicker {
   margin: 0.35rem 0.35rem 0.25rem;
-  color: #7d8b96;
+  color: #5c7388;
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -444,7 +451,7 @@ a {
 }
 
 .account-choice:hover {
-  background: #eef7fc;
+  background: #f4f7fa;
 }
 
 .account-choice-name,
@@ -468,13 +475,13 @@ a {
   margin-top: 0.45rem;
   padding: 0.55rem 0.4rem;
   border-radius: 10px;
-  color: #6eb3d4;
+  color: #0d2137;
   font-weight: 600;
   text-align: left;
 }
 
 .account-logout:hover {
-  background: #eef7fc;
+  background: #f4f7fa;
 }
 
 .brand {
@@ -490,8 +497,8 @@ a {
   place-items: center;
   width: 2.1rem;
   height: 2.1rem;
-  background: #ffffff;
-  color: #6eb3d4;
+  background: #0d2137;
+  color: #ffffff;
   font-weight: 600;
   border-radius: 3px;
 }
@@ -700,11 +707,11 @@ th.num button {
 }
 
 .companies tbody tr:hover {
-  background: #f4fafd;
+  background: #f4f7fa;
 }
 
 .companies tbody tr:focus-within {
-  background: #e7f5fb;
+  background: #f4f7fa;
 }
 
 tr.is-latest {
@@ -896,12 +903,12 @@ tfoot td {
 }
 
 .swatch-budget {
-  background: #9ccfe6;
+  background: #5d7c99;
 }
 
 .swatch-gap {
   height: 0.7rem;
-  background: rgba(158, 207, 230, 0.45);
+  background: rgba(13, 33, 55, 0.16);
 }
 
 .chart {
@@ -951,12 +958,12 @@ tfoot td {
 }
 
 .grid-zero {
-  stroke: #d5ebf5;
+  stroke: #e2e8ef;
   stroke-width: 1.5;
 }
 
 .gap-fill {
-  fill: rgba(158, 207, 230, 0.35);
+  fill: rgba(13, 33, 55, 0.1);
 }
 
 .line-paid {
@@ -970,7 +977,7 @@ tfoot td {
 }
 
 .line-budget {
-  stroke: #8ec4e0;
+  stroke: #5d7c99;
   stroke-width: 2.25;
   stroke-dasharray: 5 4;
 }
@@ -1168,7 +1175,7 @@ tfoot td {
     position: fixed;
     z-index: 4;
     inset: 0;
-    background: rgba(183, 221, 240, 0.55);
+    background: rgba(13, 33, 55, 0.28);
   }
 
   .sidebar-slot.is-collapsed {
@@ -1198,9 +1205,10 @@ tfoot td {
     height: 2.4rem;
     margin: 0;
     padding: 0 0.85rem 0 0.6rem;
-    background: #e7f5fb;
-    border: 1px solid #d5ebf5;
-    box-shadow: 0 8px 20px rgba(180, 210, 220, 0.55);
+    background: #0d2137;
+    color: #ffffff;
+    border: 1px solid #0d2137;
+    box-shadow: 0 8px 20px rgba(13, 33, 55, 0.18);
   }
 
   .sidebar-slot.is-collapsed .toggle-icon {
