@@ -42,7 +42,7 @@ export function Sidebar() {
   const base = accountId ? `/customers/${accountId}` : "";
   const home = accountId ? base : "/";
   const tag =
-    session?.role === "admin" ? "Admin" : signedInCustomer ? signedInCustomer.name : "Sign in to continue";
+    session?.role === "admin" ? (session.name ?? "Admin") : signedInCustomer ? signedInCustomer.name : "Sign in to continue";
 
   function toggle() {
     setCollapsed((current) => {
@@ -60,6 +60,7 @@ export function Sidebar() {
   const items = [
     { to: home, label: "Overview", meta: "Dashboard", icon: <GridIcon /> },
     { to: `${base}/billing`, label: "Billing", meta: "Spend and budget", icon: <BillingIcon /> },
+    { to: `${base}/bills`, label: "Bills", meta: "Freight invoices", icon: <BillsIcon /> },
     { to: `${base}/users`, label: "Users", meta: "People on the account", icon: <UsersIcon /> },
   ];
 
@@ -163,6 +164,21 @@ function BillingIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
       <rect x="3" y="1.5" width="10" height="13" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function BillsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M3.2 2.2h6.2l3.4 3.4v8.2H3.2V2.2z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path d="M9.2 2.4v3.2h3.2M5.2 8h5.6M5.2 10.6h3.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }

@@ -3,7 +3,20 @@ import { customers } from "./data/portfolio.ts";
 
 const STORAGE_KEY = "fairlane-session";
 
-export type Session = { role: "admin" } | { role: "customer"; customerId: string };
+function cleanName(value: string): string {
+  return stripControls(value).replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function stripControls(value: string): string {
+  let cleaned = "";
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    cleaned += code < 32 || code === 127 ? " " : char;
+  }
+  return cleaned;
+}
+
+export type Session = { role: "admin"; name?: string } | { role: "customer"; customerId: string };
 
 type SessionContextValue = {
   session: Session | null;
@@ -19,7 +32,10 @@ function readSession(): Session | null {
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || !("role" in parsed)) return null;
-    if (parsed.role === "admin") return { role: "admin" };
+    if (parsed.role === "admin") {
+      const name = "name" in parsed && typeof parsed.name === "string" ? cleanName(parsed.name) : "";
+      return name ? { role: "admin", name } : { role: "admin" };
+    }
     if (
       parsed.role === "customer" &&
       "customerId" in parsed &&

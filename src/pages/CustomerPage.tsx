@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { withBillSpend } from "../bills/spend.ts";
+import { useBills } from "../bills.tsx";
 import { useSession } from "../session.tsx";
 import { Figures } from "../components/Figures.tsx";
 import { MonthBudgetChart } from "../components/MonthBudgetChart.tsx";
@@ -55,7 +57,8 @@ function CustomerDetail({ customer }: { customer: Customer }) {
   const { session } = useSession();
   const [filter, setFilter] = useState<Filter>("all");
   const latest = latestFromLanes(customer);
-  const monthTrack = currentMonthTrack(customer);
+  const { total: billTotal } = useBills(customer.id);
+  const monthTrack = withBillSpend(currentMonthTrack(customer), billTotal);
   const againstBudget = monthTrack.spent - monthTrack.budget;
   const causes = savingsByCause(customer);
   const maxCause = Math.max(...causes.map((cause) => cause.amount));
@@ -95,13 +98,17 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         </p>
       ) : null}
       <p className="lede">
-        {customer.description} Every figure on this screen is Fairlane sample data.
+        {customer.description}{" "}
+        {billTotal > 0
+          ? `Sample figures, plus ${formatKr(billTotal)} from bills on this account.`
+          : "Every figure on this screen is Fairlane sample data."}
       </p>
       <section className="block" id="budget">
         <h2>This month against the budget</h2>
         <p className="section-intro">
-          {LATEST_MONTH}. The solid line is sample freight spend as the month goes on. The dashed
-          line is the budget projected for the full month. Spend finishes at {formatKr(monthTrack.spent)}.
+          {LATEST_MONTH}. The solid line is freight spend as the month goes on
+          {billTotal > 0 ? ", with bills you added included at month end" : ""}. The dashed line is
+          the budget projected for the full month. Spend finishes at {formatKr(monthTrack.spent)}.
           The budget is {formatKr(monthTrack.budget)}.{" "}
           {againstBudget === 0
             ? "Spend matches that budget."
@@ -141,7 +148,11 @@ function CustomerDetail({ customer }: { customer: Customer }) {
       <Figures
         kicker={`${LATEST_MONTH} · latest month`}
         items={[
-          { label: "Paid", value: formatKr(latest.paid), hint: "Sample invoices" },
+          {
+            label: "Paid",
+            value: formatKr(latest.paid + billTotal),
+            hint: billTotal > 0 ? `Sample invoices plus ${formatKr(billTotal)} from bills` : "Sample invoices",
+          },
           {
             label: "Benchmark",
             value: formatKr(latest.benchmark),

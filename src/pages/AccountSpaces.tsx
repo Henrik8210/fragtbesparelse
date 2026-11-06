@@ -1,16 +1,14 @@
 import { useEffect, type ReactNode } from "react";
 import { Navigate, useParams } from "react-router-dom";
+import { withBillSpend } from "../bills/spend.ts";
+import { useBills } from "../bills.tsx";
+import { BillDesk } from "../components/BillDesk.tsx";
+import { UserDesk } from "../components/UserDesk.tsx";
 import { LATEST_MONTH, currentMonthTrack, customers } from "../data/portfolio.ts";
 import { formatKr } from "../format.ts";
 import { useSession } from "../session.tsx";
 import type { Customer } from "../types.ts";
 import { NotFound } from "./NotFound.tsx";
-
-const SEATS = [
-  { role: "Owner", access: "The whole account" },
-  { role: "Billing", access: "Spend and the budget" },
-  { role: "Operations", access: "Lanes and carriers" },
-] as const;
 
 export function BillingPage() {
   return (
@@ -22,12 +20,20 @@ export function BillingPage() {
   );
 }
 
+export function BillsPage() {
+  return (
+    <Space title="Bills">
+      {(customer, role) =>
+        customer ? <BillDesk customer={customer} /> : <ChooseAccount role={role} space="bills" />
+      }
+    </Space>
+  );
+}
+
 export function UsersPage() {
   return (
     <Space title="Users">
-      {(customer, role) =>
-        customer ? <UsersDetail customer={customer} /> : <ChooseAccount role={role} space="users" />
-      }
+      {(customer, role) => (role ? <UserDesk customer={customer} role={role} /> : null)}
     </Space>
   );
 }
@@ -94,14 +100,16 @@ function Space({
 }
 
 function BillingDetail({ customer }: { customer: Customer }) {
-  const track = currentMonthTrack(customer);
+  const { total } = useBills(customer.id);
+  const track = withBillSpend(currentMonthTrack(customer), total);
   const difference = track.spent - track.budget;
   return (
     <>
       <h1>Billing</h1>
       <p className="meta">{customer.name}</p>
       <p className="lede">
-        {LATEST_MONTH} sample statement. Spend is what the account was invoiced. The budget is the
+        {LATEST_MONTH} statement. Spend is the sample invoices
+        {total > 0 ? ` plus ${formatKr(total)} from bills on this account` : ""}. The budget is the
         amount projected for the month. Nothing here can be paid, and this is not a real invoice.
       </p>
       <div className="table-wrap">
@@ -122,6 +130,12 @@ function BillingDetail({ customer }: { customer: Customer }) {
               <th scope="row">Freight spend</th>
               <td className="num">{formatKr(track.spent)}</td>
             </tr>
+            {total > 0 ? (
+              <tr>
+                <th scope="row">From bills you added</th>
+                <td className="num">{formatKr(total)}</td>
+              </tr>
+            ) : null}
             <tr>
               <th scope="row">Budget</th>
               <td className="num">{formatKr(track.budget)}</td>
@@ -137,27 +151,6 @@ function BillingDetail({ customer }: { customer: Customer }) {
   );
 }
 
-function UsersDetail({ customer }: { customer: Customer }) {
-  return (
-    <>
-      <h1>Users</h1>
-      <p className="meta">{customer.name}</p>
-      <p className="lede">
-        Sample seats on this account. They are roles, not real people, and they cannot sign in on
-        their own.
-      </p>
-      <ul className="seat-list">
-        {SEATS.map((seat) => (
-          <li key={seat.role}>
-            <span className="seat-role">{seat.role}</span>
-            <span className="seat-access">{seat.access}</span>
-          </li>
-        ))}
-      </ul>
-    </>
-  );
-}
-
 function SettingsDetail({
   customer,
   role,
@@ -165,6 +158,13 @@ function SettingsDetail({
   customer: Customer | null;
   role: "admin" | "customer" | null;
 }) {
+  const { session } = useSession();
+  const signedIn =
+    role === "admin"
+      ? session?.role === "admin"
+        ? (session.name ?? "Fairlane admin")
+        : "Fairlane admin"
+      : "This company only";
   return (
     <>
       <h1>Settings</h1>
@@ -176,11 +176,11 @@ function SettingsDetail({
         </div>
         <div>
           <dt>Signed in as</dt>
-          <dd>{role === "admin" ? "Fairlane admin" : "This company only"}</dd>
+          <dd>{signedIn}</dd>
         </div>
         <div>
           <dt>Data</dt>
-          <dd>Sample figures only. These settings do not change a live account.</dd>
+          <dd>Sample figures, plus bills and people you add on this browser.</dd>
         </div>
       </dl>
     </>
@@ -190,10 +190,10 @@ function SettingsDetail({
 function ChooseAccount({ role, space }: { role: "admin" | "customer" | null; space: string }) {
   return (
     <>
-      <h1>{space === "billing" ? "Billing" : "Users"}</h1>
+      <h1>{space === "billing" ? "Billing" : space === "bills" ? "Bills" : "Users"}</h1>
       <p className="lede">
         {role === "admin"
-          ? `Open a customer from Log in in the upper right. ${space === "billing" ? "Billing" : "Users"} is kept on that account.`
+          ? `Open a customer from Log in in the upper right. ${space === "billing" ? "Billing" : space === "bills" ? "Bills" : "Users"} is kept on that account.`
           : "Sign in from the upper right to open an account."}
       </p>
     </>

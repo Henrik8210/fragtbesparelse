@@ -1043,6 +1043,13 @@ tfoot td {
   color: var(--muted);
 }
 
+.seat-person-role {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
 .settings-list {
   margin: 1.2rem 0 0;
 }
@@ -1062,6 +1069,149 @@ tfoot td {
 
 .settings-list dd {
   margin: 0.2rem 0 0;
+}
+
+.bill-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-top: 1.8rem;
+  max-width: 36rem;
+}
+
+.bill-empty p {
+  margin: 0;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.add-plus,
+.bill-plus {
+  display: grid;
+  place-items: center;
+  width: 4.75rem;
+  height: 4.75rem;
+  border: 1px dashed #0d2137;
+  background: #ffffff;
+  color: #0d2137;
+  font-size: 2.6rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.add-plus:hover,
+.bill-plus:hover,
+.add-plus[aria-expanded="true"],
+.bill-plus[aria-expanded="true"] {
+  background: #0d2137;
+  color: #ffffff;
+}
+
+.add-plus.is-small,
+.bill-plus.is-small {
+  width: 2.4rem;
+  height: 2.4rem;
+  font-size: 1.45rem;
+}
+
+.bill-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.bill-toolbar h2 {
+  margin: 0;
+}
+
+.bill-panel {
+  max-width: 36rem;
+  margin-top: 1.1rem;
+  padding-top: 0.2rem;
+}
+
+.bill-choices,
+.bill-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.bill-choice {
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+  background: #0d2137;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.bill-back {
+  min-height: 2.5rem;
+  padding: 0 0.2rem;
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.bill-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.bill-field {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.bill-field input,
+.bill-field select {
+  min-height: 2.5rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #0d2137;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+}
+
+.bill-errors {
+  margin: 0.85rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--ink);
+}
+
+.bill-lines {
+  margin-top: 0.2rem;
+}
+
+.bill-line-end {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bill-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.35rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--ink);
+  font-weight: 600;
+}
+
+.bill-remove {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
 }
 
 .card-cause {

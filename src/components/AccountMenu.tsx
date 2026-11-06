@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { customers } from "../data/portfolio.ts";
+import { usePeople } from "../people.tsx";
 import { useSession, type Session } from "../session.tsx";
 
 function initials(name: string): string {
@@ -38,8 +39,9 @@ export function AccountMenu() {
     close();
   }
 
-  const label = session?.role === "admin" ? "Admin" : (signedInCustomer?.name ?? "Log in");
-  const mark = session?.role === "admin" ? "A" : signedInCustomer ? initials(signedInCustomer.name) : "";
+  const adminName = session?.role === "admin" ? (session.name ?? "Admin") : "";
+  const label = session?.role === "admin" ? adminName : (signedInCustomer?.name ?? "Log in");
+  const mark = session?.role === "admin" ? initials(adminName) || "A" : signedInCustomer ? initials(signedInCustomer.name) : "";
 
   return (
     <div className="account" onKeyDown={(event) => {
@@ -64,7 +66,9 @@ export function AccountMenu() {
           <button type="button" className="account-backdrop" aria-label="Close account menu" onClick={close} />
           <div id="account-panel" className="account-panel" role="region" aria-label="Account">
             {!session ? <SignedOutChoices onChoose={choose} /> : null}
-            {session?.role === "admin" ? <AdminChoices onNavigate={close} onLogOut={logOut} /> : null}
+            {session?.role === "admin" ? (
+              <AdminChoices name={session.name} onNavigate={close} onLogOut={logOut} />
+            ) : null}
             {session?.role === "customer" && signedInCustomer ? (
               <CustomerChoices name={signedInCustomer.name} onLogOut={logOut} />
             ) : null}
@@ -76,6 +80,7 @@ export function AccountMenu() {
 }
 
 function SignedOutChoices({ onChoose }: { onChoose: (session: Session, path: string) => void }) {
+  const { admins } = usePeople();
   return (
     <>
       <p className="account-kicker">Sample sign-in</p>
@@ -91,6 +96,22 @@ function SignedOutChoices({ onChoose }: { onChoose: (session: Session, path: str
           <span className="account-choice-meta">All customer accounts</span>
         </span>
       </button>
+      {admins.map((admin) => (
+        <button
+          key={admin.id}
+          type="button"
+          className="account-choice"
+          onClick={() => onChoose({ role: "admin", name: admin.name }, "/")}
+        >
+          <span className="account-avatar" aria-hidden="true">
+            {initials(admin.name)}
+          </span>
+          <span>
+            <span className="account-choice-name">{admin.name}</span>
+            <span className="account-choice-meta">Admin · every account</span>
+          </span>
+        </button>
+      ))}
       <p className="account-kicker">Customer accounts</p>
       <ul className="account-list">
         {customers.map((customer) => (
@@ -117,10 +138,18 @@ function SignedOutChoices({ onChoose }: { onChoose: (session: Session, path: str
   );
 }
 
-function AdminChoices({ onNavigate, onLogOut }: { onNavigate: () => void; onLogOut: () => void }) {
+function AdminChoices({
+  name,
+  onNavigate,
+  onLogOut,
+}: {
+  name?: string;
+  onNavigate: () => void;
+  onLogOut: () => void;
+}) {
   return (
     <>
-      <p className="account-kicker">Signed in as admin</p>
+      <p className="account-kicker">{name ? `Signed in as ${name}` : "Signed in as admin"}</p>
       <p className="account-note">Open a customer dashboard. Sample data only.</p>
       <Link className="account-choice" to="/" onClick={onNavigate}>
         <span className="account-avatar" aria-hidden="true">
