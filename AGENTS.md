@@ -1,0 +1,100 @@
+# Fairlane for the next agent
+
+Read this before changing the app. The product is a Vite + React + TypeScript single-page app. Sample freight figures live in source. Anything a person adds stays in the browser.
+
+## What the product is
+
+Fairlane is an account workspace. Each fictional company can see its own freight spend, a sample fair price, and the gap. Admins can open every company.
+
+The latest sample month is October 2026 (`LATEST_MONTH` in `src/data/portfolio.ts`). The twelve months run from November 2025 through October 2026.
+
+Keep the figures labeled as sample data. Do not present them as a live invoice, a contract, or a carrier quote.
+
+## How to run
+
+```bash
+npm install
+npm run dev -- --host 127.0.0.1 --port 5173
+npm run build
+npm run lint
+```
+
+`npm run build` is `tsc -b && vite build`. Oxlint warnings do not fail the lint script. There is no test runner; check parsers with a small Node script and check the UI in a browser.
+
+## Sign-in and who sees what
+
+Sign-in is sample only. There is no password and no auth library. Do not add one unless the task asks for a real account system.
+
+Session is `sessionStorage` key `fairlane-session`:
+
+- `{ "role": "admin" }` or `{ "role": "admin", "name": "…" }` for an added admin
+- `{ "role": "customer", "customerId": "nordhavn-living" }`
+
+Routes:
+
+| Path | Who |
+| --- | --- |
+| `/` | Welcome, or the admin list of all accounts, or a redirect to the signed-in company |
+| `/customers/:id` | That company's overview |
+| `/customers/:id/billing` | Statement for the month |
+| `/customers/:id/billing/bills` | Add bills. `/customers/:id/bills` redirects here |
+| `/customers/:id/users` | Sample seats plus people added on this browser |
+| `/customers/:id/settings` | Account notes |
+| `/billing`, `/billing/bills`, `/users`, `/settings` | Same pages. A signed-in company is sent to its own path |
+
+A signed-out visitor and a company opening another company's URL see no kroner figures. Gate this in `src/pages/AccountSpaces.tsx` (`Space`) and `src/pages/CustomerPage.tsx`.
+
+Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `horsens-gearworks`, `skive-plate-works`, `esbjerg-rig-supply`.
+
+## Where the code lives
+
+- `src/App.tsx` routes and providers (`SessionProvider`, `BillsProvider`, `PeopleProvider`).
+- `src/data/portfolio.ts` fictional companies, months, lanes, causes, and `currentMonthTrack`. Do not write uploaded bills or added people into this file.
+- `src/format.ts` Danish grouping and the `kr.` suffix. Whole kroner on screen.
+- `src/session.tsx` sample sign-in.
+- `src/components/Sidebar.tsx` menu. `src/components/AccountMenu.tsx` upper-right sign-in. `src/components/Shell.tsx` frame.
+- `src/pages/CustomerPage.tsx` overview. `src/pages/PortfolioPage.tsx` admin all-accounts view. `src/pages/AccountSpaces.tsx` billing, bills, users, settings.
+- `src/bills.tsx` plus `src/bills/parse.ts`, `read.ts`, `spend.ts`. UI in `src/components/BillDesk.tsx`.
+- `src/people.tsx` and `src/components/UserDesk.tsx`.
+- `src/index.css` is the only stylesheet. Navy sidebar `#0d2137`, white page.
+
+## Bills
+
+Bills are nested under Billing in the sidebar. The `+` opens a dialog anchored to that button with two choices: type the amount, or upload a file.
+
+Accepted files: text PDF, CSV, and plain text, up to 8 MB. Parsing stays in the browser. A stated total (`i alt`, `total`, `at betale`, and the other words in `parse.ts`) wins. Otherwise money lines are summed and VAT lines are skipped. Danish `1.234,56` and English `1,234.56` both parse. A photo or a scanned page with no text layer is not read. The person types that amount.
+
+Storage is `localStorage` key `fairlane-bills`, per customer id. Only the label, amount, source, and time are stored, not the file.
+
+`withBillSpend` adds the total to the latest month's freight spend. That total shows on:
+
+- the billing statement
+- the overview month-end spend, the paid figure, and the latest month card
+- the admin all-accounts paid total
+
+The sample savings gap does not grow by the bill amount. Savings stays `paid - benchmark` from `portfolio.ts`. Say so in the copy when a bill is included.
+
+## People
+
+`localStorage` key `fairlane-people`.
+
+A company can add a person on its own account with role Owner, Billing, or Operations. An admin can add a person on a chosen customer account, or an admin. Added admins appear in the sign-in list and open every account. Sample seats on the Users page are not removable and cannot sign in.
+
+## Layout that is already decided
+
+Keep these unless the task changes them:
+
+- Sidebar flush to the left edge, square corners, no page banner above it.
+- The header in the sidebar is the word Fairlane only. No F square, and the customer name is not under the logo.
+- The page title lines up with that word and with the account control on the upper right.
+- Menu order: Overview, Billing with Bills underneath, Users. A cog at the bottom opens Settings.
+- The sidebar collapses. The choice is `localStorage` key `fairlane-sidebar` (`collapsed` or `open`). Narrow screens start collapsed.
+- Navy and white. Spend line uses `--ink`. The budget line is `#5d7c99` so the two lines differ.
+
+## What not to add on your own
+
+Do not add a database, a server, or an auth library for data that only needs to stay in this browser. `localStorage` and `sessionStorage` are the store.
+
+Do not send bill files to a third party. Do not `eval` file contents. Render names as text so React escapes them.
+
+Do not invent companies, lanes, or kroner figures inside `portfolio.ts` to make a screen look fuller. The six companies are the whole sample set.
