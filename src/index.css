@@ -79,11 +79,12 @@ a {
 }
 
 .frame {
+  position: relative;
   flex: 1;
   min-width: 0;
   width: auto;
   margin: 0;
-  padding: 1.25rem 2rem 2.5rem;
+  padding: 1.35rem 2rem 2.5rem;
 }
 
 .sidebar-slot {
@@ -324,9 +325,13 @@ a {
 }
 
 .topbar {
+  position: absolute;
+  top: 1.2rem;
+  right: 2rem;
+  z-index: 2;
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 0.85rem;
+  margin: 0;
 }
 
 .account {
@@ -500,6 +505,7 @@ a {
 
 h1 {
   margin: 0;
+  padding-right: 12rem;
   font-size: clamp(1.8rem, 3vw, 2.35rem);
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -536,7 +542,7 @@ h3 {
 }
 
 .back {
-  margin: 0 0 0.75rem;
+  margin: 0.55rem 0 0;
 }
 
 .text-link {
@@ -1117,6 +1123,10 @@ tfoot td {
 
   .frame {
     padding: 4.25rem 1rem 2rem;
+  }
+
+  h1 {
+    padding-right: 0;
   }
 
   .topbar {

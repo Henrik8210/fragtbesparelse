@@ -83,6 +83,10 @@ function CustomerDetail({ customer }: { customer: Customer }) {
 
   return (
     <div className="page" id="overview">
+      <h1>{customer.name}</h1>
+      <p className="meta">
+        {customer.industry} · {customer.place}
+      </p>
       {session?.role === "admin" ? (
         <p className="back">
           <Link className="text-link" to="/">
@@ -90,10 +94,6 @@ function CustomerDetail({ customer }: { customer: Customer }) {
           </Link>
         </p>
       ) : null}
-      <h1>{customer.name}</h1>
-      <p className="meta">
-        {customer.industry} · {customer.place}
-      </p>
       <p className="lede">
         {customer.description} Every figure on this screen is Fairlane sample data.
       </p>
