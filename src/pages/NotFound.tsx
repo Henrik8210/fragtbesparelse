@@ -18,7 +18,7 @@ export function NotFound({
       <p className="lede">{body}</p>
       <p>
         <Link className="text-link" to="/">
-          Back to the portfolio
+          Home
         </Link>
       </p>
     </div>

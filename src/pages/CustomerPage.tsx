@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { useSession } from "../session.tsx";
 import { Figures } from "../components/Figures.tsx";
+import { MonthBudgetChart } from "../components/MonthBudgetChart.tsx";
 import { TrendChart } from "../components/TrendChart.tsx";
 import {
   CAUSES,
   LATEST_MONTH,
   MONTHS,
   causeLabel,
+  currentMonthTrack,
   customers,
   latestFromLanes,
   savingsByCause,
@@ -19,6 +22,7 @@ type Filter = "all" | "clean" | CauseId;
 
 export function CustomerPage() {
   const { customerId } = useParams();
+  const { session } = useSession();
   const customer = customers.find((item) => item.id === customerId);
   if (!customer) {
     return (
@@ -28,12 +32,31 @@ export function CustomerPage() {
       />
     );
   }
+  if (!session) {
+    return (
+      <NotFound
+        title="Sign in to open this account"
+        body={`${customer.name} is a sample company. Use Log in in the upper right and choose that account, or sign in as a Fairlane admin. Figures stay hidden until you do.`}
+      />
+    );
+  }
+  if (session.role === "customer" && session.customerId !== customer.id) {
+    return (
+      <NotFound
+        title="This account is not yours"
+        body="A company sign-in shows only that company's savings. Sign in as a Fairlane admin to open every account."
+      />
+    );
+  }
   return <CustomerDetail key={customer.id} customer={customer} />;
 }
 
 function CustomerDetail({ customer }: { customer: Customer }) {
+  const { session } = useSession();
   const [filter, setFilter] = useState<Filter>("all");
   const latest = latestFromLanes(customer);
+  const monthTrack = currentMonthTrack(customer);
+  const againstBudget = monthTrack.spent - monthTrack.budget;
   const causes = savingsByCause(customer);
   const maxCause = Math.max(...causes.map((cause) => cause.amount));
   const hasClean = customer.lanes.some((lane) => lane.causeId === null);
@@ -59,12 +82,14 @@ function CustomerDetail({ customer }: { customer: Customer }) {
   );
 
   return (
-    <div className="page">
-      <p className="back">
-        <Link className="text-link" to="/">
-          Portfolio
-        </Link>
-      </p>
+    <div className="page" id="overview">
+      {session?.role === "admin" ? (
+        <p className="back">
+          <Link className="text-link" to="/">
+            All accounts
+          </Link>
+        </p>
+      ) : null}
       <h1>{customer.name}</h1>
       <p className="meta">
         {customer.industry} · {customer.place}
@@ -72,6 +97,47 @@ function CustomerDetail({ customer }: { customer: Customer }) {
       <p className="lede">
         {customer.description} Every figure on this screen is Fairlane sample data.
       </p>
+      <section className="block" id="budget">
+        <h2>This month against the budget</h2>
+        <p className="section-intro">
+          {LATEST_MONTH}. The solid line is sample freight spend as the month goes on. The dashed
+          line is the budget projected for the full month. Spend finishes at {formatKr(monthTrack.spent)}.
+          The budget is {formatKr(monthTrack.budget)}.{" "}
+          {againstBudget === 0
+            ? "Spend matches that budget."
+            : againstBudget > 0
+              ? `Spend is ${formatKr(againstBudget)} over that budget.`
+              : `Spend is ${formatKr(Math.abs(againstBudget))} under that budget.`}
+        </p>
+        <MonthBudgetChart points={monthTrack.points} monthLabel={LATEST_MONTH} />
+        <div className="table-wrap">
+          <table className="months">
+            <caption className="sr-only">
+              Fairlane sample spend and budget for {customer.name} in {LATEST_MONTH}
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Through</th>
+                <th scope="col" className="num">
+                  Spend
+                </th>
+                <th scope="col" className="num">
+                  Budget
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthTrack.points.map((point) => (
+                <tr key={point.label} className={point.label === "Month end" ? "is-latest" : undefined}>
+                  <th scope="row">{point.label}</th>
+                  <td className="num">{formatKr(point.spent)}</td>
+                  <td className="num">{formatKr(point.budget)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
       <Figures
         kicker={`${LATEST_MONTH} · latest month`}
         items={[
@@ -90,7 +156,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         ]}
       />
 
-      <section className="block">
+      <section className="block" id="trend">
         <h2>Twelve-month trend</h2>
         <p className="section-intro">
           {rangeLabel}. The shaded gap is the addressable savings in each month.
@@ -170,7 +236,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         </div>
       </section>
 
-      <section className="block">
+      <section className="block" id="savings">
         <h2>Savings by cause</h2>
         <p className="section-intro">
           Where the {LATEST_MONTH} gap comes from, in words a buyer can check.
@@ -192,7 +258,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         </ol>
       </section>
 
-      <section className="block">
+      <section className="block" id="lanes">
         <h2>Lanes and carriers</h2>
         <p className="section-intro">
           {filter === "all"

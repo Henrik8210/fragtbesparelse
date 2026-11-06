@@ -16,7 +16,7 @@ export function PortfolioPage() {
   });
 
   useEffect(() => {
-    document.title = "Portfolio · Fairlane";
+    document.title = "All accounts · Fairlane";
   }, []);
 
   const rows = useMemo(() => {
@@ -57,11 +57,11 @@ export function PortfolioPage() {
 
   return (
     <div className="page">
-      <h1>Portfolio</h1>
+      <h1>All accounts</h1>
       <p className="lede">
-        Freight paid by fictional ecommerce and manufacturing companies, a sample benchmark for the
-        same shipments, and the gap. {LATEST_MONTH} is the latest month. Every figure on this screen
-        is Fairlane sample data.
+        Admin view of every fictional company. Open an account to see what that company paid, a
+        sample fair price for the same shipments, and the gap. {LATEST_MONTH} is the latest month.
+        Every figure on this screen is Fairlane sample data.
       </p>
       <Figures
         kicker={`${LATEST_MONTH} · ${customers.length} companies`}
