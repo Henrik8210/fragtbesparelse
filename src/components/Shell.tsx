@@ -5,10 +5,6 @@ import { Sidebar } from "./Sidebar.tsx";
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="app">
-      <div className="banner" role="note">
-        <strong>Fairlane sample data</strong>
-        <span>These figures are invented. No real customer, invoice, or carrier quote is shown.</span>
-      </div>
       <div className="workspace">
         <Sidebar />
         <div className="frame">

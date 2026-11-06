@@ -69,35 +69,13 @@ a {
   border: 0;
 }
 
-.banner {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.75rem;
-  padding: 0.6rem 1rem;
-  background: var(--banner);
-  color: var(--banner-ink);
-  border-bottom: 1px solid #0a1c30;
-  text-align: center;
-}
-
-.banner strong {
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 700;
-}
-
 .workspace {
   display: flex;
-  align-items: flex-start;
-  gap: 0.9rem;
-  width: min(1280px, calc(100% - 1.5rem));
-  margin: 0 auto;
-  padding: 0.9rem 0 2.5rem;
+  align-items: stretch;
+  min-height: 100vh;
+  width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 .frame {
@@ -105,17 +83,18 @@ a {
   min-width: 0;
   width: auto;
   margin: 0;
-  padding: 0.35rem 0 1rem;
+  padding: 1.25rem 2rem 2.5rem;
 }
 
 .sidebar-slot {
   position: sticky;
-  top: 3.35rem;
+  top: 0;
   align-self: flex-start;
   display: flex;
-  flex: 0 0 272px;
-  width: 272px;
-  max-height: calc(100vh - 4.3rem);
+  flex: 0 0 260px;
+  width: 260px;
+  height: 100vh;
+  max-height: 100vh;
   z-index: 3;
   transition: width 180ms ease, flex-basis 180ms ease;
 }
@@ -129,14 +108,14 @@ a {
   display: flex;
   flex-direction: column;
   width: 100%;
-  min-height: calc(100vh - 4.3rem);
-  max-height: calc(100vh - 4.3rem);
-  padding: 0.85rem 0.7rem 0.75rem;
+  min-height: 100vh;
+  max-height: 100vh;
+  padding: 1.15rem 0.85rem 0.85rem;
   background: #0d2137;
   color: #ffffff;
-  border: 1px solid #0d2137;
-  border-radius: 20px;
-  box-shadow: 0 14px 34px rgba(13, 33, 55, 0.16);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .sidebar-head {
@@ -152,7 +131,7 @@ a {
 }
 
 .sidebar-brand .brand-mark {
-  border-radius: 10px;
+  border-radius: 0;
   background: #ffffff;
   color: #0d2137;
 }
@@ -341,7 +320,7 @@ a {
 #trend,
 #savings,
 #lanes {
-  scroll-margin-top: 4.5rem;
+  scroll-margin-top: 1.25rem;
 }
 
 .topbar {
@@ -1136,18 +1115,14 @@ tfoot td {
     width: 4.4rem;
   }
 
-  .workspace {
-    width: min(100% - 1rem, 1280px);
-  }
-
   .frame {
-    padding-top: 3.3rem;
+    padding: 4.25rem 1rem 2rem;
   }
 
   .topbar {
     position: fixed;
-    top: 3.2rem;
-    right: 0.7rem;
+    top: 0.75rem;
+    right: 0.75rem;
     z-index: 6;
     margin: 0;
   }
@@ -1158,16 +1133,18 @@ tfoot td {
 
   .sidebar-slot {
     position: fixed;
-    top: 3.15rem;
-    left: 0.55rem;
-    width: min(300px, calc(100vw - 1.1rem));
+    top: 0;
+    left: 0;
+    width: min(300px, 88vw);
+    height: 100vh;
     flex: none;
-    max-height: calc(100vh - 3.8rem);
+    max-height: 100vh;
   }
 
   .sidebar {
-    min-height: calc(100vh - 3.8rem);
-    max-height: calc(100vh - 3.8rem);
+    min-height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
   }
 
   .sidebar-backdrop {
@@ -1180,14 +1157,20 @@ tfoot td {
 
   .sidebar-slot.is-collapsed {
     width: auto;
+    height: auto;
+    max-height: none;
+    pointer-events: none;
   }
 
   .sidebar-slot.is-collapsed .sidebar {
     width: auto;
+    min-height: 0;
+    max-height: none;
     padding: 0;
     background: transparent;
     border: 0;
     box-shadow: none;
+    pointer-events: none;
   }
 
   .sidebar-slot.is-collapsed .sidebar-nav,
@@ -1205,10 +1188,15 @@ tfoot td {
     height: 2.4rem;
     margin: 0;
     padding: 0 0.85rem 0 0.6rem;
+    position: fixed;
+    top: 0.75rem;
+    left: 0.75rem;
     background: #0d2137;
     color: #ffffff;
-    border: 1px solid #0d2137;
-    box-shadow: 0 8px 20px rgba(13, 33, 55, 0.18);
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    pointer-events: auto;
   }
 
   .sidebar-slot.is-collapsed .toggle-icon {
