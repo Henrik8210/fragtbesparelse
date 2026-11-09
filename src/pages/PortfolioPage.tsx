@@ -2,14 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBillTotals } from "../bills.tsx";
 import { Figures } from "../components/Figures.tsx";
-import { LATEST_MONTH, customers, latestFromLanes, portfolioTotals } from "../data/portfolio.ts";
+import { LATEST_MONTH, MONTHS, customers, latestFromLanes, portfolioTotals } from "../data/portfolio.ts";
 import { formatKr, formatPercent } from "../format.ts";
+import { useLanguage } from "../language.tsx";
+import type { Industry } from "../types.ts";
 
 type SortKey = "name" | "paid" | "benchmark" | "savings" | "rate";
 type SortDir = "asc" | "desc";
 
 export function PortfolioPage() {
   const navigate = useNavigate();
+  const { t, phrase, lang } = useLanguage();
+  const month = phrase(`month.${MONTHS[MONTHS.length - 1].id}`, LATEST_MONTH);
   const totals = portfolioTotals();
   const billTotals = useBillTotals();
   const billsAdded = customers.reduce((sum, customer) => sum + (billTotals[customer.id] ?? 0), 0);
@@ -19,8 +23,8 @@ export function PortfolioPage() {
   });
 
   useEffect(() => {
-    document.title = "All accounts · Fairlane";
-  }, []);
+    document.title = t("portfolio.docTitle");
+  }, [t]);
 
   const rows = useMemo(() => {
     const next = customers.map((customer) => {
@@ -31,12 +35,12 @@ export function PortfolioPage() {
     const factor = sort.dir === "asc" ? 1 : -1;
     next.sort((a, b) => {
       if (sort.key === "name") {
-        return a.customer.name.localeCompare(b.customer.name, "en") * factor;
+        return a.customer.name.localeCompare(b.customer.name, lang === "da" ? "da" : "en") * factor;
       }
       return (a[sort.key] - b[sort.key]) * factor;
     });
     return next;
-  }, [billTotals, sort]);
+  }, [billTotals, lang, sort]);
 
   const maxRate = Math.max(...rows.map((row) => row.rate));
 
@@ -61,60 +65,57 @@ export function PortfolioPage() {
 
   return (
     <div className="page">
-      <h1>All accounts</h1>
+      <h1>{t("portfolio.title")}</h1>
       <p className="lede">
-        Admin view of every fictional company. Open an account to see what that company paid, a
-        sample fair price for the same shipments, and the gap. {LATEST_MONTH} is the latest month.
-        {billsAdded > 0
-          ? `Paid includes ${formatKr(billsAdded)} from bills added on this browser.`
-          : "Every figure on this screen is Fairlane sample data."}
+        {t("portfolio.lede", { month })}{" "}
+        {billsAdded > 0 ? t("portfolio.bills", { amount: formatKr(billsAdded) }) : t("portfolio.sample")}
       </p>
       <Figures
-        kicker={`${LATEST_MONTH} · ${customers.length} companies`}
+        kicker={t("portfolio.kicker", { month, count: customers.length })}
         items={[
           {
-            label: "Paid",
+            label: t("common.paid"),
             value: formatKr(totals.paid + billsAdded),
-            hint: billsAdded > 0 ? `Sample invoices plus ${formatKr(billsAdded)} from bills` : "Sample invoices",
+            hint: billsAdded > 0 ? t("portfolio.invoicesPlus", { amount: formatKr(billsAdded) }) : t("portfolio.invoices"),
           },
           {
-            label: "Benchmark",
+            label: t("common.benchmark"),
             value: formatKr(totals.benchmark),
-            hint: "Sample fair price, not a quote",
+            hint: t("portfolio.benchmarkHint"),
           },
           {
-            label: "Addressable savings",
+            label: t("common.addressable"),
             value: formatKr(totals.savings),
-            hint: `${formatPercent(totals.savings / (totals.paid + billsAdded))} of paid`,
+            hint: t("portfolio.savingsHint", { rate: formatPercent(totals.savings / (totals.paid + billsAdded)) }),
             emphasis: true,
           },
         ]}
       />
       <section className="block">
-        <h2>Companies</h2>
+        <h2>{t("portfolio.companies")}</h2>
         <ul className="company-cards">
           {rows.map((row) => (
             <li key={row.customer.id}>
               <Link className="card" to={`/customers/${row.customer.id}`}>
                 <span className="card-title">{row.customer.name}</span>
                 <span className="company-meta">
-                  {row.customer.industry} · {row.customer.place}
+                  {industryName(row.customer.industry, t)} · {phrase(`place.${row.customer.place}`, row.customer.place)}
                 </span>
                 <span className="card-stats">
                   <span>
-                    <span className="card-label">Paid</span>
+                    <span className="card-label">{t("common.paid")}</span>
                     {formatKr(row.paid)}
                   </span>
                   <span>
-                    <span className="card-label">Benchmark</span>
+                    <span className="card-label">{t("common.benchmark")}</span>
                     {formatKr(row.benchmark)}
                   </span>
                   <span>
-                    <span className="card-label">Savings</span>
+                    <span className="card-label">{t("common.savings")}</span>
                     <strong className="is-savings">{formatKr(row.savings)}</strong>
                   </span>
                   <span>
-                    <span className="card-label">Of paid</span>
+                    <span className="card-label">{t("common.ofPaid")}</span>
                     {formatPercent(row.rate)}
                   </span>
                 </span>
@@ -125,33 +126,33 @@ export function PortfolioPage() {
         <div className="table-wrap desktop-only">
           <table className="companies">
             <caption className="sr-only">
-              Fairlane sample companies for {LATEST_MONTH}, with paid freight, benchmark, and savings
+              {t("portfolio.caption", { month })}
             </caption>
             <thead>
               <tr>
                 <th scope="col" aria-sort={ariaSort("name")}>
                   <button type="button" onClick={() => onSort("name")}>
-                    Company <span className="sort-mark" aria-hidden="true">{mark("name")}</span>
+                    {t("common.company")} <span className="sort-mark" aria-hidden="true">{mark("name")}</span>
                   </button>
                 </th>
                 <th scope="col" className="num" aria-sort={ariaSort("paid")}>
                   <button type="button" onClick={() => onSort("paid")}>
-                    Paid <span className="sort-mark" aria-hidden="true">{mark("paid")}</span>
+                    {t("common.paid")} <span className="sort-mark" aria-hidden="true">{mark("paid")}</span>
                   </button>
                 </th>
                 <th scope="col" className="num" aria-sort={ariaSort("benchmark")}>
                   <button type="button" onClick={() => onSort("benchmark")}>
-                    Benchmark <span className="sort-mark" aria-hidden="true">{mark("benchmark")}</span>
+                    {t("common.benchmark")} <span className="sort-mark" aria-hidden="true">{mark("benchmark")}</span>
                   </button>
                 </th>
                 <th scope="col" className="num" aria-sort={ariaSort("savings")}>
                   <button type="button" onClick={() => onSort("savings")}>
-                    Savings <span className="sort-mark" aria-hidden="true">{mark("savings")}</span>
+                    {t("common.savings")} <span className="sort-mark" aria-hidden="true">{mark("savings")}</span>
                   </button>
                 </th>
                 <th scope="col" className="num" aria-sort={ariaSort("rate")}>
                   <button type="button" onClick={() => onSort("rate")}>
-                    Of paid <span className="sort-mark" aria-hidden="true">{mark("rate")}</span>
+                    {t("common.ofPaid")} <span className="sort-mark" aria-hidden="true">{mark("rate")}</span>
                   </button>
                 </th>
               </tr>
@@ -171,7 +172,7 @@ export function PortfolioPage() {
                       {row.customer.name}
                     </Link>
                     <span className="company-meta">
-                      {row.customer.industry} · {row.customer.place}
+                      {industryName(row.customer.industry, t)} · {phrase(`place.${row.customer.place}`, row.customer.place)}
                     </span>
                   </td>
                   <td className="num">{formatKr(row.paid)}</td>
@@ -191,10 +192,13 @@ export function PortfolioPage() {
           </table>
         </div>
         <p className="wayfinding">
-          Open a company to see the twelve-month trend, why the gap exists, and the lanes behind the
-          total.
+          {t("portfolio.wayfinding")}
         </p>
       </section>
     </div>
   );
+}
+
+function industryName(industry: Industry, t: (key: "industry.Ecommerce" | "industry.Manufacturing") => string): string {
+  return industry === "Ecommerce" ? t("industry.Ecommerce") : t("industry.Manufacturing");
 }

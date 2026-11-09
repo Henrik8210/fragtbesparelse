@@ -1,16 +1,20 @@
 import { useId, useState, type FormEvent } from "react";
-import { LATEST_MONTH } from "../data/portfolio.ts";
+import { LATEST_MONTH, MONTHS } from "../data/portfolio.ts";
 import { formatKr } from "../format.ts";
 import { parseAmount } from "../bills/parse.ts";
-import { readBillFile } from "../bills/read.ts";
+import { BillReadError, readBillFile } from "../bills/read.ts";
 import { useBills } from "../bills.tsx";
 import { carrierProfiles, knownCarrier } from "../data/carriers.ts";
+import { useLanguage } from "../language.tsx";
+import type { MessageKey } from "../i18n/messages.ts";
 import type { Customer } from "../types.ts";
 
 type Mode = "closed" | "choose" | "manual" | "upload";
 
 export function BillDesk({ customer }: { customer: Customer }) {
   const { bills, total, addBill, removeBill } = useBills(customer.id);
+  const { t, phrase } = useLanguage();
+  const month = phrase(`month.${MONTHS[MONTHS.length - 1].id}`, LATEST_MONTH);
   const [mode, setMode] = useState<Mode>("closed");
   const [carrier, setCarrier] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
@@ -30,11 +34,11 @@ export function BillDesk({ customer }: { customer: Customer }) {
     const label = String(data.get("label") ?? "");
     const amount = parseAmount(String(data.get("amount") ?? ""));
     if (!knownCarrier(carrier)) {
-      setErrors(["Choose the freight company."]);
+      setErrors([t("bills.needCarrier")]);
       return;
     }
     if (amount == null) {
-      setErrors(["Enter the amount, for example 12.400 or 12400,50."]);
+      setErrors([t("bills.needAmount")]);
       return;
     }
     addBill({ label, amount, source: "manual", carrier });
@@ -46,7 +50,7 @@ export function BillDesk({ customer }: { customer: Customer }) {
 
   async function addFile(fileList: FileList | null) {
     if (!knownCarrier(carrier)) {
-      setErrors(["Choose the freight company."]);
+      setErrors([t("bills.needCarrier")]);
       return;
     }
     const files = fileList ? [...fileList] : [];
@@ -56,10 +60,10 @@ export function BillDesk({ customer }: { customer: Customer }) {
     const nextErrors: string[] = [];
     for (const file of files) {
       try {
-        const read = await readBillFile(file);
+        const read = await readBillFile(file, t("bills.fallbackName"));
         addBill({ label: read.label, amount: read.amount, source: "file", carrier });
       } catch (error) {
-        nextErrors.push(error instanceof Error ? error.message : "That file could not be read.");
+        nextErrors.push(readProblem(error, t));
       }
     }
     setErrors(nextErrors);
@@ -72,24 +76,20 @@ export function BillDesk({ customer }: { customer: Customer }) {
 
   return (
     <>
-      <h1>Bills</h1>
+      <h1>{t("bills.title")}</h1>
       <p className="meta">{customer.name}</p>
-      <p className="lede">
-        Add a freight bill for {LATEST_MONTH}. Type the amount, or upload a text PDF, CSV, or plain
-        text file. Fairlane reads the total and adds it to this account&apos;s spend. The bill stays in
-        this browser.
-      </p>
+      <p className="lede">{t("bills.lede", { month })}</p>
 
       {hasBills ? (
         <div className="bill-toolbar">
-          <h2>On this account</h2>
+          <h2>{t("bills.onAccount")}</h2>
           <AddBillMenu
             mode={mode}
             formId={formId}
             reading={reading}
             errors={errors}
             compact
-            label="Add a bill"
+            label={t("bills.add")}
             carrier={carrier}
             onCarrier={setCarrier}
             onToggle={openChooser}
@@ -105,7 +105,7 @@ export function BillDesk({ customer }: { customer: Customer }) {
             formId={formId}
             reading={reading}
             errors={errors}
-            label="Add the first bill"
+            label={t("bills.addFirst")}
             carrier={carrier}
             onCarrier={setCarrier}
             onToggle={openChooser}
@@ -113,7 +113,7 @@ export function BillDesk({ customer }: { customer: Customer }) {
             onManual={addManual}
             onFile={addFile}
           />
-          <p>Add the first bill. Type the amount, or upload the file.</p>
+          <p>{t("bills.empty")}</p>
         </div>
       )}
 
@@ -126,20 +126,20 @@ export function BillDesk({ customer }: { customer: Customer }) {
                   <span className="seat-role">{bill.label}</span>
                   <span className="seat-person-role">
                     {bill.carrier ? `${bill.carrier} · ` : ""}
-                    {bill.source === "file" ? "Uploaded" : "Typed in"}
+                    {bill.source === "file" ? t("bills.uploaded") : t("bills.typed")}
                   </span>
                 </span>
                 <span className="bill-line-end">
                   <span>{formatKr(bill.amount)}</span>
                   <button type="button" className="bill-remove" onClick={() => removeBill(bill.id)}>
-                    Remove
+                    {t("common.remove")}
                   </button>
                 </span>
               </li>
             ))}
           </ul>
           <p className="bill-total">
-            <span>Added to {LATEST_MONTH} spend</span>
+            <span>{t("bills.total", { month })}</span>
             <span>{formatKr(total)}</span>
           </p>
         </section>
@@ -175,11 +175,12 @@ function AddBillMenu({
   onManual: (event: FormEvent<HTMLFormElement>) => void;
   onFile: (files: FileList | null) => Promise<void>;
 }) {
+  const { t } = useLanguage();
   const open = mode !== "closed";
   return (
     <div className="bill-add">
       {open ? (
-        <button type="button" className="bill-pop-backdrop" aria-label="Close add bill" onClick={() => onChoose("closed")} />
+        <button type="button" className="bill-pop-backdrop" aria-label={t("bills.close")} onClick={() => onChoose("closed")} />
       ) : null}
       <button
         type="button"
@@ -203,9 +204,9 @@ function AddBillMenu({
           }}
         >
           <label className="bill-field">
-            <span>Freight company</span>
+            <span>{t("bills.carrier")}</span>
             <select value={carrier} onChange={(event) => onCarrier(event.target.value)}>
-              <option value="">Choose a carrier</option>
+              <option value="">{t("bills.chooseCarrier")}</option>
               {carrierProfiles.map((profile) => (
                 <option key={profile.name} value={profile.name}>
                   {profile.name}
@@ -216,29 +217,29 @@ function AddBillMenu({
           {mode === "choose" ? (
             <div className="bill-choices">
               <button type="button" className="bill-choice" autoFocus onClick={() => onChoose("manual")}>
-                Type the amount
+                {t("bills.type")}
               </button>
               <button type="button" className="bill-choice" onClick={() => onChoose("upload")}>
-                Upload a bill
+                {t("bills.upload")}
               </button>
             </div>
           ) : null}
           {mode === "manual" ? (
             <form className="bill-form" onSubmit={onManual}>
               <label className="bill-field">
-                <span>Description</span>
-                <input name="label" type="text" maxLength={120} placeholder="Carrier or invoice number" autoFocus />
+                <span>{t("common.description")}</span>
+                <input name="label" type="text" maxLength={120} placeholder={t("bills.invoiceNumber")} autoFocus />
               </label>
               <label className="bill-field">
-                <span>Amount</span>
+                <span>{t("common.amount")}</span>
                 <input name="amount" type="text" inputMode="decimal" required placeholder="12.400" />
               </label>
               <div className="bill-actions">
                 <button type="submit" className="bill-choice is-submit">
-                  Add bill
+                  {t("bills.addBill")}
                 </button>
                 <button type="button" className="bill-back" onClick={() => onChoose("choose")}>
-                  Back
+                  {t("common.back")}
                 </button>
               </div>
             </form>
@@ -246,7 +247,7 @@ function AddBillMenu({
           {mode === "upload" ? (
             <div className="bill-form">
               <label className="bill-field">
-                <span>Bill file</span>
+                <span>{t("bills.file")}</span>
                 <input
                   type="file"
                   accept=".pdf,.csv,.txt,text/plain,text/csv,application/pdf"
@@ -263,11 +264,11 @@ function AddBillMenu({
               </label>
               <p className="hint">
                 {reading
-                  ? "Reading the file…"
-                  : "Text PDF, CSV, or plain text, read as a total for the carrier above. A scanned image can be typed in instead."}
+                  ? t("bills.reading")
+                  : t("bills.fileHint")}
               </p>
               <button type="button" className="bill-back" onClick={() => onChoose("choose")}>
-                Back
+                {t("common.back")}
               </button>
             </div>
           ) : null}
@@ -282,4 +283,16 @@ function AddBillMenu({
       ) : null}
     </div>
   );
+}
+
+function readProblem(
+  error: unknown,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  if (error instanceof BillReadError) {
+    if (error.code === "too-big") return t("bills.tooBig", { label: error.label });
+    if (error.code === "empty") return t("bills.emptyFile", { label: error.label });
+    return t("bills.noAmount", { label: error.label });
+  }
+  return t("bills.unreadable");
 }

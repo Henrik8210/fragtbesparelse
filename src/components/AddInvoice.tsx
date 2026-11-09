@@ -1,13 +1,16 @@
 import { useId, useState, type FormEvent } from "react";
 import { parseAmount } from "../bills/parse.ts";
-import { readBillFile } from "../bills/read.ts";
+import { BillReadError, readBillFile } from "../bills/read.ts";
 import { useBills } from "../bills.tsx";
 import { carrierProfiles, knownCarrier } from "../data/carriers.ts";
+import { useLanguage } from "../language.tsx";
+import type { MessageKey } from "../i18n/messages.ts";
 
 type Mode = "closed" | "choose" | "manual" | "upload";
 
 export function AddInvoice({ customerId }: { customerId: string }) {
   const { addBill } = useBills(customerId);
+  const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>("closed");
   const [carrier, setCarrier] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
@@ -21,7 +24,7 @@ export function AddInvoice({ customerId }: { customerId: string }) {
 
   function requireCarrier(): string | null {
     if (!knownCarrier(carrier)) {
-      setErrors(["Choose the freight company."]);
+      setErrors([t("bills.needCarrier")]);
       return null;
     }
     setErrors([]);
@@ -35,7 +38,7 @@ export function AddInvoice({ customerId }: { customerId: string }) {
     const data = new FormData(event.currentTarget);
     const amount = parseAmount(String(data.get("amount") ?? ""));
     if (amount == null) {
-      setErrors(["Enter the amount, for example 12.400 or 12400,50."]);
+      setErrors([t("bills.needAmount")]);
       return;
     }
     addBill({
@@ -58,10 +61,10 @@ export function AddInvoice({ customerId }: { customerId: string }) {
     const nextErrors: string[] = [];
     for (const file of files) {
       try {
-        const read = await readBillFile(file);
+        const read = await readBillFile(file, t("bills.fallbackName"));
         addBill({ label: read.label, amount: read.amount, source: "file", carrier: chosen });
       } catch (error) {
-        nextErrors.push(error instanceof Error ? error.message : "That file could not be read.");
+        nextErrors.push(billProblem(error, t));
       }
     }
     setErrors(nextErrors);
@@ -77,7 +80,7 @@ export function AddInvoice({ customerId }: { customerId: string }) {
   return (
     <div className="bill-add invoice-add">
       {open ? (
-        <button type="button" className="bill-pop-backdrop" aria-label="Close add invoice" onClick={close} />
+        <button type="button" className="bill-pop-backdrop" aria-label={t("invoice.close")} onClick={close} />
       ) : null}
       <button
         type="button"
@@ -87,22 +90,22 @@ export function AddInvoice({ customerId }: { customerId: string }) {
         aria-controls={formId}
         onClick={() => (open ? close() : setMode("choose"))}
       >
-        Add an invoice
+        {t("invoice.add")}
       </button>
       {open ? (
         <div
           className="bill-pop"
           id={formId}
           role="dialog"
-          aria-label="Add an invoice"
+          aria-label={t("invoice.add")}
           onKeyDown={(event) => {
             if (event.key === "Escape") close();
           }}
         >
           <label className="bill-field">
-            <span>Freight company</span>
+            <span>{t("bills.carrier")}</span>
             <select value={carrier} onChange={(event) => setCarrier(event.target.value)}>
-              <option value="">Choose a carrier</option>
+              <option value="">{t("bills.chooseCarrier")}</option>
               {carrierProfiles.map((profile) => (
                 <option key={profile.name} value={profile.name}>
                   {profile.name}
@@ -113,26 +116,26 @@ export function AddInvoice({ customerId }: { customerId: string }) {
           {mode === "choose" ? (
             <div className="bill-choices">
               <button type="button" className="bill-choice" onClick={() => setMode("manual")}>
-                Type the amount
+                {t("bills.type")}
               </button>
               <button type="button" className="bill-choice" onClick={() => setMode("upload")}>
-                Upload a bill
+                {t("bills.upload")}
               </button>
             </div>
           ) : null}
           {mode === "manual" ? (
             <form className="bill-form" onSubmit={addManual}>
               <label className="bill-field">
-                <span>Description</span>
-                <input name="label" type="text" maxLength={120} placeholder="Invoice number" autoFocus />
+                <span>{t("common.description")}</span>
+                <input name="label" type="text" maxLength={120} placeholder={t("bills.invoiceNumber")} autoFocus />
               </label>
               <label className="bill-field">
-                <span>Amount</span>
+                <span>{t("common.amount")}</span>
                 <input name="amount" type="text" inputMode="decimal" required placeholder="12.400" />
               </label>
               <div className="bill-actions">
                 <button type="submit" className="bill-choice is-submit">
-                  Add invoice
+                  {t("invoice.addSubmit")}
                 </button>
               </div>
             </form>
@@ -140,7 +143,7 @@ export function AddInvoice({ customerId }: { customerId: string }) {
           {mode === "upload" ? (
             <div className="bill-form">
               <label className="bill-field">
-                <span>Bill file</span>
+                <span>{t("bills.file")}</span>
                 <input
                   type="file"
                   accept=".pdf,.csv,.txt,text/plain,text/csv,application/pdf"
@@ -153,7 +156,7 @@ export function AddInvoice({ customerId }: { customerId: string }) {
                   }}
                 />
               </label>
-              <p className="hint">Text PDF, CSV, or plain text. The file is read as a total for the carrier above.</p>
+              <p className="hint">{t("invoice.fileHint")}</p>
             </div>
           ) : null}
           {errors.length > 0 ? (
@@ -167,4 +170,16 @@ export function AddInvoice({ customerId }: { customerId: string }) {
       ) : null}
     </div>
   );
+}
+
+function billProblem(
+  error: unknown,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  if (error instanceof BillReadError) {
+    if (error.code === "too-big") return t("bills.tooBig", { label: error.label });
+    if (error.code === "empty") return t("bills.emptyFile", { label: error.label });
+    return t("bills.noAmount", { label: error.label });
+  }
+  return t("bills.unreadable");
 }

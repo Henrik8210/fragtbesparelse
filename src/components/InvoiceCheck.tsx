@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { useBills } from "../bills.tsx";
 import { accountAnswers, type AgreementLine } from "../data/questions.ts";
-import { LATEST_MONTH } from "../data/portfolio.ts";
+import { LATEST_MONTH, MONTHS } from "../data/portfolio.ts";
 import { formatKr } from "../format.ts";
 import { useInvoiceReview, type ReviewState } from "../invoiceReview.tsx";
+import { useLanguage } from "../language.tsx";
 import type { Customer } from "../types.ts";
 
 const SAMPLE_BILL = "sample";
 
 export function InvoiceCheck({ customer }: { customer: Customer }) {
+  const { t, phrase } = useLanguage();
   const answers = accountAnswers(customer);
   const { bills } = useBills(customer.id);
   const { reviewFor, setReview } = useInvoiceReview(customer.id);
@@ -18,16 +20,15 @@ export function InvoiceCheck({ customer }: { customer: Customer }) {
 
   return (
     <section className="block" id="invoice-check">
-      <h2>Invoice check</h2>
+      <h2>{t("invoice.title")}</h2>
       <p className="section-intro">
-        {LATEST_MONTH} checked against the sample agreement. A logistics review can leave an objection
-        open or mark the line accepted. This screen does not pay the invoice.
+        {t("invoice.intro", { month: phrase(`month.${MONTHS[MONTHS.length - 1].id}`, LATEST_MONTH) })}
       </p>
       {bills.length > 0 ? (
         <label className="bill-field invoice-picker">
-          <span>Bill</span>
+          <span>{t("invoice.bill")}</span>
           <select value={showingSample ? SAMPLE_BILL : selected} onChange={(event) => setSelected(event.target.value)}>
-            <option value={SAMPLE_BILL}>Sample agreement invoice</option>
+            <option value={SAMPLE_BILL}>{t("invoice.sample")}</option>
             {bills.map((bill) => (
               <option key={bill.id} value={bill.id}>
                 {bill.label}
@@ -38,11 +39,7 @@ export function InvoiceCheck({ customer }: { customer: Customer }) {
       ) : null}
 
       {showingSample ? (
-        <SampleLines
-          lines={answers.agreementLines}
-          reviewFor={reviewFor}
-          setReview={setReview}
-        />
+        <SampleLines lines={answers.agreementLines} reviewFor={reviewFor} setReview={setReview} />
       ) : uploaded ? (
         <UploadedBill
           label={uploaded.label}
@@ -64,30 +61,28 @@ function SampleLines({
   reviewFor: (key: string, fallback: ReviewState) => ReviewState;
   setReview: (key: string, state: ReviewState) => void;
 }) {
+  const { t } = useLanguage();
   const impact = lines.reduce((sum, line) => sum + line.difference, 0);
   return (
     <>
-      <p className="section-intro">
-        Lines where the invoice differs from the signed rate. The kroner impact is {formatKr(impact)}. Raise
-        the open lines with the carrier named on the row.
-      </p>
+      <p className="section-intro">{t("invoice.linesIntro", { amount: formatKr(impact) })}</p>
       <div className="table-wrap">
         <table className="invoice-lines">
-          <caption className="sr-only">Sample agreement check</caption>
+          <caption className="sr-only">{t("invoice.caption")}</caption>
           <thead>
             <tr>
-              <th scope="col">Line</th>
-              <th scope="col">Carrier</th>
+              <th scope="col">{t("common.line")}</th>
+              <th scope="col">{t("common.carrier")}</th>
               <th scope="col" className="num">
-                Invoiced
+                {t("invoice.invoiced")}
               </th>
               <th scope="col" className="num">
-                Agreed
+                {t("invoice.agreed")}
               </th>
               <th scope="col" className="num">
-                Difference
+                {t("invoice.difference")}
               </th>
-              <th scope="col">Review</th>
+              <th scope="col">{t("invoice.review")}</th>
             </tr>
           </thead>
           <tbody>
@@ -104,14 +99,14 @@ function SampleLines({
                   <td className="num">{formatKr(line.agreed)}</td>
                   <td className="num">{formatKr(line.difference)}</td>
                   <td>
-                    <p className="review-label">{state === "open" ? "Open objection" : "Accepted"}</p>
-                    <p className="review-hint">Raise with {line.carrier}</p>
+                    <p className="review-label">{state === "open" ? t("invoice.open") : t("invoice.accepted")}</p>
+                    <p className="review-hint">{t("invoice.raise", { carrier: line.carrier })}</p>
                     <button
                       type="button"
                       className="bill-remove"
                       onClick={() => setReview(`line:${line.id}`, state === "open" ? "accepted" : "open")}
                     >
-                      {state === "open" ? "Mark accepted" : "Reopen objection"}
+                      {state === "open" ? t("invoice.markAccepted") : t("invoice.reopen")}
                     </button>
                   </td>
                 </tr>
@@ -135,16 +130,13 @@ function UploadedBill({
   state: ReviewState;
   onChange: (state: ReviewState) => void;
 }) {
+  const { t } = useLanguage();
   return (
     <div className="uploaded-check">
-      <p className="section-intro">
-        {label} was read as a total of {formatKr(amount)}. The carrier profiles describe how an invoice is
-        shaped. They do not read lines from this file, so there is no line deviation to show. The review
-        below is for the total only.
-      </p>
-      <p className="review-label">{state === "open" ? "Open objection" : "Accepted"}</p>
+      <p className="section-intro">{t("invoice.uploaded", { label, amount: formatKr(amount) })}</p>
+      <p className="review-label">{state === "open" ? t("invoice.open") : t("invoice.accepted")}</p>
       <button type="button" className="bill-choice" onClick={() => onChange(state === "open" ? "accepted" : "open")}>
-        {state === "open" ? "Mark accepted" : "Reopen objection"}
+        {state === "open" ? t("invoice.markAccepted") : t("invoice.reopen")}
       </button>
     </div>
   );

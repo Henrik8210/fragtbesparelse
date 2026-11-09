@@ -7,11 +7,13 @@ import { CustomerPage } from "./pages/CustomerPage.tsx";
 import { NotFound } from "./pages/NotFound.tsx";
 import { PortfolioPage } from "./pages/PortfolioPage.tsx";
 import { WelcomePage } from "./pages/WelcomePage.tsx";
+import { LanguageProvider } from "./language.tsx";
 import { SessionProvider, useSession } from "./session.tsx";
 
 export default function App() {
   return (
     <BrowserRouter>
+      <LanguageProvider>
       <SessionProvider>
         <BillsProvider>
           <PeopleProvider>
@@ -35,6 +37,7 @@ export default function App() {
           </PeopleProvider>
         </BillsProvider>
       </SessionProvider>
+      </LanguageProvider>
     </BrowserRouter>
   );
 }
