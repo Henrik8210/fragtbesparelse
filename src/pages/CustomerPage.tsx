@@ -3,7 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import { withBillSpend } from "../bills/spend.ts";
 import { useBills } from "../bills.tsx";
 import { useSession } from "../session.tsx";
+import { AccountQuestions } from "../components/AccountQuestions.tsx";
 import { Figures } from "../components/Figures.tsx";
+import { InvoiceCheck } from "../components/InvoiceCheck.tsx";
 import { MonthBudgetChart } from "../components/MonthBudgetChart.tsx";
 import { TrendChart } from "../components/TrendChart.tsx";
 import {
@@ -103,6 +105,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
           ? `Sample figures, plus ${formatKr(billTotal)} from bills on this account.`
           : "Every figure on this screen is Fairlane sample data."}
       </p>
+      <AccountQuestions customer={customer} />
       <section className="block" id="budget">
         <h2>This month against the budget</h2>
         <p className="section-intro">
@@ -166,6 +169,8 @@ function CustomerDetail({ customer }: { customer: Customer }) {
           },
         ]}
       />
+
+      <InvoiceCheck customer={customer} />
 
       <section className="block" id="trend">
         <h2>Twelve-month trend</h2>

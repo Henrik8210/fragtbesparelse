@@ -2,6 +2,31 @@
 
 Read this before changing the app. The product is a Vite + React + TypeScript single-page app. Sample freight figures live in source. Anything a person adds stays in the browser.
 
+## Vision
+
+Henrik and Jesper, 9 Nov 2026. The product answers three questions, in this order of work:
+
+1. Are we paying what we agreed? Check invoices against the price agreement. Show each deviation in kroner and which lines to raise with the carrier. A logistics user reviews an objection before a bill is treated as accepted. That acceptance is a sample state. It does not pay anything.
+2. Is the agreement competitive? Later, compare with similar routes once there is enough data. This slice uses only the account's own sample fair price.
+3. Which carriers fit our shipments? A carrier profile index grows as each carrier's invoice shape is learned. This slice has a one-line note per named carrier, not a parser.
+
+After a later tender, the chosen prices would become the next invoice-check baseline. That loop is not built.
+
+Still out: tender sending, offer comparison, market prices from other customers, payments, bank calls, OCR, real carrier parsers, real passwords, and server storage.
+
+## What this slice does
+
+On the customer overview (`AccountQuestions` in `src/components/AccountQuestions.tsx`):
+
+- The three questions, in plain English, from that account's October 2026 lanes.
+- Agreement means lanes whose cause is `contract` or `fuel`. The kroner gap there is "above the signed rates".
+- Competitive means the sample fair price (`benchmark`) against the signed rates, apart from that agreement gap. It is not other customers' data.
+- Fit names the busiest carrier, the carrier to raise on the rate card, and which named carriers match the card. Split lanes stay labeled as split.
+
+`InvoiceCheck` shows the agreement lines: invoiced, agreed, difference, "Raise with {carrier}", and a review of open objection or accepted. The review is `localStorage` key `fairlane-invoice-review`. An uploaded bill can be selected, but it was stored as a total only, so it has no line deviations. Nothing on the screen pays an invoice.
+
+`src/data/carriers.ts` is the profile index. `src/data/questions.ts` derives the answers and the agreement lines from `portfolio.ts`. Do not add a parser behind those notes.
+
 ## What the product is
 
 Fairlane is an account workspace. Each fictional company can see its own freight spend, a sample fair price, and the gap. Admins can open every company.
@@ -53,7 +78,8 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 - `src/format.ts` Danish grouping and the `kr.` suffix. Whole kroner on screen.
 - `src/session.tsx` sample sign-in.
 - `src/components/Sidebar.tsx` menu. `src/components/AccountMenu.tsx` upper-right sign-in. `src/components/Shell.tsx` frame.
-- `src/pages/CustomerPage.tsx` overview. `src/pages/PortfolioPage.tsx` admin all-accounts view. `src/pages/AccountSpaces.tsx` billing, bills, users, settings.
+- `src/pages/CustomerPage.tsx` overview, including the three questions and the invoice check. `src/pages/PortfolioPage.tsx` admin all-accounts view. `src/pages/AccountSpaces.tsx` billing, bills, users, settings.
+- `src/data/carriers.ts` carrier profile index. `src/data/questions.ts` agreement lines and the three answers. `src/invoiceReview.tsx` sample review state. `src/components/AccountQuestions.tsx` and `src/components/InvoiceCheck.tsx`.
 - `src/bills.tsx` plus `src/bills/parse.ts`, `read.ts`, `spend.ts`. UI in `src/components/BillDesk.tsx`.
 - `src/people.tsx` and `src/components/UserDesk.tsx`.
 - `src/index.css` is the only stylesheet. Navy sidebar `#0d2137`, white page.
