@@ -12,51 +12,57 @@ import {
   CAUSES,
   LATEST_MONTH,
   MONTHS,
-  causeLabel,
   currentMonthTrack,
   customers,
   latestFromLanes,
   savingsByCause,
 } from "../data/portfolio.ts";
 import { formatCount, formatKr, formatPercent } from "../format.ts";
+import { useLanguage } from "../language.tsx";
+import type { MessageKey } from "../i18n/messages.ts";
 import type { CauseId, Customer } from "../types.ts";
 import { NotFound } from "./NotFound.tsx";
 
 type Filter = "all" | "clean" | CauseId;
 
+const causeTitleKey: Record<CauseId, MessageKey> = {
+  express: "cause.express.title",
+  consolidation: "cause.consolidation.title",
+  dimensional: "cause.dimensional.title",
+  fuel: "cause.fuel.title",
+  contract: "cause.contract.title",
+  split: "cause.split.title",
+};
+
+const causeShortKey: Record<CauseId, MessageKey> = {
+  express: "cause.express.short",
+  consolidation: "cause.consolidation.short",
+  dimensional: "cause.dimensional.short",
+  fuel: "cause.fuel.short",
+  contract: "cause.contract.short",
+  split: "cause.split.short",
+};
+
 export function CustomerPage() {
   const { customerId } = useParams();
   const { session } = useSession();
+  const { t } = useLanguage();
   const customer = customers.find((item) => item.id === customerId);
   if (!customer) {
-    return (
-      <NotFound
-        title="No sample company matches that link"
-        body="Fairlane sample data includes only the fictional companies in the portfolio."
-      />
-    );
+    return <NotFound title={t("notFound.noCompany")} body={t("notFound.noCompanyBody")} />;
   }
   if (!session) {
-    return (
-      <NotFound
-        title="Sign in to open this account"
-        body={`${customer.name} is a sample company. Use Log in in the upper right and choose that account, or sign in as a Fairlane admin. Figures stay hidden until you do.`}
-      />
-    );
+    return <NotFound title={t("notFound.signIn")} body={t("notFound.signInBody", { name: customer.name })} />;
   }
   if (session.role === "customer" && session.customerId !== customer.id) {
-    return (
-      <NotFound
-        title="This account is not yours"
-        body="A company sign-in shows only that company's savings. Sign in as a Fairlane admin to open every account."
-      />
-    );
+    return <NotFound title={t("notFound.notYours")} body={t("notFound.notYoursBody")} />;
   }
   return <CustomerDetail key={customer.id} customer={customer} />;
 }
 
 function CustomerDetail({ customer }: { customer: Customer }) {
   const { session } = useSession();
+  const { t, phrase } = useLanguage();
   const [filter, setFilter] = useState<Filter>("all");
   const latest = latestFromLanes(customer);
   const { total: billTotal } = useBills(customer.id);
@@ -65,7 +71,11 @@ function CustomerDetail({ customer }: { customer: Customer }) {
   const causes = savingsByCause(customer);
   const maxCause = Math.max(...causes.map((cause) => cause.amount));
   const hasClean = customer.lanes.some((lane) => lane.causeId === null);
-  const rangeLabel = `${MONTHS[0].label} to ${LATEST_MONTH}`;
+  const latestMonth = phrase(`month.${MONTHS[MONTHS.length - 1].id}`, LATEST_MONTH);
+  const rangeLabel = t("customer.range", {
+    from: phrase(`month.${MONTHS[0].id}`, MONTHS[0].label),
+    to: latestMonth,
+  });
 
   useEffect(() => {
     document.title = `${customer.name} · Fairlane`;
@@ -90,56 +100,58 @@ function CustomerDetail({ customer }: { customer: Customer }) {
     <div className="page" id="overview">
       <h1>{customer.name}</h1>
       <p className="meta">
-        {customer.industry} · {customer.place}
+        {customer.industry === "Ecommerce" ? t("industry.Ecommerce") : t("industry.Manufacturing")} · {customer.place}
       </p>
       {session?.role === "admin" ? (
         <p className="back">
           <Link className="text-link" to="/">
-            All accounts
+            {t("account.all")}
           </Link>
         </p>
       ) : null}
       <p className="lede">
-        {customer.description}{" "}
+        {phrase(`desc.${customer.id}`, customer.description)}{" "}
         {billTotal > 0
-          ? `Sample figures, plus ${formatKr(billTotal)} from bills on this account.`
-          : "Every figure on this screen is Fairlane sample data."}
+          ? t("customer.billsLede", { amount: formatKr(billTotal) })
+          : t("customer.sampleLede")}
       </p>
       <AccountQuestions customer={customer} />
       <section className="block" id="budget">
-        <h2>This month against the budget</h2>
+        <h2>{t("customer.budgetTitle")}</h2>
         <p className="section-intro">
-          {LATEST_MONTH}. The solid line is freight spend as the month goes on
-          {billTotal > 0 ? ", with bills you added included at month end" : ""}. The dashed line is
-          the budget projected for the full month. Spend finishes at {formatKr(monthTrack.spent)}.
-          The budget is {formatKr(monthTrack.budget)}.{" "}
+          {t("customer.budgetIntro", {
+            month: latestMonth,
+            bills: billTotal > 0 ? t("customer.budgetBills") : "",
+            spent: formatKr(monthTrack.spent),
+            budget: formatKr(monthTrack.budget),
+          })}{" "}
           {againstBudget === 0
-            ? "Spend matches that budget."
+            ? t("customer.budgetMatch")
             : againstBudget > 0
-              ? `Spend is ${formatKr(againstBudget)} over that budget.`
-              : `Spend is ${formatKr(Math.abs(againstBudget))} under that budget.`}
+              ? t("customer.budgetOver", { amount: formatKr(againstBudget) })
+              : t("customer.budgetUnder", { amount: formatKr(Math.abs(againstBudget)) })}
         </p>
-        <MonthBudgetChart points={monthTrack.points} monthLabel={LATEST_MONTH} />
+        <MonthBudgetChart points={monthTrack.points} monthLabel={latestMonth} />
         <div className="table-wrap">
           <table className="months">
             <caption className="sr-only">
-              Fairlane sample spend and budget for {customer.name} in {LATEST_MONTH}
+              {t("customer.budgetCaption", { name: customer.name, month: latestMonth })}
             </caption>
             <thead>
               <tr>
-                <th scope="col">Through</th>
+                <th scope="col">{t("customer.through")}</th>
                 <th scope="col" className="num">
-                  Spend
+                  {t("common.spend")}
                 </th>
                 <th scope="col" className="num">
-                  Budget
+                  {t("common.budget")}
                 </th>
               </tr>
             </thead>
             <tbody>
               {monthTrack.points.map((point) => (
                 <tr key={point.label} className={point.label === "Month end" ? "is-latest" : undefined}>
-                  <th scope="row">{point.label}</th>
+                  <th scope="row">{phrase(`week.${point.label}`, point.label)}</th>
                   <td className="num">{formatKr(point.spent)}</td>
                   <td className="num">{formatKr(point.budget)}</td>
                 </tr>
@@ -149,22 +161,22 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         </div>
       </section>
       <Figures
-        kicker={`${LATEST_MONTH} · latest month`}
+        kicker={t("customer.kicker", { month: latestMonth })}
         items={[
           {
-            label: "Paid",
+            label: t("common.paid"),
             value: formatKr(latest.paid + billTotal),
-            hint: billTotal > 0 ? `Sample invoices plus ${formatKr(billTotal)} from bills` : "Sample invoices",
+            hint: billTotal > 0 ? t("common.samplePlusBills", { amount: formatKr(billTotal) }) : t("common.sampleInvoices"),
           },
           {
-            label: "Benchmark",
+            label: t("common.benchmark"),
             value: formatKr(latest.benchmark),
-            hint: "Sample fair price, not a carrier quote",
+            hint: t("common.fairHint"),
           },
           {
-            label: "Addressable savings",
+            label: t("common.addressable"),
             value: formatKr(latest.savings),
-            hint: `${formatPercent(latest.savings / latest.paid)} of the sample invoices`,
+            hint: t("common.ofSampleInvoices", { percent: formatPercent(latest.savings / latest.paid) }),
             emphasis: true,
           },
         ]}
@@ -173,13 +185,13 @@ function CustomerDetail({ customer }: { customer: Customer }) {
       <InvoiceCheck customer={customer} />
 
       <section className="block" id="trend">
-        <h2>Twelve-month trend</h2>
+        <h2>{t("customer.trend")}</h2>
         <p className="section-intro">
-          {rangeLabel}. The shaded gap is the sample addressable savings in each month.
-          {billTotal > 0 ? ` Paid in ${LATEST_MONTH} includes ${formatKr(billTotal)} from bills.` : ""}
+          {t("customer.trendIntro", { range: rangeLabel })}
+          {billTotal > 0 ? t("customer.trendBills", { month: latestMonth, amount: formatKr(billTotal) }) : ""}
         </p>
         <TrendChart
-          labels={MONTHS.map((month) => month.short)}
+          labels={MONTHS.map((month) => phrase(`monthShort.${month.id}`, month.short))}
           points={customer.months}
           rangeLabel={rangeLabel}
         />
@@ -192,20 +204,20 @@ function CustomerDetail({ customer }: { customer: Customer }) {
             return (
               <li key={label.id} className={isLatest ? "card is-latest" : "card"}>
                 <span className="card-title">
-                  {label.label}
-                  {isLatest ? <span className="latest-tag">Latest</span> : null}
+                  {phrase(`month.${label.id}`, label.label)}
+                  {isLatest ? <span className="latest-tag">{t("common.latest")}</span> : null}
                 </span>
                 <span className="card-stats">
                   <span>
-                    <span className="card-label">Paid</span>
+                    <span className="card-label">{t("common.paid")}</span>
                     {formatKr(paid)}
                   </span>
                   <span>
-                    <span className="card-label">Benchmark</span>
+                    <span className="card-label">{t("common.benchmark")}</span>
                     {formatKr(month.benchmark)}
                   </span>
                   <span>
-                    <span className="card-label">Savings</span>
+                    <span className="card-label">{t("common.savings")}</span>
                     {formatKr(savings)}
                   </span>
                 </span>
@@ -216,19 +228,19 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         <div className="table-wrap desktop-only">
           <table className="months">
             <caption className="sr-only">
-              Fairlane sample data by month for {customer.name}, {rangeLabel}
+              {t("customer.monthCaption", { name: customer.name, range: rangeLabel })}
             </caption>
             <thead>
               <tr>
-                <th scope="col">Month</th>
+                <th scope="col">{t("common.month")}</th>
                 <th scope="col" className="num">
-                  Paid
+                  {t("common.paid")}
                 </th>
                 <th scope="col" className="num">
-                  Benchmark
+                  {t("common.benchmark")}
                 </th>
                 <th scope="col" className="num">
-                  Savings
+                  {t("common.savings")}
                 </th>
               </tr>
             </thead>
@@ -241,8 +253,8 @@ function CustomerDetail({ customer }: { customer: Customer }) {
                 return (
                   <tr key={label.id} className={isLatest ? "is-latest" : undefined}>
                     <th scope="row">
-                      {label.label}
-                      {isLatest ? <span className="latest-tag">Latest</span> : null}
+                      {phrase(`month.${label.id}`, label.label)}
+                      {isLatest ? <span className="latest-tag">{t("common.latest")}</span> : null}
                     </th>
                     <td className="num">{formatKr(paid)}</td>
                     <td className="num">{formatKr(month.benchmark)}</td>
@@ -256,39 +268,39 @@ function CustomerDetail({ customer }: { customer: Customer }) {
       </section>
 
       <section className="block" id="savings">
-        <h2>Savings by cause</h2>
-        <p className="section-intro">
-          Where the {LATEST_MONTH} gap comes from, in words a buyer can check.
-        </p>
+        <h2>{t("customer.causes")}</h2>
+        <p className="section-intro">{t("customer.causesIntro", { month: latestMonth })}</p>
         <ol className="causes">
           {causes.map((cause) => (
             <li key={cause.id}>
               <div className="cause-top">
-                <h3>{cause.title}</h3>
+                <h3>{t(causeTitleKey[cause.id])}</h3>
                 <p className="cause-amount">{formatKr(cause.amount)}</p>
               </div>
               <div className="bar" aria-hidden="true">
                 <span style={{ width: `${(cause.amount / maxCause) * 100}%` }} />
               </div>
-              <p className="cause-share">{formatPercent(cause.amount / latest.savings)} of savings</p>
-              <p className="explanation">{cause.explanation}</p>
+              <p className="cause-share">
+                {formatPercent(cause.amount / latest.savings)} {t("common.ofSavings")}
+              </p>
+              <p className="explanation">{phrase(`explain.${customer.id}.${cause.id}`, cause.explanation)}</p>
             </li>
           ))}
         </ol>
       </section>
 
       <section className="block" id="lanes">
-        <h2>Lanes and carriers</h2>
+        <h2>{t("customer.lanes")}</h2>
         <p className="section-intro">
           {filter === "all"
-            ? `${LATEST_MONTH} shipment groups behind the total. The lines add up to the month.`
+            ? t("customer.lanesAll", { month: latestMonth })
             : filter === "clean"
-              ? `${LATEST_MONTH} shipment groups invoiced at the agreed rate. They are part of the month, not the whole of it.`
-              : `${LATEST_MONTH} shipment groups for this cause. They are part of the month, not the whole of it.`}
+              ? t("customer.lanesClean", { month: latestMonth })
+              : t("customer.lanesCause", { month: latestMonth })}
         </p>
-        <div className="filters" role="group" aria-label="Filter lanes by cause">
+        <div className="filters" role="group" aria-label={t("customer.filter")}>
           <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>
-            All lines <span className="filter-count">{customer.lanes.length}</span>
+            {t("common.allLines")} <span className="filter-count">{customer.lanes.length}</span>
           </button>
           {CAUSES.map((cause) => {
             const count = customer.lanes.filter((lane) => lane.causeId === cause.id).length;
@@ -300,13 +312,13 @@ function CustomerDetail({ customer }: { customer: Customer }) {
                 aria-pressed={filter === cause.id}
                 onClick={() => setFilter(cause.id)}
               >
-                {cause.short} <span className="filter-count">{count}</span>
+                {t(causeShortKey[cause.id])} <span className="filter-count">{count}</span>
               </button>
             );
           })}
           {hasClean ? (
             <button type="button" aria-pressed={filter === "clean"} onClick={() => setFilter("clean")}>
-              At the agreed rate{" "}
+              {t("cause.clean")}{" "}
               <span className="filter-count">
                 {customer.lanes.filter((lane) => lane.causeId === null).length}
               </span>
@@ -319,30 +331,30 @@ function CustomerDetail({ customer }: { customer: Customer }) {
             return (
               <li key={`${lane.origin}-${lane.destination}-${lane.carrier}-${lane.service}`} className="card">
                 <span className="card-title">
-                  {lane.origin} to {lane.destination}
+                  {lane.origin} {t("common.to")} {phrase(`place.${lane.destination}`, lane.destination)}
                 </span>
                 <span className="company-meta">
-                  {lane.carrier} · {lane.service}
+                  {phrase(`carrier.${lane.carrier}`, lane.carrier)} · {phrase(`service.${lane.service}`, lane.service)}
                 </span>
                 <span className="card-stats">
                   <span>
-                    <span className="card-label">Shipments</span>
+                    <span className="card-label">{t("common.shipments")}</span>
                     {formatCount(lane.shipments)}
                   </span>
                   <span>
-                    <span className="card-label">Paid</span>
+                    <span className="card-label">{t("common.paid")}</span>
                     {formatKr(lane.paid)}
                   </span>
                   <span>
-                    <span className="card-label">Benchmark</span>
+                    <span className="card-label">{t("common.benchmark")}</span>
                     {formatKr(lane.benchmark)}
                   </span>
                   <span>
-                    <span className="card-label">Savings</span>
+                    <span className="card-label">{t("common.savings")}</span>
                     {formatKr(savings)}
                   </span>
                 </span>
-                <span className="card-cause">{causeLabel(lane.causeId)}</span>
+                <span className="card-cause">{lane.causeId ? t(causeShortKey[lane.causeId]) : t("cause.clean")}</span>
               </li>
             );
           })}
@@ -350,25 +362,25 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         <div className="table-wrap desktop-only">
           <table className="lines">
             <caption className="sr-only">
-              Fairlane sample lanes for {customer.name} in {LATEST_MONTH}
+              {t("customer.laneCaption", { name: customer.name, month: latestMonth })}
             </caption>
             <thead>
               <tr>
-                <th scope="col">Lane</th>
-                <th scope="col">Carrier</th>
+                <th scope="col">{t("common.lane")}</th>
+                <th scope="col">{t("common.carrier")}</th>
                 <th scope="col" className="num">
-                  Shipments
+                  {t("common.shipments")}
                 </th>
                 <th scope="col" className="num">
-                  Paid
+                  {t("common.paid")}
                 </th>
                 <th scope="col" className="num">
-                  Benchmark
+                  {t("common.benchmark")}
                 </th>
                 <th scope="col" className="num">
-                  Savings
+                  {t("common.savings")}
                 </th>
-                <th scope="col">Cause</th>
+                <th scope="col">{t("common.cause")}</th>
               </tr>
             </thead>
             <tbody>
@@ -377,24 +389,24 @@ function CustomerDetail({ customer }: { customer: Customer }) {
                 return (
                   <tr key={`${lane.origin}-${lane.destination}-${lane.carrier}-${lane.service}`}>
                     <th scope="row">
-                      {lane.origin} to {lane.destination}
+                      {lane.origin} {t("common.to")} {phrase(`place.${lane.destination}`, lane.destination)}
                     </th>
                     <td>
-                      <span className="carrier">{lane.carrier}</span>
-                      <span className="service">{lane.service}</span>
+                      <span className="carrier">{phrase(`carrier.${lane.carrier}`, lane.carrier)}</span>
+                      <span className="service">{phrase(`service.${lane.service}`, lane.service)}</span>
                     </td>
                     <td className="num">{formatCount(lane.shipments)}</td>
                     <td className="num">{formatKr(lane.paid)}</td>
                     <td className="num">{formatKr(lane.benchmark)}</td>
                     <td className="num">{formatKr(savings)}</td>
-                    <td>{causeLabel(lane.causeId)}</td>
+                    <td>{lane.causeId ? t(causeShortKey[lane.causeId]) : t("cause.clean")}</td>
                   </tr>
                 );
               })}
             </tbody>
             <tfoot>
               <tr>
-                <th scope="row">{filter === "all" ? "All lines" : "Shown lines"}</th>
+                <th scope="row">{filter === "all" ? t("common.allLines") : t("common.shownLines")}</th>
                 <td />
                 <td className="num">{formatCount(shown.shipments)}</td>
                 <td className="num">{formatKr(shown.paid)}</td>

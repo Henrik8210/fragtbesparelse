@@ -1,4 +1,5 @@
 import { formatNumber } from "../format.ts";
+import { useLanguage } from "../language.tsx";
 import type { MonthTrackPoint } from "../data/portfolio.ts";
 
 function scale(maxValue: number): { max: number; ticks: number[] } {
@@ -24,6 +25,7 @@ export function MonthBudgetChart({
   points: MonthTrackPoint[];
   monthLabel: string;
 }) {
+  const { t, phrase } = useLanguage();
   const maxValue = Math.max(...points.map((point) => Math.max(point.spent, point.budget)));
   const { max, ticks } = scale(maxValue);
   const inset = 8;
@@ -35,15 +37,14 @@ export function MonthBudgetChart({
   return (
     <figure className="chart">
       <figcaption className="sr-only">
-        Fairlane sample data for {monthLabel}. Cumulative freight spend against the budget projected
-        for the month. The table lists each week.
+        {t("chart.budgetCaption", { month: monthLabel })}
       </figcaption>
       <ul className="legend">
         <li>
-          <span className="swatch swatch-paid" /> Spend
+          <span className="swatch swatch-paid" /> {t("common.spend")}
         </li>
         <li>
-          <span className="swatch swatch-budget" /> Budget
+          <span className="swatch swatch-budget" /> {t("common.budget")}
         </li>
       </ul>
       <div className="chart-body">
@@ -87,7 +88,7 @@ export function MonthBudgetChart({
                 className={index === points.length - 1 ? "is-latest" : undefined}
                 style={{ left: `${xOf(index)}%` }}
               >
-                {point.label}
+                {phrase(`week.${point.label}`, point.label)}
               </span>
             ))}
           </div>

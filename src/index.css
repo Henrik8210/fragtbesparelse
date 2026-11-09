@@ -1240,6 +1240,37 @@ tfoot td {
   font-weight: 500;
 }
 
+.language-setting {
+  margin: 1.4rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.language-setting legend {
+  font-size: 1.02rem;
+  font-weight: 600;
+}
+
+.language-switch {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.language-switch button {
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+  border: 1px solid #0d2137;
+  background: #ffffff;
+  color: #0d2137;
+  font: inherit;
+  font-weight: 600;
+}
+
+.language-switch button[aria-pressed="true"] {
+  background: #0d2137;
+  color: #ffffff;
+}
+
 .settings-list {
   margin: 1.2rem 0 0;
 }

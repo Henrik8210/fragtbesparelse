@@ -66,7 +66,7 @@ Routes:
 | `/customers/:id/billing` | Statement for the month |
 | `/customers/:id/billing/bills` | Add bills. `/customers/:id/bills` redirects here |
 | `/customers/:id/users` | Sample seats plus people added on this browser |
-| `/customers/:id/settings` | Account notes |
+| `/customers/:id/settings` | Account notes and the language switch |
 | `/billing`, `/billing/bills`, `/users`, `/settings` | Same pages. A signed-in company is sent to its own path |
 
 A signed-out visitor and a company opening another company's URL see no kroner figures. Gate this in `src/pages/AccountSpaces.tsx` (`Space`) and `src/pages/CustomerPage.tsx`.
@@ -75,7 +75,7 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 
 ## Where the code lives
 
-- `src/App.tsx` routes and providers (`SessionProvider`, `BillsProvider`, `PeopleProvider`).
+- `src/App.tsx` routes and providers (`LanguageProvider`, `SessionProvider`, `BillsProvider`, `PeopleProvider`).
 - `src/data/portfolio.ts` fictional companies, months, lanes, causes, and `currentMonthTrack`. Do not write uploaded bills or added people into this file.
 - `src/format.ts` Danish grouping and the `kr.` suffix. Whole kroner on screen.
 - `src/session.tsx` sample sign-in.
@@ -85,6 +85,10 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 - `src/bills.tsx` plus `src/bills/parse.ts`, `read.ts`, `spend.ts`. UI in `src/components/BillDesk.tsx`.
 - `src/people.tsx` and `src/components/UserDesk.tsx`.
 - `src/index.css` is the only stylesheet. Navy sidebar `#0d2137`, white page.
+
+## Language
+
+Danish is the default, including when the browser is set to English. English is a setting on the Settings page. The choice is `localStorage` key `fairlane-language` (`da` or `en`). Screen copy lives in `src/i18n/messages.ts`. Sample descriptions, lane services, and place names live in `src/i18n/content.ts` and stay English in the data files. Add both languages when a screen gains a sentence. Company names stay as written. Kroner keep Danish grouping in both languages.
 
 ## Bills
 

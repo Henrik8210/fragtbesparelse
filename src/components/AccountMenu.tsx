@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { customers } from "../data/portfolio.ts";
+import { useLanguage } from "../language.tsx";
 import { usePeople } from "../people.tsx";
 import { useSession, type Session } from "../session.tsx";
 
@@ -18,6 +19,7 @@ function initials(name: string): string {
 
 export function AccountMenu() {
   const { session, signIn, signOut } = useSession();
+  const { t } = useLanguage();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const signedInCustomer =
@@ -39,8 +41,8 @@ export function AccountMenu() {
     close();
   }
 
-  const adminName = session?.role === "admin" ? (session.name ?? "Admin") : "";
-  const label = session?.role === "admin" ? adminName : (signedInCustomer?.name ?? "Log in");
+  const adminName = session?.role === "admin" ? (session.name ?? t("account.admin")) : "";
+  const label = session?.role === "admin" ? adminName : (signedInCustomer?.name ?? t("account.signIn"));
   const mark = session?.role === "admin" ? initials(adminName) || "A" : signedInCustomer ? initials(signedInCustomer.name) : "";
 
   return (
@@ -63,8 +65,8 @@ export function AccountMenu() {
       </button>
       {open ? (
         <>
-          <button type="button" className="account-backdrop" aria-label="Close account menu" onClick={close} />
-          <div id="account-panel" className="account-panel" role="region" aria-label="Account">
+          <button type="button" className="account-backdrop" aria-label={t("account.close")} onClick={close} />
+          <div id="account-panel" className="account-panel" role="region" aria-label={t("account.region")}>
             {!session ? <SignedOutChoices onChoose={choose} /> : null}
             {session?.role === "admin" ? (
               <AdminChoices name={session.name} onNavigate={close} onLogOut={logOut} />
@@ -81,19 +83,18 @@ export function AccountMenu() {
 
 function SignedOutChoices({ onChoose }: { onChoose: (session: Session, path: string) => void }) {
   const { admins } = usePeople();
+  const { t } = useLanguage();
   return (
     <>
-      <p className="account-kicker">Sample sign-in</p>
-      <p className="account-note">
-        No password. A company sees only its own savings. Admin opens every account.
-      </p>
+      <p className="account-kicker">{t("account.sample")}</p>
+      <p className="account-note">{t("account.note")}</p>
       <button type="button" className="account-choice" onClick={() => onChoose({ role: "admin" }, "/")}>
         <span className="account-avatar" aria-hidden="true">
           A
         </span>
         <span>
-          <span className="account-choice-name">Fairlane admin</span>
-          <span className="account-choice-meta">All customer accounts</span>
+          <span className="account-choice-name">{t("account.admin")}</span>
+          <span className="account-choice-meta">{t("account.adminMeta")}</span>
         </span>
       </button>
       {admins.map((admin) => (
@@ -108,11 +109,11 @@ function SignedOutChoices({ onChoose }: { onChoose: (session: Session, path: str
           </span>
           <span>
             <span className="account-choice-name">{admin.name}</span>
-            <span className="account-choice-meta">Admin · every account</span>
+            <span className="account-choice-meta">{t("account.adminEvery")}</span>
           </span>
         </button>
       ))}
-      <p className="account-kicker">Customer accounts</p>
+      <p className="account-kicker">{t("account.customers")}</p>
       <ul className="account-list">
         {customers.map((customer) => (
           <li key={customer.id}>
@@ -127,7 +128,7 @@ function SignedOutChoices({ onChoose }: { onChoose: (session: Session, path: str
               <span>
                 <span className="account-choice-name">{customer.name}</span>
                 <span className="account-choice-meta">
-                  {customer.industry} · only this account
+                  {customer.industry === "Ecommerce" ? t("industry.Ecommerce") : t("industry.Manufacturing")} · {t("account.onlyThis")}
                 </span>
               </span>
             </button>
@@ -147,17 +148,18 @@ function AdminChoices({
   onNavigate: () => void;
   onLogOut: () => void;
 }) {
+  const { t } = useLanguage();
   return (
     <>
-      <p className="account-kicker">{name ? `Signed in as ${name}` : "Signed in as admin"}</p>
-      <p className="account-note">Open a customer dashboard. Sample data only.</p>
+      <p className="account-kicker">{name ? t("account.signedInAs", { name }) : t("account.signedInAdmin")}</p>
+      <p className="account-note">{t("account.openDash")}</p>
       <Link className="account-choice" to="/" onClick={onNavigate}>
         <span className="account-avatar" aria-hidden="true">
           All
         </span>
         <span>
-          <span className="account-choice-name">All accounts</span>
-          <span className="account-choice-meta">Admin overview</span>
+          <span className="account-choice-name">{t("account.all")}</span>
+          <span className="account-choice-meta">{t("account.allMeta")}</span>
         </span>
       </Link>
       <ul className="account-list">
@@ -176,19 +178,20 @@ function AdminChoices({
         ))}
       </ul>
       <button type="button" className="account-logout" onClick={onLogOut}>
-        Log out
+        {t("account.logOut")}
       </button>
     </>
   );
 }
 
 function CustomerChoices({ name, onLogOut }: { name: string; onLogOut: () => void }) {
+  const { t } = useLanguage();
   return (
     <>
-      <p className="account-kicker">Your account</p>
-      <p className="account-note">{name} can see only its own sample savings.</p>
+      <p className="account-kicker">{t("account.your")}</p>
+      <p className="account-note">{t("account.onlySavings", { name })}</p>
       <button type="button" className="account-logout" onClick={onLogOut}>
-        Log out
+        {t("account.logOut")}
       </button>
     </>
   );

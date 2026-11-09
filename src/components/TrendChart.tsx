@@ -1,4 +1,5 @@
 import { formatNumber } from "../format.ts";
+import { useLanguage } from "../language.tsx";
 
 type Point = { paid: number; benchmark: number };
 
@@ -27,6 +28,7 @@ export function TrendChart({
   points: Point[];
   rangeLabel: string;
 }) {
+  const { t } = useLanguage();
   const maxPaid = Math.max(...points.map((point) => point.paid));
   const { max, ticks } = scale(maxPaid);
   const inset = 8;
@@ -42,18 +44,17 @@ export function TrendChart({
   return (
     <figure className="chart">
       <figcaption className="sr-only">
-        Fairlane sample data. Paid and benchmark from {rangeLabel}. The shaded gap is addressable
-        savings. The table lists each month.
+        {t("chart.trendCaption", { range: rangeLabel })}
       </figcaption>
       <ul className="legend">
         <li>
-          <span className="swatch swatch-paid" /> Paid
+          <span className="swatch swatch-paid" /> {t("common.paid")}
         </li>
         <li>
-          <span className="swatch swatch-benchmark" /> Benchmark
+          <span className="swatch swatch-benchmark" /> {t("common.benchmark")}
         </li>
         <li>
-          <span className="swatch swatch-gap" /> Gap, addressable savings
+          <span className="swatch swatch-gap" /> {t("chart.gap")}
         </li>
       </ul>
       <div className="chart-body">

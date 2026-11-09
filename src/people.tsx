@@ -33,8 +33,8 @@ type PeopleStore = {
 type PeopleContextValue = {
   account: AccountPerson[];
   admins: AdminPerson[];
-  addAccountUser: (draft: { name: string; role: AccountRole; customerId: string }) => string | null;
-  addAdmin: (name: string) => string | null;
+  addAccountUser: (draft: { name: string; role: AccountRole; customerId: string }) => "name" | "customer" | null;
+  addAdmin: (name: string) => "name" | null;
   removeAccountUser: (id: string) => void;
   removeAdmin: (id: string) => void;
 };
@@ -105,9 +105,9 @@ export function PeopleProvider({ children }: { children: ReactNode }) {
     admins: store.admins,
     addAccountUser(draft) {
       const name = cleanName(draft.name);
-      if (!name) return "Enter a name.";
+      if (!name) return "name";
       if (!isAccountRole(draft.role) || !customers.some((customer) => customer.id === draft.customerId)) {
-        return "Choose a customer account.";
+        return "customer";
       }
       const person: AccountPerson = {
         id: crypto.randomUUID(),
@@ -120,7 +120,7 @@ export function PeopleProvider({ children }: { children: ReactNode }) {
     },
     addAdmin(name) {
       const cleaned = cleanName(name);
-      if (!cleaned) return "Enter a name.";
+      if (!cleaned) return "name";
       const person: AdminPerson = { id: crypto.randomUUID(), name: cleaned };
       setStore((current) => ({ ...current, admins: [...current.admins, person].slice(-MAX_PEOPLE) }));
       return null;

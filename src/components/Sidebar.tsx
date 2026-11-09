@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { customers } from "../data/portfolio.ts";
+import { useLanguage } from "../language.tsx";
 import { useSession } from "../session.tsx";
 
 const STORAGE_KEY = "fairlane-sidebar";
@@ -34,6 +35,7 @@ function accountFromPath(pathname: string): string | null {
 
 export function Sidebar() {
   const { session } = useSession();
+  const { t } = useLanguage();
   const { pathname } = useLocation();
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const signedInCustomer =
@@ -62,11 +64,11 @@ export function Sidebar() {
   return (
     <div className={collapsed ? "sidebar-slot is-collapsed" : "sidebar-slot"}>
       {!collapsed ? (
-        <button type="button" className="sidebar-backdrop" aria-label="Close menu" onClick={closeOnNarrow} />
+        <button type="button" className="sidebar-backdrop" aria-label={t("nav.close")} onClick={closeOnNarrow} />
       ) : null}
       <aside id="sidebar" className="sidebar">
         <div className="sidebar-head">
-          <NavLink to={home} end className="brand sidebar-brand" aria-label="Fairlane home" onClick={closeOnNarrow}>
+          <NavLink to={home} end className="brand sidebar-brand" aria-label={t("nav.home")} onClick={closeOnNarrow}>
             <span className="brand-name">Fairlane</span>
           </NavLink>
           <button
@@ -74,17 +76,17 @@ export function Sidebar() {
             className="sidebar-toggle"
             aria-expanded={!collapsed}
             aria-controls="sidebar"
-            aria-label={collapsed ? "Expand menu" : "Collapse menu"}
+            aria-label={collapsed ? t("nav.expand") : t("nav.collapse")}
             onClick={toggle}
           >
             <CollapseIcon />
             <span className="toggle-label" aria-hidden="true">
-              {collapsed ? "Menu" : "Hide"}
+              {collapsed ? t("nav.menu") : t("nav.hide")}
             </span>
           </button>
         </div>
-        <nav id="sidebar-nav" className="sidebar-nav" aria-label="Main">
-          <p className="sidebar-label">Menu</p>
+        <nav id="sidebar-nav" className="sidebar-nav" aria-label={t("nav.main")}>
+          <p className="sidebar-label">{t("nav.menu")}</p>
           <ul className="sidebar-list">
             <li>
               <NavLink to={home} end className={linkClass} onClick={closeOnNarrow}>
@@ -92,8 +94,8 @@ export function Sidebar() {
                   <GridIcon />
                 </span>
                 <span className="nav-copy">
-                  <span className="nav-label">Overview</span>
-                  <span className="nav-meta">Dashboard</span>
+                  <span className="nav-label">{t("nav.overview")}</span>
+                  <span className="nav-meta">{t("nav.overviewMeta")}</span>
                 </span>
               </NavLink>
             </li>
@@ -103,8 +105,8 @@ export function Sidebar() {
                   <BillingIcon />
                 </span>
                 <span className="nav-copy">
-                  <span className="nav-label">Billing</span>
-                  <span className="nav-meta">Spend and budget</span>
+                  <span className="nav-label">{t("nav.billing")}</span>
+                  <span className="nav-meta">{t("nav.billingMeta")}</span>
                 </span>
               </NavLink>
               <ul className="nav-sub">
@@ -114,8 +116,8 @@ export function Sidebar() {
                       <BillsIcon />
                     </span>
                     <span className="nav-copy">
-                      <span className="nav-label">Bills</span>
-                      <span className="nav-meta">Added to this spend</span>
+                      <span className="nav-label">{t("nav.bills")}</span>
+                      <span className="nav-meta">{t("nav.billsMeta")}</span>
                     </span>
                   </NavLink>
                 </li>
@@ -127,8 +129,8 @@ export function Sidebar() {
                   <UsersIcon />
                 </span>
                 <span className="nav-copy">
-                  <span className="nav-label">Users</span>
-                  <span className="nav-meta">People on the account</span>
+                  <span className="nav-label">{t("nav.users")}</span>
+                  <span className="nav-meta">{t("nav.usersMeta")}</span>
                 </span>
               </NavLink>
             </li>
@@ -139,11 +141,11 @@ export function Sidebar() {
             to={`${base}/settings`}
             end
             className={linkClass}
-            aria-label="Settings"
+            aria-label={t("nav.settings")}
             onClick={closeOnNarrow}
           >
             <CogIcon />
-            <span className="nav-label">Settings</span>
+            <span className="nav-label">{t("nav.settings")}</span>
           </NavLink>
         </div>
       </aside>

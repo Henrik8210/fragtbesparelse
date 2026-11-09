@@ -1,11 +1,13 @@
 import { useId, useState, type FormEvent } from "react";
 import { customers } from "../data/portfolio.ts";
-import { ACCOUNT_ROLES, ROLE_ACCESS, usePeople, type AccountRole } from "../people.tsx";
+import { useLanguage } from "../language.tsx";
+import type { MessageKey } from "../i18n/messages.ts";
+import { ACCOUNT_ROLES, usePeople, type AccountRole } from "../people.tsx";
 import type { Customer } from "../types.ts";
 
 type Mode = "closed" | "choose" | "account" | "admin";
 
-const SEATS = ACCOUNT_ROLES.map((role) => ({ role, access: ROLE_ACCESS[role] }));
+const SEATS = ACCOUNT_ROLES;
 
 export function UserDesk({
   customer,
@@ -15,6 +17,7 @@ export function UserDesk({
   role: "admin" | "customer";
 }) {
   const { account, admins, addAccountUser, addAdmin, removeAccountUser, removeAdmin } = usePeople();
+  const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>("closed");
   const [error, setError] = useState("");
   const panelId = useId();
@@ -38,12 +41,12 @@ export function UserDesk({
     const seat = String(data.get("role") ?? "");
     const customerId = isAdmin ? String(data.get("customerId") ?? "") : (customer?.id ?? "");
     if (!isAccountRole(seat)) {
-      setError("Choose a role.");
+      setError(t("users.needRole"));
       return;
     }
     const problem = addAccountUser({ name, role: seat, customerId });
     if (problem) {
-      setError(problem);
+      setError(problem === "name" ? t("users.needName") : t("users.needCustomer"));
       return;
     }
     setError("");
@@ -54,7 +57,7 @@ export function UserDesk({
     event.preventDefault();
     const problem = addAdmin(String(new FormData(event.currentTarget).get("name") ?? ""));
     if (problem) {
-      setError(problem);
+      setError(t("users.needName"));
       return;
     }
     setError("");
@@ -67,17 +70,13 @@ export function UserDesk({
 
   return (
     <>
-      <h1>Users</h1>
-      {customer ? <p className="meta">{customer.name}</p> : <p className="meta">Fairlane admin</p>}
-      <p className="lede">
-        {isAdmin
-          ? "Add a user on a customer account, or add an admin. An admin can sign in from Log in and open every account. People you add stay in this browser."
-          : "Add a user on this account. Sample seats stay listed below. People you add stay in this browser."}
-      </p>
+      <h1>{t("users.title")}</h1>
+      {customer ? <p className="meta">{customer.name}</p> : <p className="meta">{t("account.admin")}</p>}
+      <p className="lede">{isAdmin ? t("users.adminLede") : t("users.customerLede")}</p>
 
       {hasAdded ? (
         <div className="bill-toolbar">
-          <h2>People you added</h2>
+          <h2>{t("users.added")}</h2>
           <button
             type="button"
             className="add-plus is-small"
@@ -86,7 +85,7 @@ export function UserDesk({
             onClick={toggle}
           >
             <span aria-hidden="true">+</span>
-            <span className="sr-only">Add a user</span>
+            <span className="sr-only">{t("users.add")}</span>
           </button>
         </div>
       ) : (
@@ -99,9 +98,9 @@ export function UserDesk({
             onClick={toggle}
           >
             <span aria-hidden="true">+</span>
-            <span className="sr-only">Add a user</span>
+            <span className="sr-only">{t("users.add")}</span>
           </button>
-          <p>{isAdmin ? "Add a user on a customer account, or add an admin." : "Add the first user on this account."}</p>
+          <p>{isAdmin ? t("users.emptyAdmin") : t("users.emptyCustomer")}</p>
         </div>
       )}
 
@@ -110,10 +109,10 @@ export function UserDesk({
           {mode === "choose" ? (
             <div className="bill-choices">
               <button type="button" className="bill-choice" onClick={() => setMode("account")}>
-                User on a customer account
+                {t("users.onCustomer")}
               </button>
               <button type="button" className="bill-choice" onClick={() => setMode("admin")}>
-                Admin user
+                {t("users.adminUser")}
               </button>
             </div>
           ) : null}
@@ -121,7 +120,7 @@ export function UserDesk({
             <form className="bill-form" onSubmit={addAccount}>
               {isAdmin && !customer ? (
                 <label className="bill-field">
-                  <span>Customer account</span>
+                  <span>{t("users.customerAccount")}</span>
                   <select name="customerId" defaultValue={customers[0]?.id}>
                     {customers.map((item) => (
                       <option key={item.id} value={item.id}>
@@ -132,26 +131,26 @@ export function UserDesk({
                 </label>
               ) : null}
               <label className="bill-field">
-                <span>Name</span>
-                <input name="name" type="text" maxLength={80} required placeholder="Name" />
+                <span>{t("common.name")}</span>
+                <input name="name" type="text" maxLength={80} required placeholder={t("common.name")} />
               </label>
               <label className="bill-field">
-                <span>Role</span>
+                <span>{t("common.role")}</span>
                 <select name="role" defaultValue="Operations">
                   {SEATS.map((seat) => (
-                    <option key={seat.role} value={seat.role}>
-                      {seat.role}
+                    <option key={seat} value={seat}>
+                      {roleLabel(seat, t)}
                     </option>
                   ))}
                 </select>
               </label>
               <div className="bill-actions">
                 <button type="submit" className="bill-choice">
-                  Add user
+                  {t("users.addUser")}
                 </button>
                 {isAdmin ? (
                   <button type="button" className="bill-back" onClick={() => setMode("choose")}>
-                    Back
+                    {t("common.back")}
                   </button>
                 ) : null}
               </div>
@@ -160,16 +159,16 @@ export function UserDesk({
           {mode === "admin" ? (
             <form className="bill-form" onSubmit={addAdminUser}>
               <label className="bill-field">
-                <span>Name</span>
-                <input name="name" type="text" maxLength={80} required placeholder="Name" />
+                <span>{t("common.name")}</span>
+                <input name="name" type="text" maxLength={80} required placeholder={t("common.name")} />
               </label>
-              <p className="hint">This person signs in as an admin and can open every account.</p>
+              <p className="hint">{t("users.adminHint")}</p>
               <div className="bill-actions">
                 <button type="submit" className="bill-choice">
-                  Add admin
+                  {t("users.addAdmin")}
                 </button>
                 <button type="button" className="bill-back" onClick={() => setMode("choose")}>
-                  Back
+                  {t("common.back")}
                 </button>
               </div>
             </form>
@@ -180,19 +179,19 @@ export function UserDesk({
 
       {grouped.map((group) => (
         <section key={group.customer.id} className="block">
-          <h2>{isAdmin ? group.customer.name : "On this account"}</h2>
+          <h2>{isAdmin ? group.customer.name : t("users.onAccount")}</h2>
           <ul className="seat-list">
             {group.people.map((person) => (
               <li key={person.id}>
                 <span>
                   <span className="seat-role">{person.name}</span>
                   <span className="seat-person-role">
-                    {person.role}
-                    <span className="seat-access"> · {ROLE_ACCESS[person.role]}</span>
+                    {roleLabel(person.role, t)}
+                    <span className="seat-access"> · {roleAccess(person.role, t)}</span>
                   </span>
                 </span>
                 <button type="button" className="bill-remove" onClick={() => removeAccountUser(person.id)}>
-                  Remove
+                  {t("common.remove")}
                 </button>
               </li>
             ))}
@@ -202,16 +201,16 @@ export function UserDesk({
 
       {isAdmin && admins.length > 0 ? (
         <section className="block">
-          <h2>Admins</h2>
+          <h2>{t("users.admins")}</h2>
           <ul className="seat-list">
             {admins.map((person) => (
               <li key={person.id}>
                 <span>
                   <span className="seat-role">{person.name}</span>
-                  <span className="seat-person-role">Admin · every customer account</span>
+                  <span className="seat-person-role">{t("users.adminAccess")}</span>
                 </span>
                 <button type="button" className="bill-remove" onClick={() => removeAdmin(person.id)}>
-                  Remove
+                  {t("common.remove")}
                 </button>
               </li>
             ))}
@@ -221,12 +220,12 @@ export function UserDesk({
 
       {customer ? (
         <section className="block">
-          <h2>Sample seats</h2>
+          <h2>{t("users.sampleSeats")}</h2>
           <ul className="seat-list">
             {SEATS.map((seat) => (
-              <li key={seat.role}>
-                <span className="seat-role">{seat.role}</span>
-                <span className="seat-access">{seat.access}</span>
+              <li key={seat}>
+                <span className="seat-role">{roleLabel(seat, t)}</span>
+                <span className="seat-access">{roleAccess(seat, t)}</span>
               </li>
             ))}
           </ul>
@@ -238,4 +237,16 @@ export function UserDesk({
 
 function isAccountRole(value: string): value is AccountRole {
   return ACCOUNT_ROLES.some((role) => role === value);
+}
+
+function roleLabel(role: AccountRole, t: (key: MessageKey) => string): string {
+  if (role === "Owner") return t("role.Owner");
+  if (role === "Billing") return t("role.Billing");
+  return t("role.Operations");
+}
+
+function roleAccess(role: AccountRole, t: (key: MessageKey) => string): string {
+  if (role === "Owner") return t("role.Owner.access");
+  if (role === "Billing") return t("role.Billing.access");
+  return t("role.Operations.access");
 }
