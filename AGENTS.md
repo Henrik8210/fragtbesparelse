@@ -23,6 +23,8 @@ On the customer overview (`AccountQuestions` in `src/components/AccountQuestions
 - Competitive means the sample fair price (`benchmark`) against the signed rates, apart from that agreement gap. It is not other customers' data.
 - Fit names the busiest carrier, the carrier to raise on the rate card, and which named carriers match the card. Split lanes stay labeled as split.
 
+The agreement overspend on the overview is a bar chart. A short note beside each bar that is over the signed rate names the kroner and the carrier to raise. Add an invoice on that chart and set the freight company. The bill total is drawn on that carrier's bar. A file is still a total plus that carrier. No OCR and no payment.
+
 `InvoiceCheck` shows the agreement lines: invoiced, agreed, difference, "Raise with {carrier}", and a review of open objection or accepted. The review is `localStorage` key `fairlane-invoice-review`. An uploaded bill can be selected, but it was stored as a total only, so it has no line deviations. Nothing on the screen pays an invoice.
 
 `src/data/carriers.ts` is the profile index. `src/data/questions.ts` derives the answers and the agreement lines from `portfolio.ts`. Do not add a parser behind those notes.
@@ -79,7 +81,7 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 - `src/session.tsx` sample sign-in.
 - `src/components/Sidebar.tsx` menu. `src/components/AccountMenu.tsx` upper-right sign-in. `src/components/Shell.tsx` frame.
 - `src/pages/CustomerPage.tsx` overview, including the three questions and the invoice check. `src/pages/PortfolioPage.tsx` admin all-accounts view. `src/pages/AccountSpaces.tsx` billing, bills, users, settings.
-- `src/data/carriers.ts` carrier profile index. `src/data/questions.ts` agreement lines and the three answers. `src/invoiceReview.tsx` sample review state. `src/components/AccountQuestions.tsx` and `src/components/InvoiceCheck.tsx`.
+- `src/data/carriers.ts` carrier profile index. `src/data/questions.ts` agreement lines and the three answers. `src/invoiceReview.tsx` sample review state. `src/components/AccountQuestions.tsx`, `src/components/AddInvoice.tsx`, and `src/components/InvoiceCheck.tsx`.
 - `src/bills.tsx` plus `src/bills/parse.ts`, `read.ts`, `spend.ts`. UI in `src/components/BillDesk.tsx`.
 - `src/people.tsx` and `src/components/UserDesk.tsx`.
 - `src/index.css` is the only stylesheet. Navy sidebar `#0d2137`, white page.
@@ -90,7 +92,7 @@ Bills are nested under Billing in the sidebar. The `+` opens a dialog anchored t
 
 Accepted files: text PDF, CSV, and plain text, up to 8 MB. Parsing stays in the browser. A stated total (`i alt`, `total`, `at betale`, and the other words in `parse.ts`) wins. Otherwise money lines are summed and VAT lines are skipped. Danish `1.234,56` and English `1,234.56` both parse. A photo or a scanned page with no text layer is not read. The person types that amount.
 
-Storage is `localStorage` key `fairlane-bills`, per customer id. Only the label, amount, source, and time are stored, not the file.
+Storage is `localStorage` key `fairlane-bills`, per customer id. Only the label, amount, freight company, source, and time are stored, not the file. A bill without a freight company is an older record and stays off the agreement chart.
 
 `withBillSpend` adds the total to the latest month's freight spend. That total shows on:
 

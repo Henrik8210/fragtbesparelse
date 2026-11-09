@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { knownCarrier } from "./data/carriers.ts";
 import { customers } from "./data/portfolio.ts";
 
 const STORAGE_KEY = "fairlane-bills";
@@ -12,6 +13,7 @@ export type Bill = {
   amount: number;
   source: BillSource;
   addedAt: string;
+  carrier?: string;
 };
 
 type BillStore = Record<string, Bill[]>;
@@ -19,7 +21,10 @@ type BillStore = Record<string, Bill[]>;
 type BillsContextValue = {
   billsFor: (customerId: string) => Bill[];
   totals: Record<string, number>;
-  addBill: (customerId: string, draft: { label: string; amount: number; source: BillSource }) => void;
+  addBill: (
+    customerId: string,
+    draft: { label: string; amount: number; source: BillSource; carrier: string },
+  ) => void;
   removeBill: (customerId: string, billId: string) => void;
 };
 
@@ -35,21 +40,32 @@ function cleanLabel(label: string): string {
   return compact || "Freight bill";
 }
 
-function isBill(value: unknown): value is Bill {
-  if (!value || typeof value !== "object") return false;
+function readBill(value: unknown): Bill | null {
+  if (!value || typeof value !== "object") return null;
   const bill = value as Record<string, unknown>;
-  return (
-    typeof bill.id === "string" &&
-    bill.id.length > 0 &&
-    bill.id.length < 80 &&
-    typeof bill.label === "string" &&
-    typeof bill.amount === "number" &&
-    Number.isFinite(bill.amount) &&
-    bill.amount > 0 &&
-    bill.amount <= 1_000_000_000_000 &&
-    (bill.source === "manual" || bill.source === "file") &&
-    typeof bill.addedAt === "string"
-  );
+  if (
+    typeof bill.id !== "string" ||
+    bill.id.length === 0 ||
+    bill.id.length >= 80 ||
+    typeof bill.label !== "string" ||
+    typeof bill.amount !== "number" ||
+    !Number.isFinite(bill.amount) ||
+    bill.amount <= 0 ||
+    bill.amount > 1_000_000_000_000 ||
+    (bill.source !== "manual" && bill.source !== "file") ||
+    typeof bill.addedAt !== "string"
+  ) {
+    return null;
+  }
+  const stored: Bill = {
+    id: bill.id,
+    label: bill.label,
+    amount: bill.amount,
+    source: bill.source,
+    addedAt: bill.addedAt,
+  };
+  if (typeof bill.carrier === "string" && knownCarrier(bill.carrier)) stored.carrier = bill.carrier;
+  return stored;
 }
 
 function readStore(): BillStore {
@@ -62,7 +78,7 @@ function readStore(): BillStore {
     for (const customer of customers) {
       const entry = (parsed as Record<string, unknown>)[customer.id];
       if (!Array.isArray(entry)) continue;
-      const bills = entry.filter(isBill).slice(-MAX_BILLS);
+      const bills = entry.map(readBill).filter((bill): bill is Bill => bill !== null).slice(-MAX_BILLS);
       if (bills.length > 0) store[customer.id] = bills;
     }
     return store;
@@ -95,12 +111,14 @@ export function BillsProvider({ children }: { children: ReactNode }) {
     addBill(customerId, draft) {
       const amount = Math.round(draft.amount);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000_000_000) return;
+      if (!knownCarrier(draft.carrier)) return;
       const bill: Bill = {
         id: crypto.randomUUID(),
         label: cleanLabel(draft.label),
         amount,
         source: draft.source,
         addedAt: new Date().toISOString(),
+        carrier: draft.carrier,
       };
       setStore((current) => {
         const existing = current[customerId] ?? [];
@@ -134,7 +152,8 @@ export function useBills(customerId: string) {
   return {
     bills,
     total,
-    addBill: (draft: { label: string; amount: number; source: BillSource }) => context.addBill(customerId, draft),
+    addBill: (draft: { label: string; amount: number; source: BillSource; carrier: string }) =>
+      context.addBill(customerId, draft),
     removeBill: (billId: string) => context.removeBill(customerId, billId),
   };
 }
