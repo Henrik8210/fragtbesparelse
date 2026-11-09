@@ -134,6 +134,16 @@ export function AddInvoice({ customerId }: { customerId: string }) {
                 <button type="submit" className="bill-choice is-submit">
                   Add invoice
                 </button>
+                <button
+                  type="button"
+                  className="bill-back"
+                  onClick={() => {
+                    setErrors([]);
+                    setMode("choose");
+                  }}
+                >
+                  Back
+                </button>
               </div>
             </form>
           ) : null}
@@ -154,6 +164,16 @@ export function AddInvoice({ customerId }: { customerId: string }) {
                 />
               </label>
               <p className="hint">Text PDF, CSV, or plain text. The file is read as a total for the carrier above.</p>
+              <button
+                type="button"
+                className="bill-back"
+                onClick={() => {
+                  setErrors([]);
+                  setMode("choose");
+                }}
+              >
+                Back
+              </button>
             </div>
           ) : null}
           {errors.length > 0 ? (
