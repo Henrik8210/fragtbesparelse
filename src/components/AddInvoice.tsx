@@ -137,6 +137,16 @@ export function AddInvoice({ customerId }: { customerId: string }) {
                 <button type="submit" className="bill-choice is-submit">
                   {t("invoice.addSubmit")}
                 </button>
+                <button
+                  type="button"
+                  className="bill-back"
+                  onClick={() => {
+                    setErrors([]);
+                    setMode("choose");
+                  }}
+                >
+                  {t("common.back")}
+                </button>
               </div>
             </form>
           ) : null}
@@ -157,6 +167,16 @@ export function AddInvoice({ customerId }: { customerId: string }) {
                 />
               </label>
               <p className="hint">{t("invoice.fileHint")}</p>
+              <button
+                type="button"
+                className="bill-back"
+                onClick={() => {
+                  setErrors([]);
+                  setMode("choose");
+                }}
+              >
+                {t("common.back")}
+              </button>
             </div>
           ) : null}
           {errors.length > 0 ? (
