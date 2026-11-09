@@ -4,6 +4,7 @@ import { formatKr } from "../format.ts";
 import { parseAmount } from "../bills/parse.ts";
 import { readBillFile } from "../bills/read.ts";
 import { useBills } from "../bills.tsx";
+import { carrierProfiles, knownCarrier } from "../data/carriers.ts";
 import type { Customer } from "../types.ts";
 
 type Mode = "closed" | "choose" | "manual" | "upload";
@@ -11,6 +12,7 @@ type Mode = "closed" | "choose" | "manual" | "upload";
 export function BillDesk({ customer }: { customer: Customer }) {
   const { bills, total, addBill, removeBill } = useBills(customer.id);
   const [mode, setMode] = useState<Mode>("closed");
+  const [carrier, setCarrier] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [reading, setReading] = useState(false);
   const formId = useId();
@@ -27,17 +29,26 @@ export function BillDesk({ customer }: { customer: Customer }) {
     const data = new FormData(form);
     const label = String(data.get("label") ?? "");
     const amount = parseAmount(String(data.get("amount") ?? ""));
+    if (!knownCarrier(carrier)) {
+      setErrors(["Choose the freight company."]);
+      return;
+    }
     if (amount == null) {
       setErrors(["Enter the amount, for example 12.400 or 12400,50."]);
       return;
     }
-    addBill({ label, amount, source: "manual" });
+    addBill({ label, amount, source: "manual", carrier });
+    setCarrier("");
     form.reset();
     setErrors([]);
     setMode("closed");
   }
 
   async function addFile(fileList: FileList | null) {
+    if (!knownCarrier(carrier)) {
+      setErrors(["Choose the freight company."]);
+      return;
+    }
     const files = fileList ? [...fileList] : [];
     if (files.length === 0) return;
     setReading(true);
@@ -46,14 +57,17 @@ export function BillDesk({ customer }: { customer: Customer }) {
     for (const file of files) {
       try {
         const read = await readBillFile(file);
-        addBill({ label: read.label, amount: read.amount, source: "file" });
+        addBill({ label: read.label, amount: read.amount, source: "file", carrier });
       } catch (error) {
         nextErrors.push(error instanceof Error ? error.message : "That file could not be read.");
       }
     }
     setErrors(nextErrors);
     setReading(false);
-    if (nextErrors.length === 0) setMode("closed");
+    if (nextErrors.length === 0) {
+      setCarrier("");
+      setMode("closed");
+    }
   }
 
   return (
@@ -76,6 +90,8 @@ export function BillDesk({ customer }: { customer: Customer }) {
             errors={errors}
             compact
             label="Add a bill"
+            carrier={carrier}
+            onCarrier={setCarrier}
             onToggle={openChooser}
             onChoose={setMode}
             onManual={addManual}
@@ -90,6 +106,8 @@ export function BillDesk({ customer }: { customer: Customer }) {
             reading={reading}
             errors={errors}
             label="Add the first bill"
+            carrier={carrier}
+            onCarrier={setCarrier}
             onToggle={openChooser}
             onChoose={setMode}
             onManual={addManual}
@@ -106,7 +124,10 @@ export function BillDesk({ customer }: { customer: Customer }) {
               <li key={bill.id}>
                 <span>
                   <span className="seat-role">{bill.label}</span>
-                  <span className="seat-person-role">{bill.source === "file" ? "Uploaded" : "Typed in"}</span>
+                  <span className="seat-person-role">
+                    {bill.carrier ? `${bill.carrier} · ` : ""}
+                    {bill.source === "file" ? "Uploaded" : "Typed in"}
+                  </span>
                 </span>
                 <span className="bill-line-end">
                   <span>{formatKr(bill.amount)}</span>
@@ -134,6 +155,8 @@ function AddBillMenu({
   errors,
   compact = false,
   label,
+  carrier,
+  onCarrier,
   onToggle,
   onChoose,
   onManual,
@@ -145,6 +168,8 @@ function AddBillMenu({
   errors: string[];
   compact?: boolean;
   label: string;
+  carrier: string;
+  onCarrier: (carrier: string) => void;
   onToggle: () => void;
   onChoose: (mode: Mode) => void;
   onManual: (event: FormEvent<HTMLFormElement>) => void;
@@ -177,6 +202,17 @@ function AddBillMenu({
             if (event.key === "Escape") onChoose("closed");
           }}
         >
+          <label className="bill-field">
+            <span>Freight company</span>
+            <select value={carrier} onChange={(event) => onCarrier(event.target.value)}>
+              <option value="">Choose a carrier</option>
+              {carrierProfiles.map((profile) => (
+                <option key={profile.name} value={profile.name}>
+                  {profile.name}
+                </option>
+              ))}
+            </select>
+          </label>
           {mode === "choose" ? (
             <div className="bill-choices">
               <button type="button" className="bill-choice" autoFocus onClick={() => onChoose("manual")}>
@@ -228,7 +264,7 @@ function AddBillMenu({
               <p className="hint">
                 {reading
                   ? "Reading the file…"
-                  : "Text PDF, CSV, or plain text. A scanned image can be typed in instead."}
+                  : "Text PDF, CSV, or plain text, read as a total for the carrier above. A scanned image can be typed in instead."}
               </p>
               <button type="button" className="bill-back" onClick={() => onChoose("choose")}>
                 Back

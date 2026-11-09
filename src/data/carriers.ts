@@ -47,3 +47,7 @@ export const carrierProfiles: CarrierProfile[] = [
 export function carrierProfile(name: string): CarrierProfile | undefined {
   return carrierProfiles.find((profile) => profile.name === name);
 }
+
+export function knownCarrier(name: string): boolean {
+  return carrierProfiles.some((profile) => profile.name === name);
+}
