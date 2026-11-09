@@ -1,9 +1,10 @@
 import { AddInvoice } from "./AddInvoice.tsx";
 import { useBills } from "../bills.tsx";
 import { carrierProfiles } from "../data/carriers.ts";
+import { carrierFitIndex, type CarrierScore } from "../data/fit.ts";
 import { accountAnswers } from "../data/questions.ts";
 import { LATEST_MONTH } from "../data/portfolio.ts";
-import { formatCount, formatKr } from "../format.ts";
+import { formatKr } from "../format.ts";
 import type { Customer } from "../types.ts";
 
 type OverRow = {
@@ -18,8 +19,7 @@ export function AccountQuestions({ customer }: { customer: Customer }) {
   const rows = overRows(answers.carriers, bills);
   const max = Math.max(1, ...rows.map((row) => row.over + row.added));
   const used = new Set(answers.carriers.map((carrier) => carrier.name));
-  const busiest = answers.carriers[0];
-  const toRaise = [...answers.carriers].sort((a, b) => b.agreementGap - a.agreementGap)[0];
+  const fit = carrierFitIndex(customer);
 
   return (
     <section className="block" id="questions">
@@ -70,12 +70,25 @@ export function AccountQuestions({ customer }: { customer: Customer }) {
       </p>
 
       <h3>Which carriers fit?</h3>
-      <p className="section-intro">
-        {busiest ? `${busiest.name} carries the most shipments, ${formatCount(busiest.shipments)}.` : "No named carrier is on this account."}{" "}
-        {toRaise && toRaise.agreementGap > 0
-          ? `Raise the rate card with ${toRaise.name}.`
-          : "No named carrier is over the signed rates."}
-      </p>
+      <p className="section-intro">{fitIntro(fit.similarNames, fit.marketGap)}</p>
+      <ol className="fit-list">
+        {fit.scores.map((score) => (
+          <li key={score.name}>
+            <span className="fit-score">
+              <span className="sr-only">Fit </span>
+              {score.score}
+              <span className="sr-only"> of 100</span>
+            </span>
+            <span className="fit-meter" aria-hidden="true">
+              <span style={{ width: `${score.score}%` }} />
+            </span>
+            <span className="fit-copy">
+              <span className="agree-name">{score.name}</span>
+              <span className="fit-note">{fitNote(score)}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
 
       <h3 className="profile-heading">Carrier profiles</h3>
       <ul className="profile-list">
@@ -107,6 +120,32 @@ function overRows(
     byName.set(bill.carrier, current);
   }
   return [...byName.values()].sort((a, b) => b.over + b.added - (a.over + a.added));
+}
+
+function fitIntro(names: string[], marketGap: number): string {
+  if (names.length === 0) {
+    return "Fit is 0–100 for this business. No other sample company in this trade shares these routes.";
+  }
+  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const gap =
+    marketGap > 0
+      ? ` About ${formatKr(marketGap)} is where their prices sit below this account, the place a renegotiation would look.`
+      : " On these routes this account pays no more than they do.";
+  return `Fit is 0–100 for this business. Compared with ${who}.${gap}`;
+}
+
+function fitNote(score: CarrierScore): string {
+  const model = score.modelMatch ? "" : "Payment model is a poor fit.";
+  const prefer =
+    score.similarCount === 0
+      ? "No similar sample business ships these routes."
+      : `${score.preferCount} of ${score.similarCount} similar businesses prefer ${score.name}.`;
+  const price = !score.comparable
+    ? ""
+    : score.gapKr > 0
+      ? `${formatKr(score.gapKr)} above what they pay.`
+      : "Pays no more than they do.";
+  return [model, prefer, price].filter(Boolean).join(" ");
 }
 
 function noteFor(row: OverRow): string {
