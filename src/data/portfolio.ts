@@ -340,6 +340,55 @@ export const customers: Customer[] = [
   },
 ];
 
+const SPEND_PACE = [
+  [0.19, 0.41, 0.62, 0.83, 1],
+  [0.24, 0.48, 0.69, 0.87, 1],
+  [0.16, 0.37, 0.59, 0.8, 1],
+] as const;
+
+const BUDGET_PACE = [0.2, 0.4, 0.6, 0.8, 1] as const;
+
+export type MonthTrackPoint = {
+  label: string;
+  spent: number;
+  budget: number;
+};
+
+export function currentMonthTrack(customer: Customer): {
+  spent: number;
+  budget: number;
+  points: MonthTrackPoint[];
+} {
+  const latest = latestFromLanes(customer);
+  const budget = Math.round(latest.benchmark / 1000) * 1000;
+  let paceIndex = 0;
+  for (const char of customer.id) paceIndex = (paceIndex + char.charCodeAt(0)) % SPEND_PACE.length;
+  const spendPace = SPEND_PACE[paceIndex];
+  const labels = ["Week 1", "Week 2", "Week 3", "Week 4", "Month end"];
+  const spent = paceTotals(latest.paid, spendPace);
+  const planned = paceTotals(budget, BUDGET_PACE);
+  return {
+    spent: latest.paid,
+    budget,
+    points: labels.map((label, index) => ({
+      label,
+      spent: spent[index],
+      budget: planned[index],
+    })),
+  };
+}
+
+function paceTotals(total: number, shares: readonly number[]): number[] {
+  const values = shares.map((share, index) =>
+    index === shares.length - 1 ? total : Math.round(total * share),
+  );
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index] < values[index - 1]) values[index] = values[index - 1];
+  }
+  values[values.length - 1] = total;
+  return values;
+}
+
 export function latestFromLanes(customer: Customer): {
   paid: number;
   benchmark: number;

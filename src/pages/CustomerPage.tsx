@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { withBillSpend } from "../bills/spend.ts";
+import { useBills } from "../bills.tsx";
+import { useSession } from "../session.tsx";
+import { AccountQuestions } from "../components/AccountQuestions.tsx";
 import { Figures } from "../components/Figures.tsx";
+import { InvoiceCheck } from "../components/InvoiceCheck.tsx";
+import { MonthBudgetChart } from "../components/MonthBudgetChart.tsx";
 import { TrendChart } from "../components/TrendChart.tsx";
 import {
   CAUSES,
   LATEST_MONTH,
   MONTHS,
   causeLabel,
+  currentMonthTrack,
   customers,
   latestFromLanes,
   savingsByCause,
@@ -19,6 +26,7 @@ type Filter = "all" | "clean" | CauseId;
 
 export function CustomerPage() {
   const { customerId } = useParams();
+  const { session } = useSession();
   const customer = customers.find((item) => item.id === customerId);
   if (!customer) {
     return (
@@ -28,12 +36,32 @@ export function CustomerPage() {
       />
     );
   }
+  if (!session) {
+    return (
+      <NotFound
+        title="Sign in to open this account"
+        body={`${customer.name} is a sample company. Use Log in in the upper right and choose that account, or sign in as a Fairlane admin. Figures stay hidden until you do.`}
+      />
+    );
+  }
+  if (session.role === "customer" && session.customerId !== customer.id) {
+    return (
+      <NotFound
+        title="This account is not yours"
+        body="A company sign-in shows only that company's savings. Sign in as a Fairlane admin to open every account."
+      />
+    );
+  }
   return <CustomerDetail key={customer.id} customer={customer} />;
 }
 
 function CustomerDetail({ customer }: { customer: Customer }) {
+  const { session } = useSession();
   const [filter, setFilter] = useState<Filter>("all");
   const latest = latestFromLanes(customer);
+  const { total: billTotal } = useBills(customer.id);
+  const monthTrack = withBillSpend(currentMonthTrack(customer), billTotal);
+  const againstBudget = monthTrack.spent - monthTrack.budget;
   const causes = savingsByCause(customer);
   const maxCause = Math.max(...causes.map((cause) => cause.amount));
   const hasClean = customer.lanes.some((lane) => lane.causeId === null);
@@ -59,23 +87,75 @@ function CustomerDetail({ customer }: { customer: Customer }) {
   );
 
   return (
-    <div className="page">
-      <p className="back">
-        <Link className="text-link" to="/">
-          Portfolio
-        </Link>
-      </p>
+    <div className="page" id="overview">
       <h1>{customer.name}</h1>
       <p className="meta">
         {customer.industry} · {customer.place}
       </p>
+      {session?.role === "admin" ? (
+        <p className="back">
+          <Link className="text-link" to="/">
+            All accounts
+          </Link>
+        </p>
+      ) : null}
       <p className="lede">
-        {customer.description} Every figure on this screen is Fairlane sample data.
+        {customer.description}{" "}
+        {billTotal > 0
+          ? `Sample figures, plus ${formatKr(billTotal)} from bills on this account.`
+          : "Every figure on this screen is Fairlane sample data."}
       </p>
+      <AccountQuestions customer={customer} />
+      <section className="block" id="budget">
+        <h2>This month against the budget</h2>
+        <p className="section-intro">
+          {LATEST_MONTH}. The solid line is freight spend as the month goes on
+          {billTotal > 0 ? ", with bills you added included at month end" : ""}. The dashed line is
+          the budget projected for the full month. Spend finishes at {formatKr(monthTrack.spent)}.
+          The budget is {formatKr(monthTrack.budget)}.{" "}
+          {againstBudget === 0
+            ? "Spend matches that budget."
+            : againstBudget > 0
+              ? `Spend is ${formatKr(againstBudget)} over that budget.`
+              : `Spend is ${formatKr(Math.abs(againstBudget))} under that budget.`}
+        </p>
+        <MonthBudgetChart points={monthTrack.points} monthLabel={LATEST_MONTH} />
+        <div className="table-wrap">
+          <table className="months">
+            <caption className="sr-only">
+              Fairlane sample spend and budget for {customer.name} in {LATEST_MONTH}
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Through</th>
+                <th scope="col" className="num">
+                  Spend
+                </th>
+                <th scope="col" className="num">
+                  Budget
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthTrack.points.map((point) => (
+                <tr key={point.label} className={point.label === "Month end" ? "is-latest" : undefined}>
+                  <th scope="row">{point.label}</th>
+                  <td className="num">{formatKr(point.spent)}</td>
+                  <td className="num">{formatKr(point.budget)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
       <Figures
         kicker={`${LATEST_MONTH} · latest month`}
         items={[
-          { label: "Paid", value: formatKr(latest.paid), hint: "Sample invoices" },
+          {
+            label: "Paid",
+            value: formatKr(latest.paid + billTotal),
+            hint: billTotal > 0 ? `Sample invoices plus ${formatKr(billTotal)} from bills` : "Sample invoices",
+          },
           {
             label: "Benchmark",
             value: formatKr(latest.benchmark),
@@ -84,16 +164,19 @@ function CustomerDetail({ customer }: { customer: Customer }) {
           {
             label: "Addressable savings",
             value: formatKr(latest.savings),
-            hint: `${formatPercent(latest.savings / latest.paid)} of this month's paid freight`,
+            hint: `${formatPercent(latest.savings / latest.paid)} of the sample invoices`,
             emphasis: true,
           },
         ]}
       />
 
-      <section className="block">
+      <InvoiceCheck customer={customer} />
+
+      <section className="block" id="trend">
         <h2>Twelve-month trend</h2>
         <p className="section-intro">
-          {rangeLabel}. The shaded gap is the addressable savings in each month.
+          {rangeLabel}. The shaded gap is the sample addressable savings in each month.
+          {billTotal > 0 ? ` Paid in ${LATEST_MONTH} includes ${formatKr(billTotal)} from bills.` : ""}
         </p>
         <TrendChart
           labels={MONTHS.map((month) => month.short)}
@@ -103,8 +186,9 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         <ul className="month-cards">
           {customer.months.map((month, index) => {
             const label = MONTHS[index];
-            const savings = month.paid - month.benchmark;
             const isLatest = index === customer.months.length - 1;
+            const paid = isLatest ? month.paid + billTotal : month.paid;
+            const savings = month.paid - month.benchmark;
             return (
               <li key={label.id} className={isLatest ? "card is-latest" : "card"}>
                 <span className="card-title">
@@ -114,7 +198,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
                 <span className="card-stats">
                   <span>
                     <span className="card-label">Paid</span>
-                    {formatKr(month.paid)}
+                    {formatKr(paid)}
                   </span>
                   <span>
                     <span className="card-label">Benchmark</span>
@@ -150,16 +234,17 @@ function CustomerDetail({ customer }: { customer: Customer }) {
             </thead>
             <tbody>
               {customer.months.map((month, index) => {
-                const savings = month.paid - month.benchmark;
                 const label = MONTHS[index];
                 const isLatest = index === customer.months.length - 1;
+                const paid = isLatest ? month.paid + billTotal : month.paid;
+                const savings = month.paid - month.benchmark;
                 return (
                   <tr key={label.id} className={isLatest ? "is-latest" : undefined}>
                     <th scope="row">
                       {label.label}
                       {isLatest ? <span className="latest-tag">Latest</span> : null}
                     </th>
-                    <td className="num">{formatKr(month.paid)}</td>
+                    <td className="num">{formatKr(paid)}</td>
                     <td className="num">{formatKr(month.benchmark)}</td>
                     <td className="num">{formatKr(savings)}</td>
                   </tr>
@@ -170,7 +255,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         </div>
       </section>
 
-      <section className="block">
+      <section className="block" id="savings">
         <h2>Savings by cause</h2>
         <p className="section-intro">
           Where the {LATEST_MONTH} gap comes from, in words a buyer can check.
@@ -192,7 +277,7 @@ function CustomerDetail({ customer }: { customer: Customer }) {
         </ol>
       </section>
 
-      <section className="block">
+      <section className="block" id="lanes">
         <h2>Lanes and carriers</h2>
         <p className="section-intro">
           {filter === "all"
