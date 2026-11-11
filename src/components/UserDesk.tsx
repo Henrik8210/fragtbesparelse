@@ -16,7 +16,7 @@ export function UserDesk({
   customer: Customer | null;
   role: "admin" | "customer";
 }) {
-  const { account, admins, addAccountUser, addAdmin, removeAccountUser, removeAdmin } = usePeople();
+  const { account, admins, addAccountUser, addAdmin, removeAccountUser, removeAdmin, setPassword } = usePeople();
   const { t } = useLanguage();
   const [mode, setMode] = useState<Mode>("closed");
   const [error, setError] = useState("");
@@ -39,14 +39,19 @@ export function UserDesk({
     const data = new FormData(event.currentTarget);
     const name = String(data.get("name") ?? "");
     const username = String(data.get("username") ?? "");
-    const password = String(data.get("password") ?? "");
     const seat = String(data.get("role") ?? "");
     const customerId = isAdmin ? String(data.get("customerId") ?? "") : (customer?.id ?? "");
     if (!isAccountRole(seat)) {
       setError(t("users.needRole"));
       return;
     }
-    const problem = await addAccountUser({ name, username, password, role: seat, customerId });
+    const problem = await addAccountUser({
+      name,
+      username,
+      password: isAdmin ? String(data.get("password") ?? "") : undefined,
+      role: seat,
+      customerId,
+    });
     if (problem) {
       setError(problemText(problem, t));
       return;
@@ -145,10 +150,14 @@ export function UserDesk({
                 <span>{t("users.username")}</span>
                 <input name="username" type="text" maxLength={40} required autoComplete="off" />
               </label>
-              <label className="bill-field">
-                <span>{t("users.password")}</span>
-                <input name="password" type="text" maxLength={80} required autoComplete="new-password" />
-              </label>
+              {isAdmin ? (
+                <label className="bill-field">
+                  <span>{t("users.password")}</span>
+                  <input name="password" type="password" maxLength={80} required autoComplete="new-password" />
+                </label>
+              ) : (
+                <p className="hint">{t("users.adminSetsPassword")}</p>
+              )}
               <label className="bill-field">
                 <span>{t("common.role")}</span>
                 <select name="role" defaultValue="Operations">
@@ -183,7 +192,7 @@ export function UserDesk({
               </label>
               <label className="bill-field">
                 <span>{t("users.password")}</span>
-                <input name="password" type="text" maxLength={80} required autoComplete="new-password" />
+                <input name="password" type="password" maxLength={80} required autoComplete="new-password" />
               </label>
               <p className="hint">{t("users.adminHint")}</p>
               <div className="bill-actions">
@@ -213,11 +222,15 @@ export function UserDesk({
                     <span className="seat-access"> · {roleAccess(person.role, t)}</span>
                   </span>
                 </span>
-                {person.sample ? null : (
-                  <button type="button" className="bill-remove" onClick={() => removeAccountUser(person.id)}>
-                    {t("common.remove")}
-                  </button>
-                )}
+                <span className="seat-actions">
+                  {isAdmin && !person.hasPassword ? <SetPassword personId={person.id} onSet={setPassword} /> : null}
+                  {!person.hasPassword ? <span className="seat-access">{t("users.noPassword")}</span> : null}
+                  {person.sample ? null : (
+                    <button type="button" className="bill-remove" onClick={() => removeAccountUser(person.id)}>
+                      {t("common.remove")}
+                    </button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
@@ -234,11 +247,15 @@ export function UserDesk({
                   <span className="seat-role">{person.name}</span>
                   <span className="seat-person-role">{t("users.adminAccess")}</span>
                 </span>
-                {person.sample ? null : (
-                  <button type="button" className="bill-remove" onClick={() => removeAdmin(person.id)}>
-                    {t("common.remove")}
-                  </button>
-                )}
+                <span className="seat-actions">
+                  {isAdmin && !person.hasPassword ? <SetPassword personId={person.id} onSet={setPassword} /> : null}
+                  {!person.hasPassword ? <span className="seat-access">{t("users.noPassword")}</span> : null}
+                  {person.sample ? null : (
+                    <button type="button" className="bill-remove" onClick={() => removeAdmin(person.id)}>
+                      {t("common.remove")}
+                    </button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
@@ -259,6 +276,42 @@ export function UserDesk({
         </section>
       ) : null}
     </>
+  );
+}
+
+function SetPassword({
+  personId,
+  onSet,
+}: {
+  personId: string;
+  onSet: (id: string, password: string) => Promise<"name" | "customer" | "username" | "password" | "taken" | null>;
+}) {
+  const { t } = useLanguage();
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const password = String(new FormData(form).get("password") ?? "");
+    const problem = await onSet(personId, password);
+    if (problem) {
+      setError(problemText(problem, t));
+      return;
+    }
+    form.reset();
+  }
+
+  return (
+    <form className="bill-form" onSubmit={(event) => void submit(event)}>
+      <label className="bill-field">
+        <span>{t("users.setPassword")}</span>
+        <input name="password" type="password" maxLength={80} required autoComplete="new-password" />
+      </label>
+      <button type="submit" className="bill-choice">
+        {t("users.setPassword")}
+      </button>
+      {error ? <p className="bill-errors">{error}</p> : null}
+    </form>
   );
 }
 

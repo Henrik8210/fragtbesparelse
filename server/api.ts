@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
-import { SAMPLE_PASSWORD, checkPassword, hashPassword, sql } from "./db.ts";
+import { checkPassword, hashPassword, sql } from "./db.ts";
 
 const SEATS = ["Owner", "Billing", "Operations"] as const;
 
@@ -12,7 +12,7 @@ type UserRow = {
   name: string;
   role: "admin" | "customer";
   company_id: string | null;
-  password_hash: string;
+  password_hash: string | null;
   lang: string;
   sample: number;
   seat: string | null;
@@ -27,6 +27,7 @@ export type PublicUser = {
   lang: "da" | "en";
   sample: boolean;
   seat: string | null;
+  hasPassword: boolean;
 };
 
 function publish(row: UserRow): PublicUser {
@@ -39,6 +40,7 @@ function publish(row: UserRow): PublicUser {
     lang: row.lang === "en" ? "en" : "da",
     sample: Number(row.sample) === 1,
     seat: row.seat,
+    hasPassword: Boolean(row.password_hash),
   };
 }
 
@@ -110,19 +112,32 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   const path = url.pathname.replace(/\/$/, "") || "/";
   const method = req.method ?? "GET";
   try {
-    if (method === "GET" && path === "/api/sample-sign-in") {
-      const rows = await sql<Pick<UserRow, "username" | "name" | "role" | "company_id">>(
-        `select username, name, role, company_id from users where sample = 1 order by role desc, username`,
+    if (method === "GET" && path === "/api/sign-in-state") {
+      const rows = await sql<{ ready: number }>(
+        "select count(*)::int as ready from users where role = 'admin' and password_hash is not null",
       );
-      send(res, 200, {
-        password: SAMPLE_PASSWORD,
-        users: rows.map((row) => ({
-          username: row.username,
-          name: row.name,
-          role: row.role,
-          company: customers.find((company) => company.id === row.company_id)?.name ?? null,
-        })),
-      });
+      send(res, 200, { needsAdminPassword: Number(rows[0]?.ready ?? 0) === 0 });
+      return;
+    }
+
+    if (method === "POST" && path === "/api/admin-password") {
+      const body = (await readJson(req)) as { password?: unknown };
+      const password = typeof body.password === "string" ? body.password : "";
+      if (password.length < 4 || password.length > 80) {
+        send(res, 400, { error: "password" });
+        return;
+      }
+      const rows = await sql<{ id: string }>(
+        `update users set password_hash = $1
+         where role = 'admin' and username = 'admin' and password_hash is null
+         returning id`,
+        [await hashPassword(password)],
+      );
+      if (rows.length === 0) {
+        send(res, 409, { error: "taken" });
+        return;
+      }
+      send(res, 200, { ok: true });
       return;
     }
 
@@ -132,7 +147,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const password = typeof body.password === "string" ? body.password : "";
       const rows = await sql<UserRow>("select * from users where username = $1", [username]);
       const user = rows[0];
-      if (!user || !(await checkPassword(password, user.password_hash))) {
+      if (!user?.password_hash || !(await checkPassword(password, user.password_hash))) {
         send(res, 401, { error: "login" });
         return;
       }
@@ -245,10 +260,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 400, { error: "username" });
         return;
       }
-      if (password.length < 4 || password.length > 80) {
+      const settingPassword = user.role === "admin";
+      if (settingPassword && (password.length < 4 || password.length > 80)) {
         send(res, 400, { error: "password" });
         return;
       }
+      const passwordHash = settingPassword ? await hashPassword(password) : null;
       if (kind === "admin") {
         if (user.role !== "admin") {
           send(res, 403, { error: "forbidden" });
@@ -268,7 +285,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const created = await sql<UserRow>(
           `insert into users (id, username, name, role, company_id, password_hash, seat)
            values ($1, $2, $3, 'customer', $4, $5, $6) returning *`,
-          [crypto.randomUUID(), username, name, target, await hashPassword(password), seat],
+          [crypto.randomUUID(), username, name, target, passwordHash, seat],
         );
         send(res, 201, { user: publish(created[0]) });
         return;
@@ -281,9 +298,34 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const created = await sql<UserRow>(
         `insert into users (id, username, name, role, password_hash)
          values ($1, $2, $3, 'admin', $4) returning *`,
-        [crypto.randomUUID(), username, name, await hashPassword(password)],
+        [crypto.randomUUID(), username, name, passwordHash],
       );
       send(res, 201, { user: publish(created[0]) });
+      return;
+    }
+
+    const setPassword = path.match(/^\/api\/users\/([^/]+)\/password$/);
+    if (setPassword && method === "POST") {
+      if (user.role !== "admin") {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      const body = (await readJson(req)) as { password?: unknown };
+      const password = typeof body.password === "string" ? body.password : "";
+      if (password.length < 4 || password.length > 80) {
+        send(res, 400, { error: "password" });
+        return;
+      }
+      const rows = await sql<UserRow>(
+        "update users set password_hash = $1 where id = $2 returning *",
+        [await hashPassword(password), decodeURIComponent(setPassword[1])],
+      );
+      const target = rows[0];
+      if (!target) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      send(res, 200, { user: publish(target) });
       return;
     }
 

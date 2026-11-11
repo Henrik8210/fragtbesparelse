@@ -1225,6 +1225,13 @@ tfoot td {
   border-top: 1px solid var(--line);
 }
 
+.seat-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.45rem;
+}
+
 .seat-role {
   font-weight: 600;
 }

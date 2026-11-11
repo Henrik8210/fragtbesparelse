@@ -1,20 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api.ts";
+import { ApiError, api } from "../api.ts";
 import { useLanguage } from "../language.tsx";
 import { useSession } from "../session.tsx";
-
-type SampleUser = { username: string; name: string; role: "admin" | "customer"; company: string | null };
 
 export function LoginPage() {
   const { t } = useLanguage();
   const { signIn, session, ready } = useSession();
   const navigate = useNavigate();
-  const [users, setUsers] = useState<SampleUser[]>([]);
+  const [mode, setMode] = useState<"loading" | "setup" | "sign-in">("loading");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
-  const [samplePassword, setSamplePassword] = useState("");
   const [failed, setFailed] = useState(false);
+  const [short, setShort] = useState(false);
 
   useEffect(() => {
     document.title = `${t("login.title")} · Fragtblik`;
@@ -26,12 +24,24 @@ export function LoginPage() {
   }, [navigate, ready, session]);
 
   useEffect(() => {
-    api<{ password: string; users: SampleUser[] }>("/api/sample-sign-in").then((result) => {
-      setUsers(result.users);
-      setSamplePassword(result.password);
-      setPassword(result.password);
+    api<{ needsAdminPassword: boolean }>("/api/sign-in-state").then((result) => {
+      setMode(result.needsAdminPassword ? "setup" : "sign-in");
     });
   }, []);
+
+  async function choosePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFailed(false);
+    setShort(false);
+    try {
+      await api("/api/admin-password", { method: "POST", body: JSON.stringify({ password }) });
+      setPassword("");
+      setMode("sign-in");
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "password") setShort(true);
+      else setFailed(true);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -42,52 +52,56 @@ export function LoginPage() {
   return (
     <div className="page">
       <h1>{t("login.title")}</h1>
-      <p className="lede">{t("login.lead")}</p>
-      <form className="bill-form" onSubmit={(event) => void submit(event)}>
-        <label className="bill-field">
-          <span>{t("login.username")}</span>
-          <input name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
-        </label>
-        <label className="bill-field">
-          <span>{t("login.password")}</span>
-          <input
-            name="password"
-            type="text"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            autoComplete="current-password"
-            required
-          />
-        </label>
-        <button type="submit" className="bill-choice">
-          {t("login.submit")}
-        </button>
-        {failed ? <p className="bill-errors">{t("login.failed")}</p> : null}
-      </form>
-      <section className="block">
-        <h2>{t("login.sampleTitle")}</h2>
-        <p className="section-intro">{t("login.samplePassword", { password: samplePassword })}</p>
-        <ul className="seat-list">
-          {users.map((user) => (
-            <li key={user.username}>
-              <button
-                type="button"
-                className="text-link"
-                onClick={() => {
-                  setUsername(user.username);
-                  setPassword(samplePassword);
-                }}
-              >
-                <span className="seat-role">{user.name}</span>
-                <span className="seat-person-role">
-                  {user.username}
-                  {user.company ? ` · ${user.company}` : ` · ${t("login.admin")}`}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {mode === "setup" ? (
+        <>
+          <p className="lede">{t("login.setupLead")}</p>
+          <p className="meta">{t("login.setupUser")}</p>
+          <form className="bill-form" onSubmit={(event) => void choosePassword(event)}>
+            <label className="bill-field">
+              <span>{t("login.password")}</span>
+              <input
+                name="password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="new-password"
+                required
+              />
+            </label>
+            <button type="submit" className="bill-choice">
+              {t("login.setupSubmit")}
+            </button>
+            {short ? <p className="bill-errors">{t("login.setupShort")}</p> : null}
+            {failed ? <p className="bill-errors">{t("login.setupFailed")}</p> : null}
+          </form>
+        </>
+      ) : null}
+      {mode === "sign-in" ? (
+        <>
+          <p className="lede">{t("login.lead")}</p>
+          <form className="bill-form" onSubmit={(event) => void submit(event)}>
+            <label className="bill-field">
+              <span>{t("login.username")}</span>
+              <input name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
+            </label>
+            <label className="bill-field">
+              <span>{t("login.password")}</span>
+              <input
+                name="password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            <button type="submit" className="bill-choice">
+              {t("login.submit")}
+            </button>
+            {failed ? <p className="bill-errors">{t("login.failed")}</p> : null}
+          </form>
+        </>
+      ) : null}
     </div>
   );
 }

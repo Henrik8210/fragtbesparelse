@@ -11,6 +11,7 @@ export type Session = {
   lang: Lang;
   sample: boolean;
   seat: string | null;
+  hasPassword: boolean;
 };
 
 type SessionContextValue = {

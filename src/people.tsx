@@ -13,6 +13,7 @@ export type AccountPerson = {
   role: AccountRole;
   customerId: string;
   sample: boolean;
+  hasPassword: boolean;
 };
 
 export type AdminPerson = {
@@ -20,6 +21,7 @@ export type AdminPerson = {
   name: string;
   username: string;
   sample: boolean;
+  hasPassword: boolean;
 };
 
 type PeopleError = "name" | "customer" | "username" | "password" | "taken" | null;
@@ -27,8 +29,9 @@ type PeopleError = "name" | "customer" | "username" | "password" | "taken" | nul
 type PeopleContextValue = {
   account: AccountPerson[];
   admins: AdminPerson[];
-  addAccountUser: (draft: { name: string; username: string; password: string; role: AccountRole; customerId: string }) => Promise<PeopleError>;
+  addAccountUser: (draft: { name: string; username: string; password?: string; role: AccountRole; customerId: string }) => Promise<PeopleError>;
   addAdmin: (draft: { name: string; username: string; password: string }) => Promise<PeopleError>;
+  setPassword: (id: string, password: string) => Promise<PeopleError>;
   removeAccountUser: (id: string) => void;
   removeAdmin: (id: string) => void;
 };
@@ -41,7 +44,7 @@ function isSeat(value: string | null): value is AccountRole {
 
 function fromSession(user: Session): { account?: AccountPerson; admin?: AdminPerson } {
   if (user.role === "admin") {
-    return { admin: { id: user.id, name: user.name, username: user.username, sample: user.sample } };
+    return { admin: { id: user.id, name: user.name, username: user.username, sample: user.sample, hasPassword: user.hasPassword } };
   }
   if (!user.customerId || !isSeat(user.seat)) return {};
   return {
@@ -52,6 +55,7 @@ function fromSession(user: Session): { account?: AccountPerson; admin?: AdminPer
       role: user.seat,
       customerId: user.customerId,
       sample: user.sample,
+      hasPassword: user.hasPassword,
     },
   };
 }
@@ -95,7 +99,7 @@ export function PeopleProvider({ children }: { children: ReactNode }) {
   async function addAccountUser(draft: {
     name: string;
     username: string;
-    password: string;
+    password?: string;
     role: AccountRole;
     customerId: string;
   }): Promise<PeopleError> {
@@ -132,11 +136,34 @@ export function PeopleProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function setPassword(id: string, password: string): Promise<PeopleError> {
+    try {
+      const result = await api<{ user: Session }>(`/api/users/${id}/password`, {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      const mapped = fromSession(result.user);
+      if (mapped.account) {
+        const next = mapped.account;
+        setAccount((current) => current.map((person) => (person.id === id ? next : person)));
+      }
+      if (mapped.admin) {
+        const next = mapped.admin;
+        setAdmins((current) => current.map((person) => (person.id === id ? next : person)));
+      }
+      return null;
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "password") return "password";
+      return "name";
+    }
+  }
+
   const value: PeopleContextValue = {
     account,
     admins,
     addAccountUser,
     addAdmin,
+    setPassword,
     removeAccountUser(id) {
       void api(`/api/users/${id}`, { method: "DELETE" }).then(() => {
         setAccount((current) => current.filter((person) => person.id !== id));

@@ -9,8 +9,6 @@ import { customers, latestFromLanes } from "../src/data/portfolio.ts";
 const scrypt = promisify(scryptCb);
 const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
 
-export const SAMPLE_PASSWORD = "kigmed";
-
 let pool: pg.Pool | undefined;
 let local: Promise<PGlite> | undefined;
 let seeded: Promise<void> | undefined;
@@ -56,7 +54,8 @@ export async function hashPassword(password: string): Promise<string> {
   return `scrypt$${salt}$${hash.toString("hex")}`;
 }
 
-export async function checkPassword(password: string, stored: string): Promise<boolean> {
+export async function checkPassword(password: string, stored: string | null): Promise<boolean> {
+  if (!stored) return false;
   const [kind, salt, hex] = stored.split("$");
   if (kind !== "scrypt" || !salt || !hex) return false;
   const hash = (await scrypt(password, salt, 32)) as Buffer;
@@ -70,7 +69,6 @@ async function ensureSeed(): Promise<void> {
     ? ((await poolQuery("select id from users limit 1")) as { id: string }[])
     : (await (await localDb()).query<{ id: string }>("select id from users limit 1")).rows;
   if (existing.length > 0) return;
-  const passwordHash = await hashPassword(SAMPLE_PASSWORD);
   const insert = databaseUrl ? poolQuery : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
 
   for (const company of customers) {
@@ -92,11 +90,14 @@ async function ensureSeed(): Promise<void> {
     { username: "skive", name: "Skive Plate Works", role: "customer", companyId: "skive-plate-works", seat: "Owner" },
     { username: "esbjerg", name: "Esbjerg Rig Supply", role: "customer", companyId: "esbjerg-rig-supply", seat: "Owner" },
   ];
+  const ids = new Map<string, string>();
   for (const person of people) {
+    const id = crypto.randomUUID();
+    ids.set(person.username, id);
     await insert(
-      `insert into users (id, username, name, role, company_id, password_hash, lang, sample, seat)
-       values ($1, $2, $3, $4, $5, $6, 'da', 1, $7)`,
-      [crypto.randomUUID(), person.username, person.name, person.role, person.companyId, passwordHash, person.seat],
+      `insert into users (id, username, name, role, company_id, lang, sample, seat)
+       values ($1, $2, $3, $4, $5, 'da', 1, $6)`,
+      [id, person.username, person.name, person.role, person.companyId, person.seat],
     );
   }
 
@@ -125,6 +126,27 @@ async function ensureSeed(): Promise<void> {
      values ($1, $2, $3, $4)`,
     [crypto.randomUUID(), nordhavn.id, "Oktober 2026 · aftaletjek", JSON.stringify(summary)],
   );
+
+  const packId = crypto.randomUUID();
+  await insert(
+    `insert into tender_packs (id, company_id, title, created_by)
+     values ($1, $2, $3, $4)`,
+    [packId, nordhavn.id, "Udbud · Nordhavn Living", ids.get("nordhavn") ?? null],
+  );
+  for (const lane of nordhavn.lanes) {
+    await insert(
+      `insert into tender_lines (id, pack_id, origin, destination, service, carrier, shipments)
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [crypto.randomUUID(), packId, lane.origin, lane.destination, lane.service, lane.carrier, lane.shipments],
+    );
+  }
+  const colleague = ids.get("nordhavn-kollega");
+  if (colleague) {
+    await insert(
+      "insert into tender_comments (id, pack_id, user_id, body) values ($1, $2, $3, $4)",
+      [crypto.randomUUID(), packId, colleague, "Kan vi udelade ø-levering?"],
+    );
+  }
 }
 
 async function poolQuery(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
