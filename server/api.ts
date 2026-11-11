@@ -4,6 +4,7 @@ import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, hashPassword, sql } from "./db.ts";
+import { registerOwnerUser } from "./register.ts";
 
 const SEATS = ["Owner", "Billing", "Operations"] as const;
 
@@ -187,6 +188,36 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       await sql("insert into sessions (token, user_id) values ($1, $2)", [token, user.id]);
       setSessionCookie(res, token);
       send(res, 200, { user: publish(user) });
+      return;
+    }
+
+    if (method === "POST" && path === "/api/register") {
+      const seat = await actor(req);
+      if (seat?.role === "customer" || !(await requestMayClaimAdmin(req))) {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      const body = (await readJson(req)) as { username?: unknown; password?: unknown };
+      const username = text(body.username, 40).toLowerCase();
+      const password = typeof body.password === "string" ? body.password : "";
+      const created = await registerOwnerUser(username, password);
+      if (created === "forbidden") {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      if (created === "username") {
+        send(res, 400, { error: "username" });
+        return;
+      }
+      if (created === "password") {
+        send(res, 400, { error: "password" });
+        return;
+      }
+      if (created === "taken") {
+        send(res, 409, { error: "taken" });
+        return;
+      }
+      send(res, 201, { ok: true });
       return;
     }
 

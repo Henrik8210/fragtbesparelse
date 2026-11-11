@@ -6,7 +6,7 @@ import { useSession } from "../session.tsx";
 export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose: () => void }) {
   const { t } = useLanguage();
   const { signIn } = useSession();
-  const [mode, setMode] = useState<"loading" | "setup" | "owner" | "sign-in">("loading");
+  const [mode, setMode] = useState<"loading" | "setup" | "owner" | "sign-in" | "create">("loading");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [failed, setFailed] = useState(false);
@@ -55,6 +55,30 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
     }
   }
 
+  async function createUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFailed(false);
+    setShort(false);
+    const chosenName = username;
+    const chosenPassword = password;
+    try {
+      await api("/api/register", {
+        method: "POST",
+        body: JSON.stringify({ username: chosenName, password: chosenPassword }),
+      });
+      setPassword("");
+      const ok = await signIn(chosenName, chosenPassword);
+      if (!ok) {
+        setUsername(chosenName);
+        setMode("sign-in");
+        setFailed(true);
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "password") setShort(true);
+      else setFailed(true);
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const ok = await signIn(username, password);
@@ -69,7 +93,23 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
           ×
         </button>
       </div>
-      {mode === "owner" ? <p className="login-note">{t("login.setupDenied")}</p> : null}
+      {mode === "owner" ? (
+        <>
+          <p className="login-note">{t("login.setupDenied")}</p>
+          <button
+            type="button"
+            className="text-link login-create"
+            onClick={() => {
+              setFailed(false);
+              setShort(false);
+              setPassword("");
+              setMode("create");
+            }}
+          >
+            {t("login.create")}
+          </button>
+        </>
+      ) : null}
       {mode === "setup" ? (
         <>
           <p className="login-note">{t("login.setupLead")}</p>
@@ -125,6 +165,64 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
             </button>
             {failed ? <p className="bill-errors">{t("login.failed")}</p> : null}
           </form>
+          <button
+            type="button"
+            className="text-link login-create"
+            onClick={() => {
+              setFailed(false);
+              setShort(false);
+              setPassword("");
+              setMode("create");
+            }}
+          >
+            {t("login.create")}
+          </button>
+        </>
+      ) : null}
+      {mode === "create" ? (
+        <>
+          <p className="login-note">{t("login.createLead")}</p>
+          <form id="fragtblik-login" className="bill-form" onSubmit={(event) => void createUser(event)}>
+            <label className="bill-field">
+              <span>{t("login.username")}</span>
+              <input
+                name="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                autoComplete="username"
+                autoFocus
+                required
+              />
+            </label>
+            <label className="bill-field">
+              <span>{t("login.password")}</span>
+              <input
+                name="password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="new-password"
+                required
+              />
+            </label>
+            <button type="submit" className="bill-choice">
+              {t("login.create")}
+            </button>
+            {short ? <p className="bill-errors">{t("login.setupShort")}</p> : null}
+            {failed ? <p className="bill-errors">{t("login.createFailed")}</p> : null}
+          </form>
+          <button
+            type="button"
+            className="text-link login-create"
+            onClick={() => {
+              setFailed(false);
+              setShort(false);
+              setPassword("");
+              setMode("sign-in");
+            }}
+          >
+            {t("common.back")}
+          </button>
         </>
       ) : null}
     </div>
