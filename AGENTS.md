@@ -1,4 +1,4 @@
-# Fairlane for the next agent
+# Fragtblik for the next agent
 
 Read this before changing the app. The product is a Vite + React + TypeScript single-page app. Sample freight figures live in source. Anything a person adds stays in the browser.
 
@@ -88,7 +88,9 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 
 ## Language
 
-Danish is the default, including when the browser is set to English. English is a setting on the Settings page. The choice is `localStorage` key `fairlane-language` (`da` or `en`). Screen copy lives in `src/i18n/messages.ts`. Sample descriptions, lane services, and place names live in `src/i18n/content.ts` and stay English in the data files. Add both languages when a screen gains a sentence. Company names stay as written. Kroner keep Danish grouping in both languages.
+Danish is the default. English is a setting on Settings and is stored on the signed-in user. Screen copy lives in `src/i18n/messages.ts`. Sample descriptions, lane services, and place names live in `src/i18n/content.ts` and stay English in the data files. Add both languages when a screen gains a sentence. Company names stay as written. Kroner keep Danish grouping in both languages.
+
+Sign-in is the app's own login. Sample usernames and the shared password are listed on the sign-in screen. Passwords are hashed. Companies, users, bills, invoice reviews, saved reports, and tender packs are in Postgres when `DATABASE_URL` is set, and in memory with PGlite when it is not. The sample companies, users, one bill, and one saved report load on an empty database. Do not print `DATABASE_URL`. ChatGPT sign-in and Supabase are not used.
 
 ## Bills
 

@@ -1439,6 +1439,7 @@ tfoot td {
   font-weight: 600;
 }
 
+.bill-field textarea,
 .bill-field input,
 .bill-field select {
   min-height: 2.5rem;
@@ -1649,4 +1650,13 @@ tfoot td {
     font-size: 0.88rem;
     font-weight: 600;
   }
+}
+
+.is-excluded {
+  opacity: 0.45;
+}
+
+.bill-field textarea {
+  min-height: 5rem;
+  resize: vertical;
 }

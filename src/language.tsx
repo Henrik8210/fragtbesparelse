@@ -1,34 +1,16 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { api } from "./api.ts";
 import { da, en, type MessageKey } from "./i18n/messages.ts";
 import { danishPhrase } from "./i18n/content.ts";
-
-const STORAGE_KEY = "fairlane-language";
 
 export type Lang = "da" | "en";
 
 const dictionaries = { da, en };
 
-function readLang(): Lang {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === "en" || stored === "da") return stored;
-  } catch {
-    // The default language still applies for this visit.
-  }
-  return "da";
-}
-
-function remember(lang: Lang) {
-  try {
-    localStorage.setItem(STORAGE_KEY, lang);
-  } catch {
-    // The choice still applies for this visit.
-  }
-}
-
 type LanguageValue = {
   lang: Lang;
   setLang: (lang: Lang) => void;
+  adoptLang: (lang: Lang) => void;
   t: (key: MessageKey, vars?: Record<string, string | number>) => string;
   phrase: (key: string, english: string) => string;
 };
@@ -36,12 +18,13 @@ type LanguageValue = {
 const LanguageContext = createContext<LanguageValue | null>(null);
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [lang, setLangState] = useState<Lang>(readLang);
+  const [lang, setLangState] = useState<Lang>("da");
+  const adoptLang = useCallback((next: Lang) => setLangState(next), []);
 
-  function setLang(next: Lang) {
+  const setLang = useCallback((next: Lang) => {
     setLangState(next);
-    remember(next);
-  }
+    void api("/api/me", { method: "PATCH", body: JSON.stringify({ lang: next }) }).catch(() => undefined);
+  }, []);
 
   const value = useMemo<LanguageValue>(() => {
     function t(key: MessageKey, vars?: Record<string, string | number>): string {
@@ -53,8 +36,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       if (lang === "en") return english;
       return danishPhrase(key) ?? english;
     }
-    return { lang, setLang, t, phrase };
-  }, [lang]);
+    return { lang, setLang, adoptLang, t, phrase };
+  }, [adoptLang, lang, setLang]);
 
   useEffect(() => {
     document.documentElement.lang = lang;

@@ -57,17 +57,18 @@ function Space({
   children: (customer: Customer | null, role: "admin" | "customer" | null) => ReactNode;
 }) {
   const { customerId } = useParams();
-  const { session } = useSession();
+  const { session, ready } = useSession();
   const { t } = useLanguage();
   const customer = customers.find((item) => item.id === customerId);
   const title =
     name === "billing" ? t("billing.title") : name === "bills" ? t("bills.title") : name === "users" ? t("users.title") : t("settings.title");
 
   useEffect(() => {
-    document.title = `${title} · Fairlane`;
+    document.title = `${title} · Fragtblik`;
   }, [title]);
 
-  if (session?.role === "customer" && !customerId) {
+  if (!ready) return null;
+  if (session?.role === "customer" && session.customerId && !customerId) {
     return <Navigate to={`/customers/${session.customerId}/${path ?? name}`} replace />;
   }
   if (customerId && !customer) {

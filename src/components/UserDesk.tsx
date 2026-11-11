@@ -34,30 +34,37 @@ export function UserDesk({
     setMode(isAdmin ? "choose" : "account");
   }
 
-  function addAccount(event: FormEvent<HTMLFormElement>) {
+  async function addAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const name = String(data.get("name") ?? "");
+    const username = String(data.get("username") ?? "");
+    const password = String(data.get("password") ?? "");
     const seat = String(data.get("role") ?? "");
     const customerId = isAdmin ? String(data.get("customerId") ?? "") : (customer?.id ?? "");
     if (!isAccountRole(seat)) {
       setError(t("users.needRole"));
       return;
     }
-    const problem = addAccountUser({ name, role: seat, customerId });
+    const problem = await addAccountUser({ name, username, password, role: seat, customerId });
     if (problem) {
-      setError(problem === "name" ? t("users.needName") : t("users.needCustomer"));
+      setError(problemText(problem, t));
       return;
     }
     setError("");
     setMode("closed");
   }
 
-  function addAdminUser(event: FormEvent<HTMLFormElement>) {
+  async function addAdminUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const problem = addAdmin(String(new FormData(event.currentTarget).get("name") ?? ""));
+    const data = new FormData(event.currentTarget);
+    const problem = await addAdmin({
+      name: String(data.get("name") ?? ""),
+      username: String(data.get("username") ?? ""),
+      password: String(data.get("password") ?? ""),
+    });
     if (problem) {
-      setError(t("users.needName"));
+      setError(problemText(problem, t));
       return;
     }
     setError("");
@@ -117,7 +124,7 @@ export function UserDesk({
             </div>
           ) : null}
           {mode === "account" ? (
-            <form className="bill-form" onSubmit={addAccount}>
+            <form className="bill-form" onSubmit={(event) => void addAccount(event)}>
               {isAdmin && !customer ? (
                 <label className="bill-field">
                   <span>{t("users.customerAccount")}</span>
@@ -133,6 +140,14 @@ export function UserDesk({
               <label className="bill-field">
                 <span>{t("common.name")}</span>
                 <input name="name" type="text" maxLength={80} required placeholder={t("common.name")} />
+              </label>
+              <label className="bill-field">
+                <span>{t("users.username")}</span>
+                <input name="username" type="text" maxLength={40} required autoComplete="off" />
+              </label>
+              <label className="bill-field">
+                <span>{t("users.password")}</span>
+                <input name="password" type="text" maxLength={80} required autoComplete="new-password" />
               </label>
               <label className="bill-field">
                 <span>{t("common.role")}</span>
@@ -157,10 +172,18 @@ export function UserDesk({
             </form>
           ) : null}
           {mode === "admin" ? (
-            <form className="bill-form" onSubmit={addAdminUser}>
+            <form className="bill-form" onSubmit={(event) => void addAdminUser(event)}>
               <label className="bill-field">
                 <span>{t("common.name")}</span>
                 <input name="name" type="text" maxLength={80} required placeholder={t("common.name")} />
+              </label>
+              <label className="bill-field">
+                <span>{t("users.username")}</span>
+                <input name="username" type="text" maxLength={40} required autoComplete="off" />
+              </label>
+              <label className="bill-field">
+                <span>{t("users.password")}</span>
+                <input name="password" type="text" maxLength={80} required autoComplete="new-password" />
               </label>
               <p className="hint">{t("users.adminHint")}</p>
               <div className="bill-actions">
@@ -186,13 +209,15 @@ export function UserDesk({
                 <span>
                   <span className="seat-role">{person.name}</span>
                   <span className="seat-person-role">
-                    {roleLabel(person.role, t)}
+                    {person.username} · {roleLabel(person.role, t)}
                     <span className="seat-access"> · {roleAccess(person.role, t)}</span>
                   </span>
                 </span>
-                <button type="button" className="bill-remove" onClick={() => removeAccountUser(person.id)}>
-                  {t("common.remove")}
-                </button>
+                {person.sample ? null : (
+                  <button type="button" className="bill-remove" onClick={() => removeAccountUser(person.id)}>
+                    {t("common.remove")}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -209,9 +234,11 @@ export function UserDesk({
                   <span className="seat-role">{person.name}</span>
                   <span className="seat-person-role">{t("users.adminAccess")}</span>
                 </span>
-                <button type="button" className="bill-remove" onClick={() => removeAdmin(person.id)}>
-                  {t("common.remove")}
-                </button>
+                {person.sample ? null : (
+                  <button type="button" className="bill-remove" onClick={() => removeAdmin(person.id)}>
+                    {t("common.remove")}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -233,6 +260,14 @@ export function UserDesk({
       ) : null}
     </>
   );
+}
+
+function problemText(problem: string, t: (key: MessageKey) => string): string {
+  if (problem === "customer") return t("users.needCustomer");
+  if (problem === "username") return t("users.needUsername");
+  if (problem === "password") return t("users.needPassword");
+  if (problem === "taken") return t("users.taken");
+  return t("users.needName");
 }
 
 function isAccountRole(value: string): value is AccountRole {

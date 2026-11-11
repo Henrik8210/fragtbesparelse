@@ -69,7 +69,7 @@ export function Sidebar() {
       <aside id="sidebar" className="sidebar">
         <div className="sidebar-head">
           <NavLink to={home} end className="brand sidebar-brand" aria-label={t("nav.home")} onClick={closeOnNarrow}>
-            <span className="brand-name">Fairlane</span>
+            <span className="brand-name">Fragtblik</span>
           </NavLink>
           <button
             type="button"
@@ -99,6 +99,34 @@ export function Sidebar() {
                 </span>
               </NavLink>
             </li>
+            {accountId ? (
+              <>
+                <li>
+                  <NavLink to={`${base}/check`} end className={linkClass} onClick={closeOnNarrow}>
+                    <span className="nav-copy">
+                      <span className="nav-label">{t("nav.check")}</span>
+                      <span className="nav-meta">{t("nav.checkMeta")}</span>
+                    </span>
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to={`${base}/history`} end className={linkClass} onClick={closeOnNarrow}>
+                    <span className="nav-copy">
+                      <span className="nav-label">{t("nav.history")}</span>
+                      <span className="nav-meta">{t("nav.historyMeta")}</span>
+                    </span>
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to={`${base}/tender`} end className={linkClass} onClick={closeOnNarrow}>
+                    <span className="nav-copy">
+                      <span className="nav-label">{t("nav.tender")}</span>
+                      <span className="nav-meta">{t("nav.tenderMeta")}</span>
+                    </span>
+                  </NavLink>
+                </li>
+              </>
+            ) : null}
             <li className="nav-group">
               <NavLink to={billingTo} end className={linkClass} onClick={closeOnNarrow}>
                 <span className="nav-glyph" aria-hidden="true">

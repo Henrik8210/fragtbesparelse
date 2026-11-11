@@ -7,7 +7,7 @@ export function NotFound({ title, body }: { title?: string; body?: string }) {
   const heading = title ?? t("notFound.title");
   const text = body ?? t("notFound.body");
   useEffect(() => {
-    document.title = `${heading} · Fairlane`;
+    document.title = `${heading} · Fragtblik`;
   }, [heading]);
 
   return (

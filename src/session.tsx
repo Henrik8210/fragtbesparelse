@@ -1,78 +1,72 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
-import { customers } from "./data/portfolio.ts";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { api } from "./api.ts";
+import { useLanguage, type Lang } from "./language.tsx";
 
-const STORAGE_KEY = "fairlane-session";
-
-function cleanName(value: string): string {
-  return stripControls(value).replace(/\s+/g, " ").trim().slice(0, 80);
-}
-
-function stripControls(value: string): string {
-  let cleaned = "";
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    cleaned += code < 32 || code === 127 ? " " : char;
-  }
-  return cleaned;
-}
-
-export type Session = { role: "admin"; name?: string } | { role: "customer"; customerId: string };
+export type Session = {
+  id: string;
+  username: string;
+  name: string;
+  role: "admin" | "customer";
+  customerId: string | null;
+  lang: Lang;
+  sample: boolean;
+  seat: string | null;
+};
 
 type SessionContextValue = {
+  ready: boolean;
   session: Session | null;
-  signIn: (session: Session) => void;
-  signOut: () => void;
+  signIn: (username: string, password: string) => Promise<boolean>;
+  signOut: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-function readSession(): Session | null {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || !("role" in parsed)) return null;
-    if (parsed.role === "admin") {
-      const name = "name" in parsed && typeof parsed.name === "string" ? cleanName(parsed.name) : "";
-      return name ? { role: "admin", name } : { role: "admin" };
-    }
-    if (
-      parsed.role === "customer" &&
-      "customerId" in parsed &&
-      typeof parsed.customerId === "string" &&
-      customers.some((customer) => customer.id === parsed.customerId)
-    ) {
-      return { role: "customer", customerId: parsed.customerId };
-    }
-  } catch {
-    // A blocked or unreadable store just means signed out.
-  }
-  return null;
-}
-
-function storeSession(session: Session | null) {
-  try {
-    if (!session) sessionStorage.removeItem(STORAGE_KEY);
-    else sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-  } catch {
-    // The sign-in still applies until the tab closes.
-  }
-}
-
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(readSession);
+  const { adoptLang } = useLanguage();
+  const [ready, setReady] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
 
-  function signIn(next: Session) {
-    storeSession(next);
-    setSession(next);
+  useEffect(() => {
+    let cancel = false;
+    api<{ user: Session | null }>("/api/me")
+      .then((result) => {
+        if (cancel || !result.user) return;
+        setSession(result.user);
+        adoptLang(result.user.lang);
+      })
+      .catch(() => {
+        if (!cancel) setSession(null);
+      })
+      .finally(() => {
+        if (!cancel) setReady(true);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [adoptLang]);
+
+  async function signIn(username: string, password: string): Promise<boolean> {
+    try {
+      const result = await api<{ user: Session }>("/api/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      setSession(result.user);
+      adoptLang(result.user.lang);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  function signOut() {
-    storeSession(null);
+  async function signOut() {
+    await api("/api/logout", { method: "POST" }).catch(() => undefined);
     setSession(null);
+    adoptLang("da");
   }
 
-  return <SessionContext.Provider value={{ session, signIn, signOut }}>{children}</SessionContext.Provider>;
+  return <SessionContext.Provider value={{ ready, session, signIn, signOut }}>{children}</SessionContext.Provider>;
 }
 
 export function useSession(): SessionContextValue {

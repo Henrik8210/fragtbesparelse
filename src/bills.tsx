@@ -1,14 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { api } from "./api.ts";
 import { knownCarrier } from "./data/carriers.ts";
-import { customers } from "./data/portfolio.ts";
+import { useSession } from "./session.tsx";
 
-const STORAGE_KEY = "fairlane-bills";
 const MAX_BILLS = 40;
 
 export type BillSource = "manual" | "file";
 
 export type Bill = {
   id: string;
+  companyId: string;
   label: string;
   amount: number;
   source: BillSource;
@@ -16,121 +17,58 @@ export type Bill = {
   carrier?: string;
 };
 
-type BillStore = Record<string, Bill[]>;
-
 type BillsContextValue = {
   billsFor: (customerId: string) => Bill[];
   totals: Record<string, number>;
-  addBill: (
-    customerId: string,
-    draft: { label: string; amount: number; source: BillSource; carrier: string },
-  ) => void;
+  addBill: (customerId: string, draft: { label: string; amount: number; source: BillSource; carrier: string }) => void;
   removeBill: (customerId: string, billId: string) => void;
 };
 
 const BillsContext = createContext<BillsContextValue | null>(null);
 
-function cleanLabel(label: string): string {
-  let cleaned = "";
-  for (const char of label) {
-    const code = char.charCodeAt(0);
-    cleaned += code < 32 || code === 127 ? " " : char;
-  }
-  const compact = cleaned.replace(/\s+/g, " ").trim().slice(0, 120);
-  return compact || "Freight bill";
-}
-
-function readBill(value: unknown): Bill | null {
-  if (!value || typeof value !== "object") return null;
-  const bill = value as Record<string, unknown>;
-  if (
-    typeof bill.id !== "string" ||
-    bill.id.length === 0 ||
-    bill.id.length >= 80 ||
-    typeof bill.label !== "string" ||
-    typeof bill.amount !== "number" ||
-    !Number.isFinite(bill.amount) ||
-    bill.amount <= 0 ||
-    bill.amount > 1_000_000_000_000 ||
-    (bill.source !== "manual" && bill.source !== "file") ||
-    typeof bill.addedAt !== "string"
-  ) {
-    return null;
-  }
-  const stored: Bill = {
-    id: bill.id,
-    label: bill.label,
-    amount: bill.amount,
-    source: bill.source,
-    addedAt: bill.addedAt,
-  };
-  if (typeof bill.carrier === "string" && knownCarrier(bill.carrier)) stored.carrier = bill.carrier;
-  return stored;
-}
-
-function readStore(): BillStore {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return {};
-    const store: BillStore = {};
-    for (const customer of customers) {
-      const entry = (parsed as Record<string, unknown>)[customer.id];
-      if (!Array.isArray(entry)) continue;
-      const bills = entry.map(readBill).filter((bill): bill is Bill => bill !== null).slice(-MAX_BILLS);
-      if (bills.length > 0) store[customer.id] = bills;
-    }
-    return store;
-  } catch {
-    return {};
-  }
-}
-
 export function BillsProvider({ children }: { children: ReactNode }) {
-  const [store, setStore] = useState<BillStore>(readStore);
+  const { session, ready } = useSession();
+  const [bills, setBills] = useState<Bill[]>([]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-    } catch {
-      // The bills still show for this visit if storage is unavailable.
+    if (!ready || !session) {
+      setBills([]);
+      return;
     }
-  }, [store]);
+    let cancel = false;
+    api<{ bills: Bill[] }>("/api/bills")
+      .then((result) => {
+        if (!cancel) setBills(result.bills);
+      })
+      .catch(() => {
+        if (!cancel) setBills([]);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [ready, session]);
 
   const totals: Record<string, number> = {};
-  for (const [customerId, bills] of Object.entries(store)) {
-    totals[customerId] = bills.reduce((sum, bill) => sum + bill.amount, 0);
-  }
+  for (const bill of bills) totals[bill.companyId] = (totals[bill.companyId] ?? 0) + bill.amount;
 
   const value: BillsContextValue = {
     totals,
     billsFor(customerId) {
-      return store[customerId] ?? [];
+      return bills.filter((bill) => bill.companyId === customerId);
     },
     addBill(customerId, draft) {
       const amount = Math.round(draft.amount);
-      if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000_000_000) return;
-      if (!knownCarrier(draft.carrier)) return;
-      const bill: Bill = {
-        id: crypto.randomUUID(),
-        label: cleanLabel(draft.label),
-        amount,
-        source: draft.source,
-        addedAt: new Date().toISOString(),
-        carrier: draft.carrier,
-      };
-      setStore((current) => {
-        const existing = current[customerId] ?? [];
-        return { ...current, [customerId]: [...existing, bill].slice(-MAX_BILLS) };
+      if (!Number.isFinite(amount) || amount <= 0 || !knownCarrier(draft.carrier)) return;
+      void api<{ bill: Bill }>(`/api/companies/${customerId}/bills`, {
+        method: "POST",
+        body: JSON.stringify({ ...draft, amount }),
+      }).then((result) => {
+        setBills((current) => [...current, result.bill].slice(-MAX_BILLS));
       });
     },
-    removeBill(customerId, billId) {
-      setStore((current) => {
-        const existing = current[customerId] ?? [];
-        const next = existing.filter((bill) => bill.id !== billId);
-        if (next.length === existing.length) return current;
-        return { ...current, [customerId]: next };
+    removeBill(_customerId, billId) {
+      void api(`/api/bills/${billId}`, { method: "DELETE" }).then(() => {
+        setBills((current) => current.filter((bill) => bill.id !== billId));
       });
     },
   };
@@ -152,8 +90,7 @@ export function useBills(customerId: string) {
   return {
     bills,
     total,
-    addBill: (draft: { label: string; amount: number; source: BillSource; carrier: string }) =>
-      context.addBill(customerId, draft),
+    addBill: (draft: { label: string; amount: number; source: BillSource; carrier: string }) => context.addBill(customerId, draft),
     removeBill: (billId: string) => context.removeBill(customerId, billId),
   };
 }
