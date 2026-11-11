@@ -50,7 +50,7 @@ npm run lint
 
 ## Sign-in and who sees what
 
-Sign-in is the app's own username and password. No password is written in source. On an empty database only the app owner can choose the admin password, and the server checks the verified Cursor viewer. A teammate or a company seat cannot claim it. Once that password exists, only the signed-in admin can change it, and only by sending the current password. The password is not written in source and is not returned by the API. Other people get a password only when an admin sets one on Users.
+Sign-in is the app's own username and password. No password is written in source. On an empty database only the app owner can choose the admin password, and the server checks the verified Cursor viewer. A teammate or a company seat cannot claim it. Once that password exists, only the signed-in admin can change it, and only by sending the current password. The sign-in popup also lets the app owner create a new user and sign in as that user. A teammate, a company seat, or an anonymous request cannot create an admin or claim the admin account. The password is not written in source and is not returned by the API. Other people get a password only when an admin sets one on Users.
 
 The session is an HTTP-only cookie checked against the `sessions` table. Do not put a password in source, in an API response, or in a prefilled field.
 
@@ -87,7 +87,7 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 
 Danish is the default. English is a setting on Settings and is stored on the signed-in user. Screen copy lives in `src/i18n/messages.ts`. Sample descriptions, lane services, and place names live in `src/i18n/content.ts` and stay English in the data files. Add both languages when a screen gains a sentence. Company names stay as written. Kroner keep Danish grouping in both languages.
 
-Sign-in is the app's own login. No password is written in source, returned by an API, or filled in on the sign-in screen. The first visit lets the app owner choose the admin password, and only a hash is stored. A teammate cannot claim that empty password. After that, changing it requires the signed-in admin and the current password. Other people get a password only when an admin sets one on Users. Companies, users, bills, invoice reviews, saved reports, and tender packs are in Postgres when `DATABASE_URL` is set, and in memory with PGlite when it is not. The sample companies, users, one bill, one saved report, and one tender comment load on an empty database. Do not print `DATABASE_URL`. ChatGPT sign-in and Supabase are not used.
+Sign-in is the app's own login. No password is written in source, returned by an API, or filled in on the sign-in screen. The first visit lets the app owner choose the admin password, and only a hash is stored. A teammate cannot claim that empty password. After that, changing it requires the signed-in admin and the current password. The sign-in popup lets the app owner create a new user and sign in as that user. A teammate, a company seat, or an anonymous request cannot create an admin or claim the admin account. Other people get a password only when an admin sets one on Users. Companies, users, bills, invoice reviews, saved reports, and tender packs are in Postgres when `DATABASE_URL` is set, and in memory with PGlite when it is not. The sample companies, users, one bill, one saved report, and one tender comment load on an empty database. Do not print `DATABASE_URL`. ChatGPT sign-in and Supabase are not used.
 
 ## Bills
 
