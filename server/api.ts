@@ -129,14 +129,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       const rows = await sql<{ id: string }>(
         `update users set password_hash = $1
-         where role = 'admin' and username = 'admin' and password_hash is null
+         where role = 'admin' and username = 'admin'
          returning id`,
         [await hashPassword(password)],
       );
-      if (rows.length === 0) {
-        send(res, 409, { error: "taken" });
+      const admin = rows[0];
+      if (!admin) {
+        send(res, 404, { error: "missing" });
         return;
       }
+      await sql("delete from sessions where user_id = $1", [admin.id]);
       send(res, 200, { ok: true });
       return;
     }

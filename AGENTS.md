@@ -50,7 +50,7 @@ npm run lint
 
 ## Sign-in and who sees what
 
-Sign-in is the app's own username and password. No password is written in source. On an empty database the sign-in screen asks for the admin password once and stores only a hash. Other people get a password only when an admin sets one on Users.
+Sign-in is the app's own username and password. No password is written in source. On an empty database the sign-in popup asks for the admin password once and stores only a hash. The same popup can replace that hash with a new one for the username admin. The new password is not written in source and is not returned by the API. Other people get a password only when an admin sets one on Users.
 
 The session is an HTTP-only cookie checked against the `sessions` table. Do not put a password in source, in an API response, or in a prefilled field.
 
