@@ -18,6 +18,7 @@ type SessionContextValue = {
   ready: boolean;
   session: Session | null;
   signIn: (username: string, password: string) => Promise<boolean>;
+  adopt: (user: Session) => void;
   signOut: () => Promise<void>;
 };
 
@@ -61,13 +62,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  function adopt(user: Session) {
+    setSession(user);
+    adoptLang(user.lang);
+  }
+
   async function signOut() {
     await api("/api/logout", { method: "POST" }).catch(() => undefined);
     setSession(null);
     adoptLang("da");
   }
 
-  return <SessionContext.Provider value={{ ready, session, signIn, signOut }}>{children}</SessionContext.Provider>;
+  return <SessionContext.Provider value={{ ready, session, signIn, adopt, signOut }}>{children}</SessionContext.Provider>;
 }
 
 export function useSession(): SessionContextValue {
