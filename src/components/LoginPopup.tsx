@@ -6,7 +6,7 @@ import { useSession } from "../session.tsx";
 export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose: () => void }) {
   const { t } = useLanguage();
   const { signIn } = useSession();
-  const [mode, setMode] = useState<"loading" | "setup" | "sign-in">("loading");
+  const [mode, setMode] = useState<"loading" | "setup" | "owner" | "sign-in">("loading");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [failed, setFailed] = useState(false);
@@ -14,10 +14,12 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
 
   useEffect(() => {
     let cancel = false;
-    api<{ needsAdminPassword?: boolean }>("/api/sign-in-state")
+    api<{ needsAdminPassword?: boolean; canChooseAdminPassword?: boolean }>("/api/sign-in-state")
       .then((result) => {
         if (cancel) return;
-        setMode(result?.needsAdminPassword ? "setup" : "sign-in");
+        if (result?.needsAdminPassword && result.canChooseAdminPassword) setMode("setup");
+        else if (result?.needsAdminPassword) setMode("owner");
+        else setMode("sign-in");
         onReady();
       })
       .catch(() => {
@@ -67,6 +69,7 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
           ×
         </button>
       </div>
+      {mode === "owner" ? <p className="login-note">{t("login.setupDenied")}</p> : null}
       {mode === "setup" ? (
         <>
           <p className="login-note">{t("login.setupLead")}</p>

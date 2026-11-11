@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
+import { requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, hashPassword, sql } from "./db.ts";
 
 const SEATS = ["Owner", "Billing", "Operations"] as const;
@@ -116,7 +117,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const rows = await sql<{ ready: number }>(
         "select count(*)::int as ready from users where role = 'admin' and password_hash is not null",
       );
-      send(res, 200, { needsAdminPassword: Number(rows[0]?.ready ?? 0) === 0 });
+      const needsAdminPassword = Number(rows[0]?.ready ?? 0) === 0;
+      send(res, 200, {
+        needsAdminPassword,
+        canChooseAdminPassword: needsAdminPassword && (await requestMayClaimAdmin(req)),
+      });
       return;
     }
 
@@ -134,6 +139,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       if (!admin.password_hash) {
+        if (!(await requestMayClaimAdmin(req))) {
+          send(res, 403, { error: "forbidden" });
+          return;
+        }
         const updated = await sql<{ id: string }>(
           `update users set password_hash = $1
            where id = $2 and password_hash is null
