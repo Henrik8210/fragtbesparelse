@@ -24,9 +24,17 @@ export function LoginPage() {
   }, [navigate, ready, session]);
 
   useEffect(() => {
-    api<{ needsAdminPassword: boolean }>("/api/sign-in-state").then((result) => {
-      setMode(result.needsAdminPassword ? "setup" : "sign-in");
-    });
+    let cancel = false;
+    api<{ needsAdminPassword?: boolean }>("/api/sign-in-state")
+      .then((result) => {
+        if (!cancel) setMode(result?.needsAdminPassword ? "setup" : "sign-in");
+      })
+      .catch(() => {
+        if (!cancel) setMode("sign-in");
+      });
+    return () => {
+      cancel = true;
+    };
   }, []);
 
   async function choosePassword(event: FormEvent<HTMLFormElement>) {
@@ -56,7 +64,7 @@ export function LoginPage() {
         <>
           <p className="lede">{t("login.setupLead")}</p>
           <p className="meta">{t("login.setupUser")}</p>
-          <form className="bill-form" onSubmit={(event) => void choosePassword(event)}>
+          <form id="fragtblik-login" className="bill-form" onSubmit={(event) => void choosePassword(event)}>
             <label className="bill-field">
               <span>{t("login.password")}</span>
               <input
@@ -79,7 +87,7 @@ export function LoginPage() {
       {mode === "sign-in" ? (
         <>
           <p className="lede">{t("login.lead")}</p>
-          <form className="bill-form" onSubmit={(event) => void submit(event)}>
+          <form id="fragtblik-login" className="bill-form" onSubmit={(event) => void submit(event)}>
             <label className="bill-field">
               <span>{t("login.username")}</span>
               <input name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
