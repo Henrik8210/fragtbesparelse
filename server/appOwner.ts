@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { getIdentity, type HeaderValue, type Identity } from "../cursor/identity.ts";
+import { getIdentity, verifyIdentity, type HeaderValue, type Identity } from "../cursor/identity.ts";
 
 /** Cursor user id of the person who owns this app. */
 const APP_OWNER_USER_ID = 346683409;
@@ -14,7 +14,7 @@ export function viewerMayClaimAdmin(identity: Identity): boolean {
   return identity.email.toLowerCase() === APP_OWNER_EMAIL;
 }
 
-/** A repeated identity header is an array, or one comma-joined string. Either form must stay a single token or verification fails. */
+/** A repeated header is an array, or one comma-joined string. A JWT has no comma, so the first piece is the token. */
 function oneToken(value: HeaderValue): string | undefined {
   const raw = Array.isArray(value) ? value.find((item) => item.trim() !== "") : value;
   if (typeof raw !== "string") return undefined;
@@ -22,16 +22,34 @@ function oneToken(value: HeaderValue): string | undefined {
   return first === "" ? undefined : first;
 }
 
-function identityHeaders(req: IncomingMessage): Record<string, HeaderValue> {
-  const headers: Record<string, HeaderValue> = { ...req.headers };
-  for (const name of ["x-cursor-identity-v2", "x-cursor-identity"]) {
-    const token = oneToken(headers[name]);
-    if (token === undefined) delete headers[name];
-    else headers[name] = token;
+/**
+ * The published host puts the identity on a Web Headers object. Spreading that
+ * object drops the token, so getIdentity then reports a missing header and the
+ * owner is refused. A Node request keeps the header as a string or an array.
+ */
+function readIdentityToken(req: IncomingMessage): string | undefined {
+  const headers = req.headers as { get?: (name: string) => string | null | undefined } & Record<string, HeaderValue>;
+  if (typeof headers?.get === "function") {
+    for (const name of ["x-cursor-identity-v2", "x-cursor-identity"]) {
+      const token = oneToken(headers.get(name) ?? undefined);
+      if (token) return token;
+    }
+    return undefined;
   }
-  return headers;
+  for (const name of ["x-cursor-identity-v2", "x-cursor-identity"]) {
+    const direct = headers?.[name];
+    const token = oneToken(direct);
+    if (token) return token;
+    const key = Object.keys(headers ?? {}).find((item) => item.toLowerCase() === name);
+    if (key === undefined) continue;
+    const cased = oneToken(headers[key]);
+    if (cased) return cased;
+  }
+  return undefined;
 }
 
 export async function requestMayClaimAdmin(req: IncomingMessage): Promise<boolean> {
-  return viewerMayClaimAdmin(await getIdentity(identityHeaders(req)));
+  const token = readIdentityToken(req);
+  const identity = token ? await verifyIdentity(token) : await getIdentity(req);
+  return viewerMayClaimAdmin(identity);
 }
