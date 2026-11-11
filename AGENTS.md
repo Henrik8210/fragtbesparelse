@@ -1,4 +1,4 @@
-# Fairlane for the next agent
+# Fragtblik for the next agent
 
 Read this before changing the app. The product is a Vite + React + TypeScript single-page app. Sample freight figures live in source. Anything a person adds stays in the browser.
 
@@ -7,12 +7,12 @@ Read this before changing the app. The product is a Vite + React + TypeScript si
 Henrik and Jesper, 9 Nov 2026. The product answers three questions, in this order of work:
 
 1. Are we paying what we agreed? Check invoices against the price agreement. Show each deviation in kroner and which lines to raise with the carrier. A logistics user reviews an objection before a bill is treated as accepted. That acceptance is a sample state. It does not pay anything.
-2. Is the agreement competitive? Later, compare with similar routes once there is enough data. This slice uses only the account's own sample fair price.
-3. Which carriers fit our shipments? A carrier profile index grows as each carrier's invoice shape is learned. This slice has a one-line note per named carrier, not a parser.
+2. Is the agreement competitive? The overview compares this account with the other fictional companies in the same trade, on similar routes. That comparison is sample data. A live market is later.
+3. Which carriers fit our shipments? Each carrier on the account has a 0–100 sample fit for its payment model, plus how many of those similar companies prefer it. A one-line note per named carrier still describes the invoice shape. It is not a parser.
 
 After a later tender, the chosen prices would become the next invoice-check baseline. That loop is not built.
 
-Still out: tender sending, offer comparison, market prices from other customers, payments, bank calls, OCR, real carrier parsers, real passwords, and server storage.
+Still out: tender sending, offer comparison, a live market feed, payments, bank calls, OCR, real carrier parsers, real passwords, and server storage.
 
 ## What this slice does
 
@@ -20,8 +20,8 @@ On the customer overview (`AccountQuestions` in `src/components/AccountQuestions
 
 - The three questions, in plain English, from that account's October 2026 lanes.
 - Agreement means lanes whose cause is `contract` or `fuel`. The kroner gap there is "above the signed rates".
-- Competitive means the sample fair price (`benchmark`) against the signed rates, apart from that agreement gap. It is not other customers' data.
-- Fit names the busiest carrier, the carrier to raise on the rate card, and which named carriers match the card. Split lanes stay labeled as split.
+- Competitive still shows this account's sample fair price. The carrier list adds what the other fictional companies in the same trade pay on the same kind of route.
+- Fit is `carrierFitIndex` in `src/data/fit.ts`. Score 0–100 mixes the payment model, the signed-rate gap, and that sample comparison. The line says how many similar companies prefer the carrier, and the kroner above what they pay. That kroner figure is an indication for a later renegotiation. The app does not send a tender.
 
 The agreement overspend on the overview is a bar chart. A short note beside each bar that is over the signed rate names the kroner and the carrier to raise. Add an invoice on that chart and set the freight company. The bill total is drawn on that carrier's bar. A file is still a total plus that carrier. No OCR and no payment.
 
@@ -66,7 +66,7 @@ Routes:
 | `/customers/:id/billing` | Statement for the month |
 | `/customers/:id/billing/bills` | Add bills. `/customers/:id/bills` redirects here |
 | `/customers/:id/users` | Sample seats plus people added on this browser |
-| `/customers/:id/settings` | Account notes |
+| `/customers/:id/settings` | Account notes and the language switch |
 | `/billing`, `/billing/bills`, `/users`, `/settings` | Same pages. A signed-in company is sent to its own path |
 
 A signed-out visitor and a company opening another company's URL see no kroner figures. Gate this in `src/pages/AccountSpaces.tsx` (`Space`) and `src/pages/CustomerPage.tsx`.
@@ -75,16 +75,22 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 
 ## Where the code lives
 
-- `src/App.tsx` routes and providers (`SessionProvider`, `BillsProvider`, `PeopleProvider`).
+- `src/App.tsx` routes and providers (`LanguageProvider`, `SessionProvider`, `BillsProvider`, `PeopleProvider`).
 - `src/data/portfolio.ts` fictional companies, months, lanes, causes, and `currentMonthTrack`. Do not write uploaded bills or added people into this file.
 - `src/format.ts` Danish grouping and the `kr.` suffix. Whole kroner on screen.
 - `src/session.tsx` sample sign-in.
 - `src/components/Sidebar.tsx` menu. `src/components/AccountMenu.tsx` upper-right sign-in. `src/components/Shell.tsx` frame.
 - `src/pages/CustomerPage.tsx` overview, including the three questions and the invoice check. `src/pages/PortfolioPage.tsx` admin all-accounts view. `src/pages/AccountSpaces.tsx` billing, bills, users, settings.
-- `src/data/carriers.ts` carrier profile index. `src/data/questions.ts` agreement lines and the three answers. `src/invoiceReview.tsx` sample review state. `src/components/AccountQuestions.tsx`, `src/components/AddInvoice.tsx`, and `src/components/InvoiceCheck.tsx`.
+- `src/data/carriers.ts` carrier profile index. `src/data/questions.ts` agreement lines and the three answers. `src/data/fit.ts` the 0–100 sample fit. `src/invoiceReview.tsx` sample review state. `src/components/AccountQuestions.tsx`, `src/components/AddInvoice.tsx`, and `src/components/InvoiceCheck.tsx`.
 - `src/bills.tsx` plus `src/bills/parse.ts`, `read.ts`, `spend.ts`. UI in `src/components/BillDesk.tsx`.
 - `src/people.tsx` and `src/components/UserDesk.tsx`.
 - `src/index.css` is the only stylesheet. Navy sidebar `#0d2137`, white page.
+
+## Language
+
+Danish is the default. English is a setting on Settings and is stored on the signed-in user. Screen copy lives in `src/i18n/messages.ts`. Sample descriptions, lane services, and place names live in `src/i18n/content.ts` and stay English in the data files. Add both languages when a screen gains a sentence. Company names stay as written. Kroner keep Danish grouping in both languages.
+
+Sign-in is the app's own login. Sample usernames and the shared password are listed on the sign-in screen. Passwords are hashed. Companies, users, bills, invoice reviews, saved reports, and tender packs are in Postgres when `DATABASE_URL` is set, and in memory with PGlite when it is not. The sample companies, users, one bill, and one saved report load on an empty database. Do not print `DATABASE_URL`. ChatGPT sign-in and Supabase are not used.
 
 ## Bills
 

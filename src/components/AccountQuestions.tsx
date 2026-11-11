@@ -1,9 +1,12 @@
 import { AddInvoice } from "./AddInvoice.tsx";
 import { useBills } from "../bills.tsx";
 import { carrierProfiles } from "../data/carriers.ts";
+import { carrierFitIndex, type CarrierScore } from "../data/fit.ts";
 import { accountAnswers } from "../data/questions.ts";
-import { LATEST_MONTH } from "../data/portfolio.ts";
-import { formatCount, formatKr } from "../format.ts";
+import { LATEST_MONTH, MONTHS } from "../data/portfolio.ts";
+import { formatKr } from "../format.ts";
+import type { MessageKey } from "../i18n/messages.ts";
+import { useLanguage } from "../language.tsx";
 import type { Customer } from "../types.ts";
 
 type OverRow = {
@@ -13,34 +16,34 @@ type OverRow = {
 };
 
 export function AccountQuestions({ customer }: { customer: Customer }) {
+  const { t, phrase } = useLanguage();
   const answers = accountAnswers(customer);
   const { bills } = useBills(customer.id);
   const rows = overRows(answers.carriers, bills);
   const max = Math.max(1, ...rows.map((row) => row.over + row.added));
   const used = new Set(answers.carriers.map((carrier) => carrier.name));
-  const busiest = answers.carriers[0];
-  const toRaise = [...answers.carriers].sort((a, b) => b.agreementGap - a.agreementGap)[0];
+  const fit = carrierFitIndex(customer);
 
   return (
     <section className="block" id="questions">
       <div className="section-tools">
-        <h2>Are we paying what we agreed?</h2>
+        <h2>{t("questions.agreed")}</h2>
         <AddInvoice customerId={customer.id} />
       </div>
-      <p className="section-intro">{LATEST_MONTH}. Each bar is kroner over the signed rates.</p>
+      <p className="section-intro">
+        {t("questions.month", { month: phrase(`month.${MONTHS[MONTHS.length - 1].id}`, LATEST_MONTH) })}
+      </p>
       {rows.length === 0 ? (
-        <p className="section-intro">Invoices match the signed rates.</p>
+        <p className="section-intro">{t("questions.match")}</p>
       ) : (
         <figure className="agree-chart">
-          <figcaption className="sr-only">
-            Kroner over the signed agreement by carrier for {customer.name}.
-          </figcaption>
+          <figcaption className="sr-only">{t("questions.caption", { name: customer.name })}</figcaption>
           <ul className="legend">
             <li>
-              <span className="swatch swatch-paid" /> Over the agreement
+              <span className="swatch swatch-paid" /> {t("questions.over")}
             </li>
             <li>
-              <span className="swatch swatch-budget" /> Added invoice
+              <span className="swatch swatch-budget" /> {t("questions.added")}
             </li>
           </ul>
           <ul className="agree-rows">
@@ -55,35 +58,47 @@ export function AccountQuestions({ customer }: { customer: Customer }) {
                     <span className="agree-added" style={{ width: `${(row.added / max) * 100}%` }} />
                   ) : null}
                 </span>
-                <p className="agree-note">{noteFor(row)}</p>
+                <p className="agree-note">{noteFor(row, t)}</p>
               </li>
             ))}
           </ul>
         </figure>
       )}
 
-      <h3>Is the agreement competitive?</h3>
+      <h3>{t("questions.competitive")}</h3>
       <p className="section-intro">
         {answers.ratesAboveFair <= 0
-          ? `Signed rates match this account's sample fair price of ${formatKr(answers.fairPrice)}.`
-          : `Signed rates sit ${formatKr(answers.ratesAboveFair)} above this account's sample fair price of ${formatKr(answers.fairPrice)}.`}
+          ? t("questions.competitiveYes", { fair: formatKr(answers.fairPrice) })
+          : t("questions.competitiveNo", { gap: formatKr(answers.ratesAboveFair), fair: formatKr(answers.fairPrice) })}
       </p>
 
-      <h3>Which carriers fit?</h3>
-      <p className="section-intro">
-        {busiest ? `${busiest.name} carries the most shipments, ${formatCount(busiest.shipments)}.` : "No named carrier is on this account."}{" "}
-        {toRaise && toRaise.agreementGap > 0
-          ? `Raise the rate card with ${toRaise.name}.`
-          : "No named carrier is over the signed rates."}
-      </p>
+      <h3>{t("questions.fit")}</h3>
+      <p className="section-intro">{fitIntro(fit.similarNames, fit.marketGap, t)}</p>
+      <ol className="fit-list">
+        {fit.scores.map((score) => (
+          <li key={score.name}>
+            <span className="fit-score">
+              <span className="sr-only">{t("questions.fitScore", { score: String(score.score) })}</span>
+              <span aria-hidden="true">{score.score}</span>
+            </span>
+            <span className="fit-meter" aria-hidden="true">
+              <span style={{ width: `${score.score}%` }} />
+            </span>
+            <span className="fit-copy">
+              <span className="agree-name">{score.name}</span>
+              <span className="fit-note">{fitNote(score, t)}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
 
-      <h3 className="profile-heading">Carrier profiles</h3>
+      <h3 className="profile-heading">{t("questions.profiles")}</h3>
       <ul className="profile-list">
         {carrierProfiles.map((profile) => (
           <li key={profile.name}>
             <span className="seat-role">{profile.name}</span>
-            <span className="profile-shape">{profile.shape}</span>
-            {used.has(profile.name) ? <span className="latest-tag">On this account</span> : null}
+            <span className="profile-shape">{phrase(`shape.${profile.name}`, profile.shape)}</span>
+            {used.has(profile.name) ? <span className="latest-tag">{t("questions.onAccount")}</span> : null}
           </li>
         ))}
       </ul>
@@ -109,8 +124,36 @@ function overRows(
   return [...byName.values()].sort((a, b) => b.over + b.added - (a.over + a.added));
 }
 
-function noteFor(row: OverRow): string {
-  const raise = row.over > 0 ? `${formatKr(row.over)} Raise with ${row.name}` : "";
-  const added = row.added > 0 ? `${formatKr(row.added)} added` : "";
+function fitIntro(
+  names: string[],
+  marketGap: number,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  if (names.length === 0) return t("questions.fitNone");
+  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} ${t("common.and")} ${names[names.length - 1]}`;
+  const sentence = marketGap > 0 ? t("questions.fitGap", { amount: formatKr(marketGap) }) : t("questions.fitNoGap");
+  const gap = `${/[.!?]$/.test(who) ? " " : ". "}${sentence}`;
+  return t("questions.fitIntro", { who, gap });
+}
+
+function fitNote(
+  score: CarrierScore,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  const model = score.modelMatch ? "" : t("questions.poorModel");
+  const prefer =
+    score.similarCount === 0
+      ? t("questions.noPeers")
+      : t("questions.prefer", { prefer: score.preferCount, similar: score.similarCount, name: score.name });
+  const price = !score.comparable ? "" : score.gapKr > 0 ? t("questions.above", { amount: formatKr(score.gapKr) }) : t("questions.noMore");
+  return [model, prefer, price].filter(Boolean).join(" ");
+}
+
+function noteFor(
+  row: OverRow,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  const raise = row.over > 0 ? t("questions.raise", { amount: formatKr(row.over), carrier: row.name }) : "";
+  const added = row.added > 0 ? t("questions.addedAmount", { amount: formatKr(row.added) }) : "";
   return [raise, added].filter(Boolean).join(" · ");
 }

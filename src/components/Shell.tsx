@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
+import { useLanguage } from "../language.tsx";
 import { AccountMenu } from "./AccountMenu.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 
 export function Shell({ children }: { children: ReactNode }) {
+  const { t } = useLanguage();
   return (
     <div className="app">
       <div className="workspace">
@@ -12,7 +14,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <AccountMenu />
           </div>
           <main>{children}</main>
-          <footer className="foot">Fairlane sample data only. Not an audit, a contract, or a carrier quote.</footer>
+          <footer className="foot">{t("footer")}</footer>
         </div>
       </div>
     </div>

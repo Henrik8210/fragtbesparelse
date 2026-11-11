@@ -923,6 +923,52 @@ tfoot td {
   line-height: 1.35;
 }
 
+.fit-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fit-list li {
+  display: grid;
+  grid-template-columns: 3.2rem 7rem minmax(0, 1fr);
+  gap: 0.75rem 1rem;
+  align-items: center;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.fit-score {
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.fit-meter {
+  display: block;
+  height: 0.45rem;
+  background: #f4f7fa;
+}
+
+.fit-meter span {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+}
+
+.fit-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.fit-note {
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+
 .bill-pop > .bill-field {
   margin: 0.2rem 0.35rem 0.15rem;
 }
@@ -1194,6 +1240,37 @@ tfoot td {
   font-weight: 500;
 }
 
+.language-setting {
+  margin: 1.4rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.language-setting legend {
+  font-size: 1.02rem;
+  font-weight: 600;
+}
+
+.language-switch {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.language-switch button {
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+  border: 1px solid #0d2137;
+  background: #ffffff;
+  color: #0d2137;
+  font: inherit;
+  font-weight: 600;
+}
+
+.language-switch button[aria-pressed="true"] {
+  background: #0d2137;
+  color: #ffffff;
+}
+
 .settings-list {
   margin: 1.2rem 0 0;
 }
@@ -1362,6 +1439,7 @@ tfoot td {
   font-weight: 600;
 }
 
+.bill-field textarea,
 .bill-field input,
 .bill-field select {
   min-height: 2.5rem;
@@ -1462,8 +1540,13 @@ tfoot td {
   }
 
   .profile-list li,
-  .agree-rows li {
-    grid-template-columns: 1fr;
+  .agree-rows li,
+  .fit-list li {
+    grid-template-columns: 3.2rem 1fr;
+  }
+
+  .fit-meter {
+    display: none;
   }
 
   .y-axis {
@@ -1567,4 +1650,13 @@ tfoot td {
     font-size: 0.88rem;
     font-weight: 600;
   }
+}
+
+.is-excluded {
+  opacity: 0.45;
+}
+
+.bill-field textarea {
+  min-height: 5rem;
+  resize: vertical;
 }

@@ -4,20 +4,23 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "node --experimental-strip-types server/index.ts",
+    "build": "tsc -b && vite build && node scripts/migrate.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.3.16",
     "@fontsource/ibm-plex-sans": "^5.2.5",
     "pdfjs-dist": "^6.5.438",
+    "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.9.4"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

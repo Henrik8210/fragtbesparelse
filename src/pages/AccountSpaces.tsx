@@ -4,15 +4,16 @@ import { withBillSpend } from "../bills/spend.ts";
 import { useBills } from "../bills.tsx";
 import { BillDesk } from "../components/BillDesk.tsx";
 import { UserDesk } from "../components/UserDesk.tsx";
-import { LATEST_MONTH, currentMonthTrack, customers } from "../data/portfolio.ts";
+import { LATEST_MONTH, MONTHS, currentMonthTrack, customers } from "../data/portfolio.ts";
 import { formatKr } from "../format.ts";
+import { useLanguage } from "../language.tsx";
 import { useSession } from "../session.tsx";
 import type { Customer } from "../types.ts";
 import { NotFound } from "./NotFound.tsx";
 
 export function BillingPage() {
   return (
-    <Space title="Billing">
+    <Space name="billing">
       {(customer, role) =>
         customer ? <BillingDetail customer={customer} /> : <ChooseAccount role={role} space="billing" />
       }
@@ -22,7 +23,7 @@ export function BillingPage() {
 
 export function BillsPage() {
   return (
-    <Space title="Bills" path="billing/bills">
+    <Space name="bills" path="billing/bills">
       {(customer, role) =>
         customer ? <BillDesk customer={customer} /> : <ChooseAccount role={role} space="bills" />
       }
@@ -32,7 +33,7 @@ export function BillsPage() {
 
 export function UsersPage() {
   return (
-    <Space title="Users">
+    <Space name="users">
       {(customer, role) => (role ? <UserDesk customer={customer} role={role} /> : null)}
     </Space>
   );
@@ -40,61 +41,51 @@ export function UsersPage() {
 
 export function SettingsPage() {
   return (
-    <Space title="Settings">
+    <Space name="settings">
       {(customer, role) => <SettingsDetail customer={customer} role={role} />}
     </Space>
   );
 }
 
 function Space({
-  title,
+  name,
   path,
   children,
 }: {
-  title: string;
+  name: "billing" | "bills" | "users" | "settings";
   path?: string;
   children: (customer: Customer | null, role: "admin" | "customer" | null) => ReactNode;
 }) {
   const { customerId } = useParams();
-  const { session } = useSession();
+  const { session, ready } = useSession();
+  const { t } = useLanguage();
   const customer = customers.find((item) => item.id === customerId);
+  const title =
+    name === "billing" ? t("billing.title") : name === "bills" ? t("bills.title") : name === "users" ? t("users.title") : t("settings.title");
 
   useEffect(() => {
-    document.title = `${title} · Fairlane`;
+    document.title = `${title} · Fragtblik`;
   }, [title]);
 
-  if (session?.role === "customer" && !customerId) {
-    return <Navigate to={`/customers/${session.customerId}/${path ?? title.toLowerCase()}`} replace />;
+  if (!ready) return null;
+  if (session?.role === "customer" && session.customerId && !customerId) {
+    return <Navigate to={`/customers/${session.customerId}/${path ?? name}`} replace />;
   }
   if (customerId && !customer) {
-    return (
-      <NotFound
-        title="No sample company matches that link"
-        body="Fairlane sample data includes only the fictional companies in the portfolio."
-      />
-    );
+    return <NotFound title={t("notFound.noCompany")} body={t("notFound.noCompanyBody")} />;
   }
   if (customer && !session) {
-    return (
-      <NotFound
-        title="Sign in to open this account"
-        body={`${customer.name} is a sample company. Use Log in in the upper right and choose that account, or sign in as a Fairlane admin.`}
-      />
-    );
+    return <NotFound title={t("notFound.signIn")} body={t("notFound.signInShort", { name: customer.name })} />;
   }
   if (customer && session?.role === "customer" && session.customerId !== customer.id) {
-    return (
-      <NotFound
-        title="This account is not yours"
-        body="A company sign-in shows only that company's pages. Sign in as a Fairlane admin to open every account."
-      />
-    );
+    return <NotFound title={t("notFound.notYours")} body={t("notFound.notYoursPages")} />;
   }
   if (!session) {
     return (
       <div className="page">
         <h1>{title}</h1>
-        <p className="lede">Sign in from the upper right to open an account.</p>
+        {name === "settings" ? <LanguageSetting /> : null}
+        <p className="lede">{t("gate.signIn")}</p>
       </div>
     );
   }
@@ -103,60 +94,80 @@ function Space({
 
 function BillingDetail({ customer }: { customer: Customer }) {
   const { total } = useBills(customer.id);
+  const { t, phrase } = useLanguage();
+  const month = phrase(`month.${MONTHS[MONTHS.length - 1].id}`, LATEST_MONTH);
   const track = withBillSpend(currentMonthTrack(customer), total);
   const difference = track.spent - track.budget;
   return (
     <>
-      <h1>Billing</h1>
+      <h1>{t("billing.title")}</h1>
       <p className="meta">{customer.name}</p>
       <p className="lede">
-        {LATEST_MONTH} statement. Spend is the sample invoices
-        {total > 0 ? ` plus ${formatKr(total)} from bills on this account` : ""}. The same total is
-        on the overview. The budget is the amount projected for the month. Nothing here can be paid,
-        and this is not a real invoice.
+        {t("billing.lede", {
+          month,
+          bills: total > 0 ? t("billing.bills", { amount: formatKr(total) }) : "",
+        })}
       </p>
       <p className="wayfinding">
         <Link className="text-link" to={`/customers/${customer.id}/billing/bills`}>
-          Bills
+          {t("bills.title")}
         </Link>{" "}
-        under this menu are included in freight spend.
+        {t("billing.wayfinding")}
       </p>
       <div className="table-wrap">
         <table className="months">
           <caption className="sr-only">
-            Sample billing for {customer.name} in {LATEST_MONTH}
+            {t("billing.caption", { name: customer.name, month })}
           </caption>
           <thead>
             <tr>
-              <th scope="col">Line</th>
+              <th scope="col">{t("common.line")}</th>
               <th scope="col" className="num">
-                Amount
+                {t("common.amount")}
               </th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <th scope="row">Freight spend</th>
+              <th scope="row">{t("billing.freight")}</th>
               <td className="num">{formatKr(track.spent)}</td>
             </tr>
             {total > 0 ? (
               <tr>
-                <th scope="row">From bills you added</th>
+                <th scope="row">{t("billing.fromBills")}</th>
                 <td className="num">{formatKr(total)}</td>
               </tr>
             ) : null}
             <tr>
-              <th scope="row">Budget</th>
+              <th scope="row">{t("common.budget")}</th>
               <td className="num">{formatKr(track.budget)}</td>
             </tr>
             <tr>
-              <th scope="row">{difference >= 0 ? "Over budget" : "Under budget"}</th>
+              <th scope="row">{difference >= 0 ? t("billing.over") : t("billing.under")}</th>
               <td className="num">{formatKr(Math.abs(difference))}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </>
+  );
+}
+
+function LanguageSetting() {
+  const { lang, setLang, t } = useLanguage();
+  return (
+    <fieldset className="language-setting">
+      <legend>{t("settings.language")}</legend>
+      <p className="section-intro">{t("settings.languageNote")}</p>
+      <div className="language-switch" role="group" aria-label={t("settings.language")}>
+        <button type="button" aria-pressed={lang === "da"} onClick={() => setLang("da")}>
+          {t("lang.da")}
+        </button>
+        <button type="button" aria-pressed={lang === "en"} onClick={() => setLang("en")}>
+          {t("lang.en")}
+        </button>
+      </div>
+    </fieldset>
   );
 }
 
@@ -168,43 +179,43 @@ function SettingsDetail({
   role: "admin" | "customer" | null;
 }) {
   const { session } = useSession();
+  const { t } = useLanguage();
   const signedIn =
     role === "admin"
       ? session?.role === "admin"
-        ? (session.name ?? "Fairlane admin")
-        : "Fairlane admin"
-      : "This company only";
+        ? (session.name ?? t("account.admin"))
+        : t("account.admin")
+      : t("settings.companyOnly");
   return (
     <>
-      <h1>Settings</h1>
-      <p className="meta">{customer ? customer.name : "Fairlane admin"}</p>
+      <h1>{t("settings.title")}</h1>
+      <p className="meta">{customer ? customer.name : t("account.admin")}</p>
+      <LanguageSetting />
       <dl className="settings-list">
         <div>
-          <dt>Account</dt>
-          <dd>{customer ? customer.name : "No customer account is open"}</dd>
+          <dt>{t("settings.account")}</dt>
+          <dd>{customer ? customer.name : t("settings.noAccount")}</dd>
         </div>
         <div>
-          <dt>Signed in as</dt>
+          <dt>{t("settings.signedIn")}</dt>
           <dd>{signedIn}</dd>
         </div>
         <div>
-          <dt>Data</dt>
-          <dd>Sample figures, plus bills and people you add on this browser.</dd>
+          <dt>{t("settings.data")}</dt>
+          <dd>{t("settings.dataValue")}</dd>
         </div>
       </dl>
     </>
   );
 }
 
-function ChooseAccount({ role, space }: { role: "admin" | "customer" | null; space: string }) {
+function ChooseAccount({ role, space }: { role: "admin" | "customer" | null; space: "billing" | "bills" | "users" }) {
+  const { t } = useLanguage();
+  const title = space === "billing" ? t("billing.title") : space === "bills" ? t("bills.title") : t("users.title");
   return (
     <>
-      <h1>{space === "billing" ? "Billing" : space === "bills" ? "Bills" : "Users"}</h1>
-      <p className="lede">
-        {role === "admin"
-          ? `Open a customer from Log in in the upper right. ${space === "billing" ? "Billing" : space === "bills" ? "Bills" : "Users"} is kept on that account.`
-          : "Sign in from the upper right to open an account."}
-      </p>
+      <h1>{title}</h1>
+      <p className="lede">{role === "admin" ? t("billing.choose", { space: title }) : t("gate.signIn")}</p>
     </>
   );
 }
