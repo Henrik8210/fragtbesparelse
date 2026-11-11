@@ -7,8 +7,8 @@ import { CustomerPage } from "./pages/CustomerPage.tsx";
 import { NotFound } from "./pages/NotFound.tsx";
 import { CheckPage } from "./pages/CheckPage.tsx";
 import { HistoryPage } from "./pages/HistoryPage.tsx";
-import { LoginPage } from "./pages/LoginPage.tsx";
 import { PortfolioPage } from "./pages/PortfolioPage.tsx";
+import { WelcomePage } from "./pages/WelcomePage.tsx";
 import { TenderPage } from "./pages/TenderPage.tsx";
 import { LanguageProvider } from "./language.tsx";
 import { SessionProvider, useSession } from "./session.tsx";
@@ -23,7 +23,7 @@ export default function App() {
             <Shell>
               <Routes>
                 <Route path="/" element={<HomePage />} />
-                <Route path="/login" element={<LoginPage />} />
+                <Route path="/login" element={<Navigate to="/" replace />} />
                 <Route path="/billing" element={<BillingPage />} />
                 <Route path="/billing/bills" element={<BillsPage />} />
                 <Route path="/bills" element={<Navigate to="/billing/bills" replace />} />
@@ -61,5 +61,5 @@ function HomePage() {
     return <Navigate to={`/customers/${session.customerId}`} replace />;
   }
   if (session?.role === "admin") return <PortfolioPage />;
-  return <LoginPage />;
+  return <WelcomePage />;
 }
