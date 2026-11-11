@@ -132,6 +132,18 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
             {short ? <p className="bill-errors">{t("login.setupShort")}</p> : null}
             {failed ? <p className="bill-errors">{t("login.setupFailed")}</p> : null}
           </form>
+          <button
+            type="button"
+            className="text-link login-create"
+            onClick={() => {
+              setFailed(false);
+              setShort(false);
+              setPassword("");
+              setMode("create");
+            }}
+          >
+            {t("login.create")}
+          </button>
         </>
       ) : null}
       {mode === "sign-in" ? (
