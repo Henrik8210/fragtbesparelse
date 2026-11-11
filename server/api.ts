@@ -121,24 +121,45 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     if (method === "POST" && path === "/api/admin-password") {
-      const body = (await readJson(req)) as { password?: unknown };
+      const body = (await readJson(req)) as { password?: unknown; current?: unknown };
       const password = typeof body.password === "string" ? body.password : "";
       if (password.length < 4 || password.length > 80) {
         send(res, 400, { error: "password" });
         return;
       }
-      const rows = await sql<{ id: string }>(
-        `update users set password_hash = $1
-         where role = 'admin' and username = 'admin'
-         returning id`,
-        [await hashPassword(password)],
-      );
+      const rows = await sql<UserRow>("select * from users where role = 'admin' and username = 'admin'");
       const admin = rows[0];
       if (!admin) {
         send(res, 404, { error: "missing" });
         return;
       }
-      await sql("delete from sessions where user_id = $1", [admin.id]);
+      if (!admin.password_hash) {
+        const updated = await sql<{ id: string }>(
+          `update users set password_hash = $1
+           where id = $2 and password_hash is null
+           returning id`,
+          [await hashPassword(password), admin.id],
+        );
+        if (updated.length === 0) {
+          send(res, 409, { error: "taken" });
+          return;
+        }
+        send(res, 200, { ok: true });
+        return;
+      }
+      const caller = await actor(req);
+      if (!caller || caller.id !== admin.id) {
+        send(res, caller ? 403 : 401, { error: caller ? "forbidden" : "sign-in" });
+        return;
+      }
+      const current = typeof body.current === "string" ? body.current : "";
+      if (!(await checkPassword(current, admin.password_hash))) {
+        send(res, 401, { error: "login" });
+        return;
+      }
+      await sql("update users set password_hash = $1 where id = $2", [await hashPassword(password), admin.id]);
+      const token = cookieToken(req);
+      await sql("delete from sessions where user_id = $1 and token <> $2", [admin.id, token]);
       send(res, 200, { ok: true });
       return;
     }
@@ -318,9 +339,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 400, { error: "password" });
         return;
       }
+      const targetId = decodeURIComponent(setPassword[1]);
+      const existing = await sql<UserRow>("select * from users where id = $1", [targetId]);
+      if (existing[0]?.role === "admin" && existing[0].username === "admin") {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
       const rows = await sql<UserRow>(
         "update users set password_hash = $1 where id = $2 returning *",
-        [await hashPassword(password), decodeURIComponent(setPassword[1])],
+        [await hashPassword(password), targetId],
       );
       const target = rows[0];
       if (!target) {
