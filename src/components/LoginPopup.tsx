@@ -1,16 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, api } from "../api.ts";
+import type { MessageKey } from "../i18n/messages.ts";
 import { useLanguage } from "../language.tsx";
-import { useSession } from "../session.tsx";
+import { useSession, type Session } from "../session.tsx";
 
 export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose: () => void }) {
   const { t } = useLanguage();
-  const { signIn } = useSession();
+  const { signIn, adopt } = useSession();
   const [mode, setMode] = useState<"loading" | "setup" | "owner" | "sign-in" | "create">("loading");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [failed, setFailed] = useState(false);
   const [short, setShort] = useState(false);
+  const [createCode, setCreateCode] = useState("");
 
   useEffect(() => {
     let cancel = false;
@@ -55,27 +57,43 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
     }
   }
 
+  function createReason(code: string): MessageKey {
+    if (code === "taken") return "login.createTaken";
+    if (code === "username") return "login.createUsername";
+    if (code === "missing_header") return "login.createMissing";
+    if (code === "issuer_unreachable") return "login.createUnreachable";
+    if (code === "expired") return "login.createExpired";
+    if (code === "sign_in_required" || code === "sign-in") return "login.createSignIn";
+    if (code === "not_owner" || code === "forbidden") return "login.createDenied";
+    if (code === "server" || code === "error") return "login.createServer";
+    return "login.createRejected";
+  }
+
   async function createUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFailed(false);
     setShort(false);
+    setCreateCode("");
     const chosenName = username;
     const chosenPassword = password;
     try {
-      await api("/api/register", {
+      const result = await api<{ user?: Session }>("/api/register", {
         method: "POST",
         body: JSON.stringify({ username: chosenName, password: chosenPassword }),
       });
       setPassword("");
-      const ok = await signIn(chosenName, chosenPassword);
-      if (!ok) {
-        setUsername(chosenName);
-        setMode("sign-in");
+      if (!result?.user) {
+        setCreateCode("server");
         setFailed(true);
+        return;
       }
+      adopt(result.user);
     } catch (error) {
       if (error instanceof ApiError && error.code === "password") setShort(true);
-      else setFailed(true);
+      else {
+        setCreateCode(error instanceof ApiError ? error.code : "error");
+        setFailed(true);
+      }
     }
   }
 
@@ -221,7 +239,7 @@ export function LoginPopup({ onReady, onClose }: { onReady: () => void; onClose:
               {t("login.create")}
             </button>
             {short ? <p className="bill-errors">{t("login.setupShort")}</p> : null}
-            {failed ? <p className="bill-errors">{t("login.createFailed")}</p> : null}
+            {failed ? <p className="bill-errors">{t(createReason(createCode))}</p> : null}
           </form>
           <button
             type="button"

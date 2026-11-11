@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
-import { requestMayClaimAdmin } from "./appOwner.ts";
+import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, hashPassword, sql } from "./db.ts";
 import { registerOwnerUser } from "./register.ts";
 
@@ -192,9 +192,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     if (method === "POST" && path === "/api/register") {
-      const seat = await actor(req);
-      if (seat?.role === "customer" || !(await requestMayClaimAdmin(req))) {
-        send(res, 403, { error: "forbidden" });
+      const denial = await ownerDenial(req);
+      if (denial) {
+        send(res, 403, { error: denial });
         return;
       }
       const body = (await readJson(req)) as { username?: unknown; password?: unknown };
@@ -217,7 +217,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 409, { error: "taken" });
         return;
       }
-      send(res, 201, { ok: true });
+      const rows = await sql<UserRow>("select * from users where username = $1", [username]);
+      const createdUser = rows[0];
+      if (!createdUser) {
+        send(res, 500, { error: "server" });
+        return;
+      }
+      const sessionToken = randomBytes(32).toString("hex");
+      await sql("insert into sessions (token, user_id) values ($1, $2)", [sessionToken, createdUser.id]);
+      setSessionCookie(res, sessionToken);
+      send(res, 201, { ok: true, user: publish(createdUser) });
       return;
     }
 
