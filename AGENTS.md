@@ -12,7 +12,7 @@ Henrik and Jesper, 9 Nov 2026. The product answers three questions, in this orde
 
 After a later tender, the chosen prices would become the next invoice-check baseline. That loop is not built.
 
-Still out: tender sending, offer comparison, a live market feed, payments, bank calls, OCR, real carrier parsers, real passwords, and server storage.
+Still out: tender sending, offer comparison, a live market feed, payments, bank calls, OCR, and real carrier parsers.
 
 ## What this slice does
 
@@ -50,12 +50,9 @@ npm run lint
 
 ## Sign-in and who sees what
 
-Sign-in is sample only. There is no password and no auth library. Do not add one unless the task asks for a real account system.
+Sign-in is the app's own username and password. No password is written in source. On an empty database the sign-in screen asks for the admin password once and stores only a hash. Other people get a password only when an admin sets one on Users.
 
-Session is `sessionStorage` key `fairlane-session`:
-
-- `{ "role": "admin" }` or `{ "role": "admin", "name": "…" }` for an added admin
-- `{ "role": "customer", "customerId": "nordhavn-living" }`
+The session is an HTTP-only cookie checked against the `sessions` table. Do not put a password in source, in an API response, or in a prefilled field.
 
 Routes:
 
@@ -78,7 +75,7 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 - `src/App.tsx` routes and providers (`LanguageProvider`, `SessionProvider`, `BillsProvider`, `PeopleProvider`).
 - `src/data/portfolio.ts` fictional companies, months, lanes, causes, and `currentMonthTrack`. Do not write uploaded bills or added people into this file.
 - `src/format.ts` Danish grouping and the `kr.` suffix. Whole kroner on screen.
-- `src/session.tsx` sample sign-in.
+- `src/session.tsx` signed-in user. `src/pages/LoginPage.tsx` first-run admin password, then username and password.
 - `src/components/Sidebar.tsx` menu. `src/components/AccountMenu.tsx` upper-right sign-in. `src/components/Shell.tsx` frame.
 - `src/pages/CustomerPage.tsx` overview, including the three questions and the invoice check. `src/pages/PortfolioPage.tsx` admin all-accounts view. `src/pages/AccountSpaces.tsx` billing, bills, users, settings.
 - `src/data/carriers.ts` carrier profile index. `src/data/questions.ts` agreement lines and the three answers. `src/data/fit.ts` the 0–100 sample fit. `src/invoiceReview.tsx` sample review state. `src/components/AccountQuestions.tsx`, `src/components/AddInvoice.tsx`, and `src/components/InvoiceCheck.tsx`.
@@ -90,7 +87,7 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 
 Danish is the default. English is a setting on Settings and is stored on the signed-in user. Screen copy lives in `src/i18n/messages.ts`. Sample descriptions, lane services, and place names live in `src/i18n/content.ts` and stay English in the data files. Add both languages when a screen gains a sentence. Company names stay as written. Kroner keep Danish grouping in both languages.
 
-Sign-in is the app's own login. Sample usernames and the shared password are listed on the sign-in screen. Passwords are hashed. Companies, users, bills, invoice reviews, saved reports, and tender packs are in Postgres when `DATABASE_URL` is set, and in memory with PGlite when it is not. The sample companies, users, one bill, and one saved report load on an empty database. Do not print `DATABASE_URL`. ChatGPT sign-in and Supabase are not used.
+Sign-in is the app's own login. No password is written in source, returned by an API, or filled in on the sign-in screen. The first visit chooses the admin password, and only a hash is stored. Other people get a password only when an admin sets one on Users. Companies, users, bills, invoice reviews, saved reports, and tender packs are in Postgres when `DATABASE_URL` is set, and in memory with PGlite when it is not. The sample companies, users, one bill, one saved report, and one tender comment load on an empty database. Do not print `DATABASE_URL`. ChatGPT sign-in and Supabase are not used.
 
 ## Bills
 
