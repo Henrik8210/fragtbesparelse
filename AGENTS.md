@@ -75,7 +75,7 @@ Companies, in order: `nordhavn-living`, `vesterbro-cloth`, `kolding-table-co`, `
 - `src/App.tsx` routes and providers (`LanguageProvider`, `SessionProvider`, `BillsProvider`, `PeopleProvider`).
 - `src/data/portfolio.ts` fictional companies, months, lanes, causes, and `currentMonthTrack`. Do not write uploaded bills or added people into this file.
 - `src/format.ts` Danish grouping and the `kr.` suffix. Whole kroner on screen.
-- `src/session.tsx` signed-in user. `src/pages/LoginPage.tsx` first-run admin password, then username and password.
+- `src/session.tsx` signed-in user. `src/components/LoginPopup.tsx` is the corner popup: first-run admin password, then username and password. Log ind opens it and then submits it.
 - `src/components/Sidebar.tsx` menu. `src/components/AccountMenu.tsx` upper-right sign-in. `src/components/Shell.tsx` frame.
 - `src/pages/CustomerPage.tsx` overview, including the three questions and the invoice check. `src/pages/PortfolioPage.tsx` admin all-accounts view. `src/pages/AccountSpaces.tsx` billing, bills, users, settings.
 - `src/data/carriers.ts` carrier profile index. `src/data/questions.ts` agreement lines and the three answers. `src/data/fit.ts` the 0–100 sample fit. `src/invoiceReview.tsx` sample review state. `src/components/AccountQuestions.tsx`, `src/components/AddInvoice.tsx`, and `src/components/InvoiceCheck.tsx`.
