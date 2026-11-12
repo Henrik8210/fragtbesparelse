@@ -1,15 +1,14 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, ArrowUpRight, BarChart3, Check, ChevronRight, ClipboardCheck, Database, FileCheck2,
+  ArrowRight, ArrowUpRight, BarChart3, Check, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Package, Plus,
 } from "lucide-react";
 import { AuditFlow } from "./audit.tsx";
-import { importRows, parseCsv, suggestMapping } from "./csv.ts";
-import { DEMO_INVOICE, DEMO_RATES } from "./demo.ts";
 import {
-  BENCHMARK_SERVICES, COVERAGE_TARGET, runAudit, VOLUME_BANDS, WEIGHT_BANDS,
+  BENCHMARK_SERVICES, COVERAGE_TARGET, VOLUME_BANDS, WEIGHT_BANDS,
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution, type Coverage, type Volume,
 } from "./freight.ts";
+import { loadOrgId, orgAudit, orgById, ORGS, saveOrgId } from "./orgs.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { coverageOf, loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 
@@ -37,9 +36,27 @@ export function PilotApp() {
   const [flowKey, setFlowKey] = useState(0);
   const [reportKey, setReportKey] = useState(0);
   const [history, setHistory] = useState<StoredAudit[]>(() => loadAudits());
+  const [orgId, setOrgId] = useState(loadOrgId);
+  const org = orgById(orgId);
+  const sampleReport = useMemo(() => orgAudit(org), [org]);
+  const checks = useMemo<StoredAudit[]>(() => [
+    {
+      id: `sample:${org.id}`,
+      name: "Oktober 2026",
+      carrier: org.carrier,
+      createdAt: "2026-10-31T11:00:00.000Z",
+      summary: sampleReport.summary,
+      contributed: false,
+      sampleCount: 0,
+      report: sampleReport,
+      samples: [],
+      orgId: org.id,
+    },
+    ...history.filter((item) => item.orgId === org.id),
+  ], [history, org, sampleReport]);
   const activeTab = view === "report" ? "check" : view;
   const activeLabel = view === "report" ? "Rapport" : NAV.find((tab) => tab.id === activeTab)?.label;
-  const coverage = coverageOf(history);
+  const coverage = coverageOf(checks);
 
   function navigate(next: View) {
     setView(next);
@@ -58,32 +75,34 @@ export function PilotApp() {
     navigate("report");
   }
 
+  function chooseOrg(id: string) {
+    setOrgId(id);
+    saveOrgId(id);
+    setResult(null);
+    if (view === "report") navigate("overview");
+  }
+
   function demo() {
-    const invoice = parseCsv(DEMO_INVOICE);
-    const rates = parseCsv(DEMO_RATES);
     receiveResult({
-      name: "Eksempel · Oktober 2026",
-      carrier: "Demotransportør",
+      name: "Oktober 2026",
+      carrier: org.carrier,
       example: true,
       saved: null,
       input: null,
-      report: runAudit(
-        importRows("invoice", invoice, suggestMapping("invoice", invoice.headers)),
-        importRows("rates", rates, suggestMapping("rates", rates.headers)),
-      ),
+      report: sampleReport,
     });
   }
 
   function openReport(id: string) {
-    const audit = history.find((item) => item.id === id);
+    const audit = checks.find((item) => item.id === id);
     if (!audit) return;
     receiveResult({
       name: audit.name,
       carrier: audit.carrier,
       report: audit.report,
       input: null,
-      example: false,
-      saved: audit,
+      example: id.startsWith("sample:"),
+      saved: id.startsWith("sample:") ? null : audit,
     });
   }
 
@@ -96,7 +115,7 @@ export function PilotApp() {
   async function saveReport(contribution: Contribution | null) {
     const input = result?.input;
     if (!input) return;
-    const audit = recordAudit(input, result.report, contribution);
+    const audit = recordAudit(input, result.report, contribution, org.id);
     remember([audit, ...history.filter((item) => item.id !== audit.id)]);
     setResult((current) => current?.input === input ? { ...current, saved: audit } : current);
   }
@@ -152,6 +171,7 @@ export function PilotApp() {
         <header className="topbar">
           <div className="breadcrumb"><span>Arbejdsrum</span><ChevronRight size={14} /><strong>{activeLabel}</strong></div>
           <div className="topbar-right">
+            <OrgSwitch orgId={org.id} onChange={chooseOrg} />
             <span className="pilot-tag"><i /> Pilot</span>
             <div className="avatar" title="Henrik Gandløse" aria-label="Henrik Gandløse">HG</div>
           </div>
@@ -160,7 +180,7 @@ export function PilotApp() {
         <main className="main-content">
           {view === "overview" ? (
             <Overview
-              history={history}
+              history={checks}
               coverage={coverage}
               onStart={newAudit}
               onExample={demo}
@@ -201,8 +221,8 @@ export function PilotApp() {
                 <button className="button primary" type="button" onClick={newAudit}><Plus size={18} /> Nyt fakturatjek</button>
               </div>
               <section className="panel history-panel">
-                <div className="section-heading"><h2>Seneste kontroller</h2><p>{history.length} gemte rapporter</p></div>
-                <HistoryRows items={history} onOpen={openReport} onStart={newAudit} />
+                <div className="section-heading"><h2>Seneste kontroller</h2><p>{checks.length} kontroller</p></div>
+                <HistoryRows items={checks} onOpen={openReport} onStart={newAudit} />
               </section>
             </div>
           ) : null}
@@ -210,6 +230,51 @@ export function PilotApp() {
         </main>
         <footer className="main-footer"><span>Fragtblik</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
       </div>
+    </div>
+  );
+}
+
+function OrgSwitch({ orgId, onChange }: { orgId: string; onChange: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const org = orgById(orgId);
+  useEffect(() => {
+    if (!open) return;
+    function close(event: PointerEvent) {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+  return (
+    <div className="org-switch" ref={root}>
+      <button
+        type="button"
+        className="org-button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Organisation: ${org.name}`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{org.name}</span>
+        <ChevronDown size={15} />
+      </button>
+      {open ? (
+        <ul className="org-menu" role="listbox" aria-label="Organisationer">
+          {ORGS.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={item.id === org.id}
+                onClick={() => { onChange(item.id); setOpen(false); }}
+              >
+                {item.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

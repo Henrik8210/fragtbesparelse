@@ -4,6 +4,7 @@ const KEY = "fragtblik-pilot-audits";
 
 export type StoredAudit = SavedAudit & {
   samples: { group: string; cvr: string }[];
+  orgId?: string;
 };
 
 export function loadAudits(): StoredAudit[] {
@@ -21,7 +22,7 @@ export function saveAudits(items: StoredAudit[]) {
   localStorage.setItem(KEY, JSON.stringify(items.slice(0, 100)));
 }
 
-export function recordAudit(input: AuditInput, report: AuditReport, contribution: Contribution | null): StoredAudit {
+export function recordAudit(input: AuditInput, report: AuditReport, contribution: Contribution | null, orgId: string): StoredAudit {
   const samples = contribution
     ? benchmarkSamples(report, contribution.volume).map((sample) => ({ group: sample.group, cvr: contribution.cvr }))
     : [];
@@ -35,6 +36,7 @@ export function recordAudit(input: AuditInput, report: AuditReport, contribution
     sampleCount: samples.length,
     report,
     samples,
+    orgId,
   };
 }
 
