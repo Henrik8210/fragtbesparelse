@@ -224,7 +224,7 @@ export const en = {
   "billing.fromBills": "From bills you added",
   "billing.over": "Over budget",
   "billing.under": "Under budget",
-  "billing.choose": "Open a customer from Log in in the upper right. {space} is kept on that account.",
+  "billing.choose": "Open a company from the overview. {space} is kept on that account.",
   "bills.title": "Bills",
   "bills.lede":
     "Add a freight bill for {month}. Type the amount, or upload a text PDF, CSV, or plain text file. Fragtblik reads the total and adds it to this account's spend. The bill is saved on this account.",
@@ -569,7 +569,7 @@ export const da: Record<MessageKey, string> = {
   "billing.fromBills": "Fra regninger du har tilføjet",
   "billing.over": "Over budget",
   "billing.under": "Under budget",
-  "billing.choose": "Åbn en kunde via Log ind øverst til højre. {space} ligger på den konto.",
+  "billing.choose": "Åbn en virksomhed fra oversigten. {space} ligger på den konto.",
   "bills.title": "Regninger",
   "bills.lede":
     "Tilføj en fragtregning for {month}. Skriv beløbet, eller upload en tekst-PDF, CSV eller en ren tekstfil. Fragtblik læser totalen og lægger den til kontoens forbrug. Regningen gemmes på kontoen.",

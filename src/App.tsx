@@ -8,7 +8,6 @@ import { NotFound } from "./pages/NotFound.tsx";
 import { CheckPage } from "./pages/CheckPage.tsx";
 import { HistoryPage } from "./pages/HistoryPage.tsx";
 import { PortfolioPage } from "./pages/PortfolioPage.tsx";
-import { WelcomePage } from "./pages/WelcomePage.tsx";
 import { TenderPage } from "./pages/TenderPage.tsx";
 import { LanguageProvider } from "./language.tsx";
 import { SessionProvider, useSession } from "./session.tsx";
@@ -60,6 +59,5 @@ function HomePage() {
   if (session?.role === "customer" && session.customerId) {
     return <Navigate to={`/customers/${session.customerId}`} replace />;
   }
-  if (session?.role === "admin") return <PortfolioPage />;
-  return <WelcomePage />;
+  return <PortfolioPage />;
 }
