@@ -16,7 +16,9 @@ Still out: tender sending, offer comparison, a live market feed, payments, bank 
 
 ## What this slice does
 
-On the customer overview (`AccountQuestions` in `src/components/AccountQuestions.tsx`):
+The screen is the Danish parcel pilot in `src/pilot/PilotApp.tsx`: Overblik, Fakturakontrol, Historik, and Benchmark. It is a short workspace, not the older account essays. A check compares a CSV invoice with a price file in the browser. Saved reports stay in `localStorage`. The example on Overblik is fictional. Do not present a saved check as a live invoice or a carrier quote.
+
+On the older customer overview (`AccountQuestions` in `src/components/AccountQuestions.tsx`), which is no longer the home screen:
 
 - The three questions, in plain English, from that account's October 2026 lanes.
 - Agreement means lanes whose cause is `contract` or `fuel`. The kroner gap there is "above the signed rates".
