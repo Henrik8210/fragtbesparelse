@@ -74,22 +74,11 @@ function Space({
   if (customerId && !customer) {
     return <NotFound title={t("notFound.noCompany")} body={t("notFound.noCompanyBody")} />;
   }
-  if (customer && !session) {
-    return <NotFound title={t("notFound.signIn")} body={t("notFound.signInShort", { name: customer.name })} />;
-  }
   if (customer && session?.role === "customer" && session.customerId !== customer.id) {
     return <NotFound title={t("notFound.notYours")} body={t("notFound.notYoursPages")} />;
   }
-  if (!session) {
-    return (
-      <div className="page">
-        <h1>{title}</h1>
-        {name === "settings" ? <LanguageSetting /> : null}
-        <p className="lede">{t("gate.signIn")}</p>
-      </div>
-    );
-  }
-  return <div className="page">{children(customer ?? null, session.role)}</div>;
+  const role = session?.role === "customer" ? "customer" : "admin";
+  return <div className="page">{children(customer ?? null, role)}</div>;
 }
 
 function BillingDetail({ customer }: { customer: Customer }) {
