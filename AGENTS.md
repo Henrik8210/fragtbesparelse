@@ -18,7 +18,7 @@ Still out: tender sending, offer comparison, a live market feed, payments, bank 
 
 The screen is the Danish parcel pilot in `src/pilot/PilotApp.tsx`: Overblik, Fakturakontrol, Historik, and Benchmark. It is a short workspace, not the older account essays. A check compares a CSV invoice with a price file in the browser. Saved reports stay in `localStorage`. The example on Overblik is fictional. Do not present a saved check as a live invoice or a carrier quote.
 
-The upper right switches the six sample companies. Each company in `src/pilot/orgs.ts` has an October 2026 invoice and rate file in the same columns as the check. Switching the company changes the figures on the screen. Benchmark shows how many of the other sample companies back each figure. That is coverage, not a live market price. There is no sign-in popup.
+The upper right switches the six sample companies. Each company in `src/pilot/orgs.ts` has an October 2026 invoice and rate file in the same columns as the check. Switching the company changes the figures on the screen. Benchmark shows how many of the other sample companies back each figure. The rows use the earlier carrier names: GLS, DHL, PostNord, Danske Fragtmænd, DSV, Bring, DAO, UPS, and Schenker. That is coverage, not a live market price. There is no sign-in popup.
 
 On the older customer overview (`AccountQuestions` in `src/components/AccountQuestions.tsx`), which is no longer the home screen:
 
