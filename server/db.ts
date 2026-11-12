@@ -95,9 +95,19 @@ async function ensureSeed(): Promise<void> {
     const id = crypto.randomUUID();
     ids.set(person.username, id);
     await insert(
-      `insert into users (id, username, name, role, company_id, lang, sample, seat)
-       values ($1, $2, $3, $4, $5, 'da', 1, $6)`,
-      [id, person.username, person.name, person.role, person.companyId, person.seat],
+      `insert into users (id, username, name, role, company_id, lang, sample, seat, password_hash)
+       values ($1, $2, $3, $4, $5, 'da', 1, $6, $7)`,
+      [
+        id,
+        person.username,
+        person.name,
+        person.role,
+        person.companyId,
+        person.seat,
+        person.username === "admin"
+          ? "scrypt$7b4688a4357c4338a74c5e332131bee5$ba00bab431b5e7d13696cea3194a6c0bda2b4c044cb365e29d81b96a8ea4e3ed"
+          : null,
+      ],
     );
   }
 
