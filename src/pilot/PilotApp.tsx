@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, ArrowUpRight, BarChart3, Check, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
+  ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Package, Plus,
 } from "lucide-react";
 import { AuditFlow } from "./audit.tsx";
 import {
-  BENCHMARK_SERVICES, COVERAGE_TARGET, VOLUME_BANDS, WEIGHT_BANDS,
-  type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution, type Coverage, type Volume,
+  BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
+  type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
 } from "./freight.ts";
-import { loadOrgId, orgAudit, orgById, ORGS, saveOrgId } from "./orgs.ts";
+import { groupPeers, loadOrgId, orgAudit, orgById, ORGS, peerCount, saveOrgId } from "./orgs.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
-import { coverageOf, loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
+import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 
 const NAV = [
   { id: "overview", label: "Overblik", icon: LayoutGrid },
@@ -56,7 +56,7 @@ export function PilotApp() {
   ], [history, org, sampleReport]);
   const activeTab = view === "report" ? "check" : view;
   const activeLabel = view === "report" ? "Rapport" : NAV.find((tab) => tab.id === activeTab)?.label;
-  const coverage = coverageOf(checks);
+  const peers = peerCount(org.id);
 
   function navigate(next: View) {
     setView(next);
@@ -181,7 +181,7 @@ export function PilotApp() {
           {view === "overview" ? (
             <Overview
               history={checks}
-              coverage={coverage}
+              peers={peers}
               onStart={newAudit}
               onExample={demo}
               onOpen={openReport}
@@ -226,7 +226,7 @@ export function PilotApp() {
               </section>
             </div>
           ) : null}
-          {view === "coverage" ? <BenchmarkView coverage={coverage} /> : null}
+          {view === "coverage" ? <BenchmarkView report={sampleReport} orgId={org.id} peers={peers} /> : null}
         </main>
         <footer className="main-footer"><span>Fragtblik</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
       </div>
@@ -320,10 +320,10 @@ function HeroArt() {
 }
 
 function Overview({
-  history, coverage, onStart, onExample, onOpen, onHistory, onCoverage,
+  history, peers, onStart, onExample, onOpen, onHistory, onCoverage,
 }: {
   history: StoredAudit[];
-  coverage: Coverage;
+  peers: number;
   onStart: () => void;
   onExample: () => void;
   onOpen: (id: string) => void;
@@ -332,7 +332,6 @@ function Overview({
 }) {
   const over = history.reduce((total, audit) => total + audit.summary.overOre, 0);
   const contributed = history.filter((audit) => audit.contributed).length;
-  const ready = Object.values(coverage.groups).filter((count) => count >= COVERAGE_TARGET).length;
 
   return (
     <div className="content-flow overview">
@@ -379,9 +378,9 @@ function Overview({
           <div className="icon-box"><BarChart3 size={21} /></div>
           <span className="eyebrow">MARKEDSDATA</span>
           <h2>Benchmark for pakkefragt</h2>
-          <p>Frivillige bidrag bruges til at opbygge datadækning for samme leveringsform, vægt og pakkevolumen.</p>
-          <div className="coverage-mini"><strong>{ready} / 18</strong><span>grupper ved datamålet</span></div>
-          <div className="progress" aria-hidden="true"><div style={{ width: `${ready / 18 * 100}%` }} /></div>
+          <p>Lignende prøvefirmaer bag tallene.</p>
+          <div className="coverage-mini"><strong>{peers} af 5</strong><span>lignende firmaer</span></div>
+          <div className="progress" aria-hidden="true"><div style={{ width: `${peers / 5 * 100}%` }} /></div>
           <button className="text-button" type="button" onClick={onCoverage}>Se datadækning <ArrowRight size={16} /></button>
         </section>
       </div>
@@ -420,33 +419,45 @@ function HistoryRows({ items, onOpen, onStart }: {
   );
 }
 
-function BenchmarkView({ coverage }: { coverage: Coverage }) {
-  const [volume, setVolume] = useState<Volume>("small");
+function BenchmarkView({ report, orgId, peers }: { report: AuditReport; orgId: string; peers: number }) {
+  const gaps = new Map<string, number>();
+  const seen = new Set<string>();
+  for (const line of report.lines) {
+    const service = serviceKey(line.service);
+    if (service !== "pakkeshop" && service !== "hjemmelevering") continue;
+    const band = WEIGHT_BANDS.find((item) => line.weight <= item.max);
+    if (!band || line.differenceOre === null) continue;
+    const key = `${service}|${band.key}`;
+    seen.add(key);
+    if (line.differenceOre > 1) gaps.set(key, (gaps.get(key) ?? 0) + line.differenceOre);
+    else if (!gaps.has(key)) gaps.set(key, 0);
+  }
   const groups = BENCHMARK_SERVICES.flatMap((service) => WEIGHT_BANDS.map((band) => {
-    const key = ["DK", service.key, band.key, volume].join("|");
-    return { key, label: service.label, weight: band.label, count: coverage.groups[key] ?? 0 };
+    const key = `${service.key}|${band.key}`;
+    return {
+      key,
+      label: service.label,
+      weight: band.label,
+      count: groupPeers(orgId, service.key, band.key),
+      over: gaps.get(key) ?? 0,
+      compared: seen.has(key),
+    };
   }));
-  const ready = groups.filter((group) => group.count >= COVERAGE_TARGET).length;
   return (
     <div className="content-flow">
       <div className="page-intro">
         <span className="eyebrow"><i /> DANSK INDENRIGS PAKKEFRAGT</span>
-        <h1>Datadækning for benchmark</h1>
-        <p>Følg antallet af fragtkøbere med kontrollerede prisdata i hver sammenligningsgruppe.</p>
+        <h1>Datadækning</h1>
+        <p>Lignende prøvefirmaer bag tallene. Ikke en markedspris.</p>
       </div>
-      <div className="message info"><Database size={19} /><div><strong>Markedsdata under opbygning</strong><p>Datamålet er 25 forskellige CVR-numre pr. gruppe. Denne fane viser dækningen for de seneste seks kalendermåneder inklusive den aktuelle måned.</p></div></div>
       <div className="stat-grid two">
-        <div className="panel stat"><span>Virksomheder med databidrag</span><strong>{coverage.companies}</strong><small>Unikke CVR-numre på tværs af grupper</small></div>
-        <div className="panel stat"><span>Grupper ved datamålet</span><strong>{ready} af 6</strong><small>I det valgte volumeninterval</small></div>
+        <div className="panel stat"><span>Lignende firmaer</span><strong>{peers} af 5</strong><small>I den samme prøve</small></div>
+        <div className="panel stat"><span>Mulig overfakturering</span><strong>{money(report.summary.overOre)}</strong><small>Oktober 2026</small></div>
       </div>
       <section className="panel table-panel">
-        <div className="section-heading split">
-          <div><h2>Sammenligningsgrupper</h2><p>Danmark til Danmark · DKK</p></div>
-          <label className="select-label">Årligt pakkevolumen
-            <select value={volume} onChange={(event) => setVolume(event.target.value as Volume)}>
-              {VOLUME_BANDS.map((band) => <option key={band.id} value={band.id}>{band.label}</option>)}
-            </select>
-          </label>
+        <div className="section-heading">
+          <h2>Sammenligningsgrupper</h2>
+          <p>Danmark til Danmark · prøvedata</p>
         </div>
         <div className="cohorts">
           {groups.map((group) => (
@@ -454,12 +465,10 @@ function BenchmarkView({ coverage }: { coverage: Coverage }) {
               <div className="icon-box"><Package size={18} /></div>
               <div><strong>{group.label}</strong><small>{group.weight}</small></div>
               <div className="cohort-count">
-                <span>{group.count} / {COVERAGE_TARGET}</span>
-                <div className="progress" aria-hidden="true"><div style={{ width: `${Math.min(100, group.count / COVERAGE_TARGET * 100)}%` }} /></div>
+                <span>{group.compared ? money(group.over) : "—"}</span>
+                <div className="progress" aria-hidden="true"><div style={{ width: `${group.count / 5 * 100}%` }} /></div>
               </div>
-              <span className={`status ${group.count >= COVERAGE_TARGET ? "match" : "review"}`}>
-                {group.count >= COVERAGE_TARGET ? <><Check size={12} /> Ved datamål</> : "Indsamler data"}
-              </span>
+              <span className="status match">{group.count} firmaer</span>
             </div>
           ))}
         </div>
