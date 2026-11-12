@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { accountAnswers } from "../src/data/questions.ts";
+import { passwordOk } from "./passwordPolicy.ts";
 import { customers, latestFromLanes } from "../src/data/portfolio.ts";
 
 const scrypt = promisify(scryptCb);
@@ -154,7 +155,7 @@ async function ensureSeed(): Promise<void> {
 
 async function ensureAdminPassword(): Promise<void> {
   const password = process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "";
-  if (password.length < 4 || password.length > 80) return;
+  if (!passwordOk(password)) return;
   const query = databaseUrl
     ? poolQuery
     : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;

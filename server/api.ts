@@ -4,6 +4,8 @@ import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, hashPassword, sql } from "./db.ts";
+import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
+import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
 
 const SEATS = ["Owner", "Billing", "Operations"] as const;
@@ -61,11 +63,21 @@ function cookieToken(req: IncomingMessage): string | null {
   return null;
 }
 
-function setSessionCookie(res: ServerResponse, token: string | null) {
+function setSessionCookie(req: IncomingMessage, res: ServerResponse, token: string | null) {
+  const proto = req.headers["x-forwarded-proto"];
+  const https = proto === "https" || (Array.isArray(proto) && proto[0] === "https");
+  const secure = https ? "; Secure" : "";
   const value = token
-    ? `fragtblik=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600`
-    : "fragtblik=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0";
+    ? `fragtblik=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600${secure}`
+    : `fragtblik=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`;
   res.setHeader("Set-Cookie", value);
+}
+
+function clientIp(req: IncomingMessage): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const first = raw?.split(",")[0]?.trim();
+  return first || req.socket.remoteAddress || "unknown";
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -103,10 +115,15 @@ async function actor(req: IncomingMessage): Promise<UserRow | null> {
   const token = cookieToken(req);
   if (!token) return null;
   const rows = await sql<UserRow>(
-    `select users.* from sessions join users on users.id = sessions.user_id where sessions.token = $1`,
+    `select users.* from sessions join users on users.id = sessions.user_id
+     where sessions.token = $1 and sessions.created_at > now() - interval '14 days'`,
     [token],
   );
-  return rows[0] ?? null;
+  if (!rows[0]) {
+    await sql("delete from sessions where token = $1", [token]);
+    return null;
+  }
+  return rows[0];
 }
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -129,7 +146,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (method === "POST" && path === "/api/admin-password") {
       const body = (await readJson(req)) as { password?: unknown; current?: unknown };
       const password = typeof body.password === "string" ? body.password : "";
-      if (password.length < 4 || password.length > 80) {
+      if (!passwordOk(password)) {
         send(res, 400, { error: "password" });
         return;
       }
@@ -163,10 +180,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const current = typeof body.current === "string" ? body.current : "";
+      const guessKey = `admin:${admin.id}`;
+      const ipKey = `ip:${clientIp(req)}`;
+      if (loginBlocked(guessKey) || loginBlocked(ipKey)) {
+        send(res, 429, { error: "login" });
+        return;
+      }
       if (!(await checkPassword(current, admin.password_hash))) {
+        loginFailed(guessKey);
+        loginFailed(ipKey);
         send(res, 401, { error: "login" });
         return;
       }
+      loginSucceeded(guessKey);
       await sql("update users set password_hash = $1 where id = $2", [await hashPassword(password), admin.id]);
       const token = cookieToken(req);
       await sql("delete from sessions where user_id = $1 and token <> $2", [admin.id, token]);
@@ -178,15 +204,24 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const body = (await readJson(req)) as { username?: unknown; password?: unknown };
       const username = text(body.username, 40).toLowerCase();
       const password = typeof body.password === "string" ? body.password : "";
+      const userKey = `user:${username}`;
+      const ipKey = `ip:${clientIp(req)}`;
+      if (loginBlocked(userKey) || loginBlocked(ipKey)) {
+        send(res, 429, { error: "login" });
+        return;
+      }
       const rows = await sql<UserRow>("select * from users where username = $1", [username]);
       const user = rows[0];
       if (!user?.password_hash || !(await checkPassword(password, user.password_hash))) {
+        loginFailed(userKey);
+        loginFailed(ipKey);
         send(res, 401, { error: "login" });
         return;
       }
+      loginSucceeded(userKey);
       const token = randomBytes(32).toString("hex");
       await sql("insert into sessions (token, user_id) values ($1, $2)", [token, user.id]);
-      setSessionCookie(res, token);
+      setSessionCookie(req, res, token);
       send(res, 200, { user: publish(user) });
       return;
     }
@@ -225,7 +260,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       const sessionToken = randomBytes(32).toString("hex");
       await sql("insert into sessions (token, user_id) values ($1, $2)", [sessionToken, createdUser.id]);
-      setSessionCookie(res, sessionToken);
+      setSessionCookie(req, res, sessionToken);
       send(res, 201, { ok: true, user: publish(createdUser) });
       return;
     }
@@ -233,7 +268,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (method === "POST" && path === "/api/logout") {
       const token = cookieToken(req);
       if (token) await sql("delete from sessions where token = $1", [token]);
-      setSessionCookie(res, null);
+      setSessionCookie(req, res, null);
       send(res, 200, { ok: true });
       return;
     }
@@ -281,6 +316,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const carrier = text(body.carrier, 80);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000_000_000 || !knownCarrier(carrier)) {
         send(res, 400, { error: "bill" });
+        return;
+      }
+      if (!(await hasRoom("select count(*)::int as n from bills where company_id = $1", [companyId], 200))) {
+        send(res, 429, { error: "limit" });
         return;
       }
       const source = body.source === "file" ? "file" : "manual";
@@ -333,7 +372,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const settingPassword = user.role === "admin";
-      if (settingPassword && (password.length < 4 || password.length > 80)) {
+      if (settingPassword && !passwordOk(password)) {
         send(res, 400, { error: "password" });
         return;
       }
@@ -354,6 +393,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           send(res, 409, { error: "taken" });
           return;
         }
+        if (!(await hasRoom("select count(*)::int as n from users where company_id = $1", [target], 40))) {
+          send(res, 429, { error: "limit" });
+          return;
+        }
         const created = await sql<UserRow>(
           `insert into users (id, username, name, role, company_id, password_hash, seat)
            values ($1, $2, $3, 'customer', $4, $5, $6) returning *`,
@@ -365,6 +408,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const taken = await sql("select id from users where username = $1", [username]);
       if (taken.length > 0) {
         send(res, 409, { error: "taken" });
+        return;
+      }
+      if (!(await hasRoom("select count(*)::int as n from users where role = 'admin'", [], 20))) {
+        send(res, 429, { error: "limit" });
         return;
       }
       const created = await sql<UserRow>(
@@ -384,7 +431,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       const body = (await readJson(req)) as { password?: unknown };
       const password = typeof body.password === "string" ? body.password : "";
-      if (password.length < 4 || password.length > 80) {
+      if (!passwordOk(password)) {
         send(res, 400, { error: "password" });
         return;
       }
@@ -403,6 +450,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 404, { error: "missing" });
         return;
       }
+      await sql("delete from sessions where user_id = $1", [target.id]);
       send(res, 200, { user: publish(target) });
       return;
     }
@@ -450,6 +498,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 400, { error: "review" });
         return;
       }
+      const existingReview = await sql("select 1 from reviews where company_id = $1 and line_key = $2", [companyId, key]);
+      if (existingReview.length === 0 && !(await hasRoom("select count(*)::int as n from reviews where company_id = $1", [companyId], 400))) {
+        send(res, 429, { error: "limit" });
+        return;
+      }
       await sql(
         `insert into reviews (company_id, line_key, state) values ($1, $2, $3)
          on conflict (company_id, line_key) do update set state = excluded.state`,
@@ -483,6 +536,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const summary = JSON.stringify(body.summary).slice(0, 20000);
+      if (!(await hasRoom("select count(*)::int as n from reports where company_id = $1", [companyId], 100))) {
+        send(res, 429, { error: "limit" });
+        return;
+      }
       const rows = await sql(
         `insert into reports (id, company_id, name, summary, created_by) values ($1, $2, $3, $4, $5)
          returning id, name, summary, created_at`,
@@ -511,6 +568,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const company = customers.find((item) => item.id === companyId);
       if (!company) {
         send(res, 404, { error: "missing" });
+        return;
+      }
+      if (!(await hasRoom("select count(*)::int as n from tender_packs where company_id = $1", [companyId], 40))) {
+        send(res, 429, { error: "limit" });
         return;
       }
       const id = crypto.randomUUID();
@@ -574,6 +635,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 400, { error: "line" });
         return;
       }
+      if (!(await hasRoom("select count(*)::int as n from tender_lines where pack_id = $1", [packId], 200))) {
+        send(res, 429, { error: "limit" });
+        return;
+      }
       await sql(
         `insert into tender_lines (id, pack_id, origin, destination, service, carrier, shipments, added)
          values ($1, $2, $3, $4, $5, $6, $7, 1)`,
@@ -623,6 +688,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 400, { error: "comment" });
         return;
       }
+      if (!(await hasRoom("select count(*)::int as n from tender_comments where pack_id = $1", [packId], 100))) {
+        send(res, 429, { error: "limit" });
+        return;
+      }
       await sql(
         "insert into tender_comments (id, pack_id, user_id, body) values ($1, $2, $3, $4)",
         [crypto.randomUUID(), packId, user.id, comment],
@@ -635,6 +704,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   } catch {
     send(res, 500, { error: "server" });
   }
+}
+
+async function hasRoom(countSql: string, params: unknown[], cap: number): Promise<boolean> {
+  const rows = await sql<{ n: number }>(countSql, params);
+  return Number(rows[0]?.n ?? 0) < cap;
 }
 
 function billJson(row: Record<string, unknown>) {
