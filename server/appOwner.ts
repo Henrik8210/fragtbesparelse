@@ -3,15 +3,12 @@ import { getIdentity, verifyIdentity, type HeaderValue, type Identity, type Iden
 
 /** Cursor user id of the person who owns this app. */
 const APP_OWNER_USER_ID = 346683409;
-/** Same person, matched if the token's numeric id is not the one above. */
-const APP_OWNER_EMAIL = "henrikjg2@hotmail.com";
 
 const IDENTITY_NAMES = ["x-cursor-identity-v2", "x-cursor-identity"] as const;
 
 export function viewerMayClaimAdmin(identity: Identity): boolean {
   if (!identity.verified || identity.kind !== "person" || identity.userId <= 0) return false;
-  if (identity.userId === APP_OWNER_USER_ID) return true;
-  return identity.email.trim().toLowerCase() === APP_OWNER_EMAIL;
+  return identity.userId === APP_OWNER_USER_ID;
 }
 
 /** A repeated header is an array, or one comma-joined string. A JWT has no comma, so the first piece is the token. */
