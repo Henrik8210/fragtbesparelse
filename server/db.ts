@@ -24,7 +24,10 @@ export async function sql<T = Record<string, unknown>>(text: string, params: unk
 
 async function ready(): Promise<void> {
   if (databaseUrl === "") await localDb();
-  seeded ??= ensureSeed().catch((error: unknown) => {
+  seeded ??= (async () => {
+    await ensureSeed();
+    await ensureAdminPassword();
+  })().catch((error: unknown) => {
     seeded = undefined;
     throw error;
   });
@@ -95,19 +98,9 @@ async function ensureSeed(): Promise<void> {
     const id = crypto.randomUUID();
     ids.set(person.username, id);
     await insert(
-      `insert into users (id, username, name, role, company_id, lang, sample, seat, password_hash)
-       values ($1, $2, $3, $4, $5, 'da', 1, $6, $7)`,
-      [
-        id,
-        person.username,
-        person.name,
-        person.role,
-        person.companyId,
-        person.seat,
-        person.username === "admin"
-          ? "scrypt$7b4688a4357c4338a74c5e332131bee5$ba00bab431b5e7d13696cea3194a6c0bda2b4c044cb365e29d81b96a8ea4e3ed"
-          : null,
-      ],
+      `insert into users (id, username, name, role, company_id, lang, sample, seat)
+       values ($1, $2, $3, $4, $5, 'da', 1, $6)`,
+      [id, person.username, person.name, person.role, person.companyId, person.seat],
     );
   }
 
@@ -157,6 +150,20 @@ async function ensureSeed(): Promise<void> {
       [crypto.randomUUID(), packId, colleague, "Kan vi udelade ø-levering?"],
     );
   }
+}
+
+async function ensureAdminPassword(): Promise<void> {
+  const password = process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "";
+  if (password.length < 4 || password.length > 80) return;
+  const query = databaseUrl
+    ? poolQuery
+    : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
+  const rows = (await query("select password_hash from users where role = 'admin' and username = 'admin'")) as {
+    password_hash: string | null;
+  }[];
+  const current = rows[0]?.password_hash ?? null;
+  if (!rows[0] || (current && (await checkPassword(password, current)))) return;
+  await query("update users set password_hash = $1 where role = 'admin' and username = 'admin'", [await hashPassword(password)]);
 }
 
 async function poolQuery(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
