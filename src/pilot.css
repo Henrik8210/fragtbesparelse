@@ -78,6 +78,12 @@ small { font-size: .8rem; }
 .pilot-tag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #d7e9e1; border-radius: 99px; background: #edf8f3; color: #245e4d; font-size: .73rem; font-weight: 690; }
 .pilot-tag i, .eyebrow i { width: 6px; height: 6px; border-radius: 50%; background: #29a480; }
 .avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #dfeae5; border: 1px solid #d2e0d9; color: #35524b; font-weight: 750; font-size: .72rem; }
+.org-switch { position: relative; }
+.org-button { display: inline-flex; align-items: center; gap: 8px; max-width: min(240px, 42vw); height: 34px; padding: 0 12px; border: 1px solid #d7e9e1; border-radius: 99px; background: #fff; color: #173c35; font: inherit; font-size: .82rem; font-weight: 680; cursor: pointer; }
+.org-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 220px; margin: 0; padding: 6px; list-style: none; background: #fff; border: 1px solid #d7e9e1; border-radius: 12px; box-shadow: 0 12px 30px rgba(16, 36, 38, .12); }
+.org-menu button { width: 100%; text-align: left; border: 0; background: transparent; border-radius: 8px; padding: 8px 10px; font: inherit; font-size: .86rem; color: #173c35; cursor: pointer; }
+.org-menu button[aria-selected="true"], .org-menu button:hover { background: #edf8f3; }
 
 .main-content { max-width: 1440px; margin: 0 auto; padding: 30px 32px 28px; width: 100%; flex: 1; }
 .content-flow { display: grid; gap: 19px; min-width: 0; }
