@@ -129,27 +129,21 @@ Hjemmelevering;10;99,00;10;0,00;2026-10-01;2026-12-31`),
   },
 ];
 
-const GROUP_KEYS = [
-  "pakkeshop|0-2", "pakkeshop|2-5", "pakkeshop|5-10",
-  "hjemmelevering|0-2", "hjemmelevering|2-5", "hjemmelevering|5-10",
-] as const;
-
 export const SAMPLE_COVERAGE: Record<string, { peers: number; groups: number[] }> = {
-  "nordhavn-living": { peers: 5, groups: [5, 4, 4, 5, 4, 3] },
-  "vesterbro-cloth": { peers: 4, groups: [4, 3, 2, 4, 3, 1] },
-  "kolding-table-co": { peers: 3, groups: [3, 3, 2, 2, 3, 3] },
-  "horsens-gearworks": { peers: 2, groups: [1, 2, 2, 1, 2, 2] },
-  "skive-plate-works": { peers: 1, groups: [1, 1, 0, 1, 1, 0] },
-  "esbjerg-rig-supply": { peers: 4, groups: [2, 4, 1, 3, 4, 4] },
+  "nordhavn-living": { peers: 5, groups: [5, 4, 4, 5, 4, 3, 4, 3, 2] },
+  "vesterbro-cloth": { peers: 4, groups: [4, 3, 2, 4, 3, 1, 2, 1, 0] },
+  "kolding-table-co": { peers: 3, groups: [3, 3, 2, 2, 3, 3, 3, 2, 1] },
+  "horsens-gearworks": { peers: 2, groups: [1, 2, 2, 1, 2, 2, 2, 2, 1] },
+  "skive-plate-works": { peers: 1, groups: [1, 1, 0, 1, 1, 0, 0, 1, 1] },
+  "esbjerg-rig-supply": { peers: 4, groups: [2, 4, 1, 3, 4, 4, 1, 2, 3] },
 };
 
 export function peerCount(orgId: string) {
   return SAMPLE_COVERAGE[orgId]?.peers ?? 0;
 }
 
-export function groupPeers(orgId: string, service: string, band: string) {
-  const index = GROUP_KEYS.indexOf(`${service}|${band}` as (typeof GROUP_KEYS)[number]);
-  return index < 0 ? 0 : SAMPLE_COVERAGE[orgId]?.groups[index] ?? 0;
+export function carrierPeers(orgId: string, index: number) {
+  return SAMPLE_COVERAGE[orgId]?.groups[index] ?? 0;
 }
 
 export function orgById(id: string): Org {

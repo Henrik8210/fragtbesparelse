@@ -3,12 +3,13 @@ import {
   ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Package, Plus,
 } from "lucide-react";
+import { carrierProfiles } from "../data/carriers.ts";
 import { AuditFlow } from "./audit.tsx";
 import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
 } from "./freight.ts";
-import { groupPeers, loadOrgId, orgAudit, orgById, ORGS, peerCount, saveOrgId } from "./orgs.ts";
+import { carrierPeers, loadOrgId, orgAudit, orgById, ORGS, peerCount, saveOrgId } from "./orgs.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 
@@ -432,17 +433,17 @@ function BenchmarkView({ report, orgId, peers }: { report: AuditReport; orgId: s
     if (line.differenceOre > 1) gaps.set(key, (gaps.get(key) ?? 0) + line.differenceOre);
     else if (!gaps.has(key)) gaps.set(key, 0);
   }
-  const groups = BENCHMARK_SERVICES.flatMap((service) => WEIGHT_BANDS.map((band) => {
-    const key = `${service.key}|${band.key}`;
+  const bands = BENCHMARK_SERVICES.flatMap((service) => WEIGHT_BANDS.map((band) => `${service.key}|${band.key}`));
+  const groups = carrierProfiles.map((profile, index) => {
+    const key = bands[index];
     return {
-      key,
-      label: service.label,
-      weight: band.label,
-      count: groupPeers(orgId, service.key, band.key),
-      over: gaps.get(key) ?? 0,
-      compared: seen.has(key),
+      key: profile.name,
+      label: profile.name,
+      count: carrierPeers(orgId, index),
+      over: key ? gaps.get(key) ?? 0 : 0,
+      compared: key ? seen.has(key) : true,
     };
-  }));
+  });
   return (
     <div className="content-flow">
       <div className="page-intro">
@@ -456,14 +457,14 @@ function BenchmarkView({ report, orgId, peers }: { report: AuditReport; orgId: s
       </div>
       <section className="panel table-panel">
         <div className="section-heading">
-          <h2>Sammenligningsgrupper</h2>
+          <h2>Transportører</h2>
           <p>Danmark til Danmark · prøvedata</p>
         </div>
         <div className="cohorts">
           {groups.map((group) => (
             <div className="cohort" key={group.key}>
               <div className="icon-box"><Package size={18} /></div>
-              <div><strong>{group.label}</strong><small>{group.weight}</small></div>
+              <div><strong>{group.label}</strong></div>
               <div className="cohort-count">
                 <span>{group.compared ? money(group.over) : "—"}</span>
                 <div className="progress" aria-hidden="true"><div style={{ width: `${group.count / 5 * 100}%` }} /></div>
