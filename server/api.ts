@@ -109,11 +109,6 @@ async function actor(req: IncomingMessage): Promise<UserRow | null> {
   return rows[0] ?? null;
 }
 
-async function openAdmin(): Promise<UserRow | null> {
-  const rows = await sql<UserRow>("select * from users where role = 'admin' and username = 'admin' limit 1");
-  return rows[0] ?? null;
-}
-
 export async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname.replace(/\/$/, "") || "/";
@@ -243,7 +238,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return;
     }
 
-    const user = (await actor(req)) ?? (await openAdmin());
+    const user = await actor(req);
     if (!user) {
       send(res, 401, { error: "sign-in" });
       return;
