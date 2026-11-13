@@ -26,6 +26,7 @@ export async function sql<T = Record<string, unknown>>(text: string, params: unk
 async function ready(): Promise<void> {
   if (databaseUrl === "") await localDb();
   seeded ??= (async () => {
+    await ensurePilotOrgs();
     await ensureSeed();
     await ensureAdminPassword();
   })().catch((error: unknown) => {
@@ -151,6 +152,22 @@ async function ensureSeed(): Promise<void> {
       [crypto.randomUUID(), packId, colleague, "Kan vi udelade ø-levering?"],
     );
   }
+}
+
+async function ensurePilotOrgs(): Promise<void> {
+  const query = databaseUrl
+    ? poolQuery
+    : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
+  await query(
+    `create table if not exists pilot_orgs (
+      id text primary key,
+      name text not null,
+      carrier text not null,
+      invoice text not null,
+      rates text not null,
+      created_at timestamptz not null default now()
+    )`,
+  );
 }
 
 async function ensureAdminPassword(): Promise<void> {

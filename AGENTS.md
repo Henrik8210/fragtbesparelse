@@ -1,6 +1,6 @@
 # Fragtblik for the next agent
 
-Read this before changing the app. The product is a Vite + React + TypeScript single-page app. Sample freight figures live in source. Anything a person adds stays in the browser.
+Read this before changing the app. The product is a Vite + React + TypeScript single-page app. Sample freight figures live in source. A saved check stays in the browser. An organization an admin creates is stored in Postgres.
 
 ## Vision
 
@@ -18,7 +18,7 @@ Still out: tender sending, offer comparison, a live market feed, payments, bank 
 
 The screen is the Danish parcel pilot in `src/pilot/PilotApp.tsx`: Overblik, Fakturakontrol, Historik, and Benchmark. It is a short workspace, not the older account essays. A check compares a CSV invoice with a price file in the browser. Saved reports stay in `localStorage`. The example on Overblik is fictional. Do not present a saved check as a live invoice or a carrier quote.
 
-The upper right switches the six sample companies. Each company in `src/pilot/orgs.ts` has an October 2026 invoice and rate file in the same columns as the check. Switching the company changes the figures on the screen. Benchmark shows how many of the other sample companies back each figure. The rows use the earlier carrier names: GLS, DHL, PostNord, Danske Fragtmænd, DSV, Bring, DAO, UPS, and Schenker. That is coverage, not a live market price. There is no sign-in popup.
+The upper right switches the six sample companies, plus any organization an admin has created. Created organizations are rows in `pilot_orgs`, read and written through `/api/pilot-orgs` with the existing admin session. That is not Supabase Auth. A new organization has no October sample invoice, so the four screens stay and show an empty check. Each sample company in `src/pilot/orgs.ts` has an October 2026 invoice and rate file in the same columns as the check. Switching the company changes the figures on the screen. Benchmark shows how many of the other sample companies back each figure. The rows use the earlier carrier names: GLS, DHL, PostNord, Danske Fragtmænd, DSV, Bring, DAO, UPS, and Schenker. That is coverage, not a live market price. There is no sign-in popup.
 
 On the older customer overview (`AccountQuestions` in `src/components/AccountQuestions.tsx`), which is no longer the home screen:
 

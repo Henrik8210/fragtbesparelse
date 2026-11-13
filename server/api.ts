@@ -9,6 +9,15 @@ import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
 
 const SEATS = ["Owner", "Billing", "Operations"] as const;
+const BLANK_INVOICE = "forsendelse;dato;service;vaegt_kg;beloeb_dkk;fra_land;til_land\n";
+const BLANK_RATES = "service;maks_kg;grundpris_dkk;braendstof_pct;fast_tillaeg_dkk;gyldig_fra;gyldig_til\n";
+
+type PilotOrg = { id: string; name: string; carrier: string; invoice: string; rates: string };
+
+function orgSlug(name: string): string {
+  const ascii = name.toLowerCase().replace(/æ/g, "ae").replace(/ø/g, "o").replace(/å/g, "a");
+  return ascii.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+}
 
 type UserRow = {
   id: string;
@@ -276,6 +285,57 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const user = await actor(req);
     if (!user) {
       send(res, 401, { error: "sign-in" });
+      return;
+    }
+
+    if (path === "/api/pilot-orgs" && (method === "GET" || method === "POST")) {
+      if (user.role !== "admin") {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      if (method === "GET") {
+        const rows = await sql<PilotOrg>("select id, name, carrier, invoice, rates from pilot_orgs order by created_at");
+        send(res, 200, { orgs: rows });
+        return;
+      }
+      const createKey = `org:${clientIp(req)}`;
+      if (loginBlocked(createKey)) {
+        send(res, 429, { error: "limit" });
+        return;
+      }
+      const body = (await readJson(req)) as { name?: unknown; carrier?: unknown };
+      const name = text(body.name, 80);
+      const carrier = text(body.carrier, 80);
+      const id = orgSlug(name);
+      if (!name || !id) {
+        send(res, 400, { error: "name" });
+        return;
+      }
+      if (!knownCarrier(carrier)) {
+        send(res, 400, { error: "carrier" });
+        return;
+      }
+      if (customers.some((company) => company.id === id)) {
+        send(res, 409, { error: "taken" });
+        return;
+      }
+      if (!(await hasRoom("select count(*)::int as n from pilot_orgs", [], 40))) {
+        send(res, 429, { error: "limit" });
+        return;
+      }
+      const taken = await sql("select id from pilot_orgs where id = $1", [id]);
+      if (taken.length > 0) {
+        send(res, 409, { error: "taken" });
+        return;
+      }
+      loginFailed(createKey);
+      const rows = await sql<PilotOrg>(
+        `insert into pilot_orgs (id, name, carrier, invoice, rates)
+         values ($1, $2, $3, $4, $5)
+         returning id, name, carrier, invoice, rates`,
+        [id, name, carrier, BLANK_INVOICE, BLANK_RATES],
+      );
+      send(res, 201, { org: rows[0] });
       return;
     }
 
