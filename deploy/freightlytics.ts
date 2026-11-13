@@ -45,7 +45,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     await this.starting;
     const container = this.ctx.container;
     if (!container) return new Response("container missing", { status: 503 });
-    return container.getTcpPort(PORT).fetch(forwardToContainer(request));
+    return container.getTcpPort(PORT).fetch(forwardToContainer(request, config.adminPassword));
   }
 
   private async startAndWait(config: StartConfig): Promise<void> {
@@ -87,7 +87,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     for (let attempt = 0; attempt < 40; attempt++) {
       try {
         const response = await port.fetch("http://container/health", { signal: AbortSignal.timeout(1000) });
-        await response.body?.cancel();
+        await response.text();
         if (response.ok) {
           ready = true;
           break;
@@ -110,20 +110,24 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     const token = (await this.ctx.storage.get<string>(TOKEN_KEY)) ?? "";
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (token) headers["x-fragtblik-sync"] = token;
-    let ok = false;
-    try {
-      const response = await port.fetch("http://container/api/internal/admin-password", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ password: secret }),
-        signal: AbortSignal.timeout(20000),
-      });
-      await response.body?.cancel();
-      ok = response.status === 200;
-    } catch {
-      ok = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await port.fetch("http://container/api/internal/admin-password", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ password: secret }),
+          signal: AbortSignal.timeout(20000),
+        });
+        await response.text();
+        if (response.status === 200) {
+          this.syncedFingerprint = fingerprint;
+          return;
+        }
+      } catch {
+        // The health check can leave the container connection unusable. Try again.
+      }
+      await scheduler.wait(200);
     }
-    if (ok) this.syncedFingerprint = fingerprint;
   }
 
   private async replaceStaleContainer(
@@ -215,15 +219,19 @@ function isAdminSyncPath(pathname: string): boolean {
   return path === ADMIN_SYNC_PATH;
 }
 
-function forwardToContainer(request: Request): Request {
+function forwardToContainer(request: Request, secret: string): Request {
   const url = new URL(request.url);
   const publicHost = url.host;
+  const path = url.pathname.replace(/\/$/, "") || "/";
   url.protocol = "http:";
   url.host = "container";
   const headers = new Headers();
   for (const [name, value] of request.headers) {
     if (name === "host" || name === "x-fragtblik-admin-secret" || name === "x-fragtblik-database-url" || name === "x-fragtblik-sync") continue;
     headers.append(name, value);
+  }
+  if ((path === "/api/me" || path === "/api/login") && usablePassword(secret) && headerSafe(secret)) {
+    headers.set("x-fragtblik-admin-secret", secret);
   }
   headers.set("x-forwarded-proto", "https");
   headers.set("x-forwarded-host", publicHost);

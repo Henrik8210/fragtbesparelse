@@ -89,16 +89,21 @@ function clientIp(req: IncomingMessage): string {
   return first || req.socket.remoteAddress || "unknown";
 }
 
+function headerValue(req: IncomingMessage, name: string): string {
+  const header = req.headers[name];
+  return (Array.isArray(header) ? header[0] : header) ?? "";
+}
+
+function suppliedAdminPassword(req: IncomingMessage): string {
+  const password = headerValue(req, "x-fragtblik-admin-secret").trim();
+  return passwordOk(password) ? password : "";
+}
+
 function internalSyncAllowed(req: IncomingMessage): boolean {
-  const host = (req.headers.host ?? "").split(":")[0]?.toLowerCase() ?? "";
-  if (host !== "container" && host !== "127.0.0.1" && host !== "localhost") return false;
-  if (req.headers["x-forwarded-host"] || req.headers["x-forwarded-proto"] || req.headers["x-forwarded-for"]) return false;
   const expected = (process.env.FRAGTBLIK_SYNC_TOKEN ?? "").trim();
   if (!expected) return true;
-  const header = req.headers["x-fragtblik-sync"];
-  const got = Array.isArray(header) ? header[0] : header;
   const left = Buffer.from(expected);
-  const right = Buffer.from(got ?? "");
+  const right = Buffer.from(headerValue(req, "x-fragtblik-sync"));
   if (left.length !== right.length) return false;
   return timingSafeEqual(left, right);
 }
@@ -154,6 +159,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   const path = url.pathname.replace(/\/$/, "") || "/";
   const method = req.method ?? "GET";
   try {
+    const supplied = suppliedAdminPassword(req);
+    if (supplied) {
+      await whenReady();
+      await syncAdminPassword(supplied);
+    }
+
     if (method === "POST" && path === "/api/internal/admin-password") {
       if (!internalSyncAllowed(req)) {
         send(res, 404, { error: "missing" });
@@ -246,10 +257,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const password = typeof body.password === "string" ? body.password : "";
       const userKey = `user:${username}`;
       const ipKey = `ip:${clientIp(req)}`;
-      if (username === "admin") {
-        await whenReady();
-        await syncAdminPassword();
-      }
       const rows = await sql<UserRow>(
         username === "admin"
           ? "select * from users where username = 'admin' and role = 'admin' order by created_at limit 1"

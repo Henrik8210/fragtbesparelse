@@ -25,7 +25,7 @@ npx wrangler secret put DATABASE_URL
 npx wrangler secret put FRAGTBLIK_ADMIN_PASSWORD
 ```
 
-The admin password must be 8 to 80 characters. Wrangler asks for the value on your machine. Leave the secret as it is once it is set. On the next visit the Worker reads that secret and, after the container answers, writes only a hash in `users.password_hash` for username admin. The username is admin. Sign-in compares that row. Do not commit the password and do not paste it into chat.
+The admin password must be 8 to 80 characters. Wrangler asks for the value on your machine. Leave the secret as it is once it is set. On the next visit the Worker reads that secret and sends it with `/api/me` and `/api/login`. The server writes only a hash in `users.password_hash` for username admin before it checks the password. The username is admin. Do not commit the password and do not paste it into chat.
 
 ```bash
 npx wrangler deploy
