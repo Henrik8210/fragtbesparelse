@@ -191,6 +191,10 @@ async function ensurePilotOrgs(): Promise<void> {
 export async function syncAdminPassword(explicit?: string): Promise<void> {
   const password = (explicit ?? process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
   if (!passwordOk(password)) return;
+  const existing = await directQuery<{ password_hash: string | null }>(
+    "select password_hash from users where username = 'admin' order by created_at limit 1",
+  );
+  if (existing[0] && (await checkPassword(password, existing[0].password_hash))) return;
   const hash = await hashPassword(password);
   const updated = await directQuery<{ id: string }>(
     "update users set password_hash = $1, role = 'admin' where username = 'admin' returning id",
