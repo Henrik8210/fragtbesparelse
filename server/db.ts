@@ -172,7 +172,7 @@ async function ensurePilotOrgs(): Promise<void> {
 }
 
 async function ensureAdminPassword(): Promise<void> {
-  const password = process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "";
+  const password = (process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
   if (!passwordOk(password)) return;
   const query = databaseUrl
     ? poolQuery

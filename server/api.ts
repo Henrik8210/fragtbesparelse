@@ -215,23 +215,29 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const password = typeof body.password === "string" ? body.password : "";
       const userKey = `user:${username}`;
       const ipKey = `ip:${clientIp(req)}`;
+      const rows = await sql<UserRow>(
+        username === "admin"
+          ? "select * from users where username = 'admin' and role = 'admin' order by created_at limit 1"
+          : "select * from users where username = $1 order by created_at limit 1",
+        username === "admin" ? [] : [username],
+      );
+      const user = rows[0];
+      if (user?.password_hash && (await checkPassword(password, user.password_hash))) {
+        loginSucceeded(userKey);
+        loginSucceeded(ipKey);
+        const token = randomBytes(32).toString("hex");
+        await sql("insert into sessions (token, user_id) values ($1, $2)", [token, user.id]);
+        setSessionCookie(req, res, token);
+        send(res, 200, { user: publish(user) });
+        return;
+      }
       if (loginBlocked(userKey) || loginBlocked(ipKey)) {
         send(res, 429, { error: "login" });
         return;
       }
-      const rows = await sql<UserRow>("select * from users where username = $1", [username]);
-      const user = rows[0];
-      if (!user?.password_hash || !(await checkPassword(password, user.password_hash))) {
-        loginFailed(userKey);
-        loginFailed(ipKey);
-        send(res, 401, { error: "login" });
-        return;
-      }
-      loginSucceeded(userKey);
-      const token = randomBytes(32).toString("hex");
-      await sql("insert into sessions (token, user_id) values ($1, $2)", [token, user.id]);
-      setSessionCookie(req, res, token);
-      send(res, 200, { user: publish(user) });
+      loginFailed(userKey);
+      loginFailed(ipKey);
+      send(res, 401, { error: "login" });
       return;
     }
 
