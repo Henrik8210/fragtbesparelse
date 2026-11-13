@@ -177,11 +177,8 @@ async function ensureAdminPassword(): Promise<void> {
   const query = databaseUrl
     ? poolQuery
     : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
-  const rows = (await query("select password_hash from users where role = 'admin' and username = 'admin'")) as {
-    password_hash: string | null;
-  }[];
-  const current = rows[0]?.password_hash ?? null;
-  if (!rows[0] || (current && (await checkPassword(password, current)))) return;
+  const rows = (await query("select id from users where role = 'admin' and username = 'admin'")) as { id: string }[];
+  if (!rows[0]) return;
   await query("update users set password_hash = $1 where role = 'admin' and username = 'admin'", [await hashPassword(password)]);
 }
 
