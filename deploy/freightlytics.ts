@@ -3,6 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 const PORT = 8080;
 const INACTIVITY_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const IMAGE_KEY = "container-image";
+const SECRET_KEY = "admin-secret-fingerprint";
 
 type Env = {
   APP: {
@@ -40,11 +41,13 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     const container = this.ctx.container;
     if (!container) throw new Error("container missing");
     const image = container.images.base;
-    await this.replaceStaleContainer(container, image);
+    const secret = (this.env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
+    const fingerprint = secret.length >= 8 && secret.length <= 80 ? await fingerprintOf(secret) : "";
+    await this.replaceStaleContainer(container, image, fingerprint);
     if (!container.running) {
       const env: Record<string, string> = { HOST: "0.0.0.0", PORT: String(PORT) };
       if (this.env.DATABASE_URL) env.DATABASE_URL = this.env.DATABASE_URL;
-      if (this.env.FRAGTBLIK_ADMIN_PASSWORD) env.FRAGTBLIK_ADMIN_PASSWORD = this.env.FRAGTBLIK_ADMIN_PASSWORD;
+      if (fingerprint) env.FRAGTBLIK_ADMIN_PASSWORD = secret;
       container.start({
         image,
         instance: "standard-1",
@@ -52,6 +55,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
         env,
       });
       await this.ctx.storage.put(IMAGE_KEY, image);
+      if (fingerprint) await this.ctx.storage.put(SECRET_KEY, fingerprint);
     }
     this.observeExit();
     try {
@@ -77,6 +81,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
   private async replaceStaleContainer(
     container: NonNullable<DurableObjectState["container"]>,
     image: string,
+    fingerprint: string,
   ): Promise<void> {
     if (!container.running) return;
     const handle = container as unknown as {
@@ -90,13 +95,13 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     } catch {
       runningImage = "";
     }
-    if (runningImage === image) {
-      await this.ctx.storage.put(IMAGE_KEY, image);
+    const imageStale = runningImage === image
+      ? false
+      : runningImage !== "" || (await this.ctx.storage.get<string>(IMAGE_KEY)) !== image;
+    const secretStale = fingerprint !== "" && (await this.ctx.storage.get<string>(SECRET_KEY)) !== fingerprint;
+    if (!imageStale && !secretStale) {
+      if (runningImage === image) await this.ctx.storage.put(IMAGE_KEY, image);
       return;
-    }
-    if (runningImage === "") {
-      const started = await this.ctx.storage.get<string>(IMAGE_KEY);
-      if (started === image) return;
     }
     this.monitorGeneration += 1;
     this.monitoring = undefined;
@@ -119,6 +124,11 @@ export class FreightlyticsContainer extends DurableObject<Env> {
       this.monitoring = undefined;
     }
   }
+}
+
+async function fingerprintOf(secret: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function forwardToContainer(request: Request): Request {
