@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -26,15 +27,31 @@ export async function sql<T = Record<string, unknown>>(text: string, params: unk
 async function ready(): Promise<void> {
   if (databaseUrl === "") await localDb();
   seeded ??= (async () => {
+    if (databaseUrl !== "") await runMigrate();
     await ensurePilotOrgs();
     await ensureSeed();
-    await ensureAdminPassword();
+    await syncAdminPassword();
     await renameAdminLabel();
   })().catch((error: unknown) => {
     seeded = undefined;
     throw error;
   });
   await seeded;
+}
+
+export async function whenReady(): Promise<void> {
+  await ready();
+}
+
+function runMigrate(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["scripts/migrate.mjs"], { stdio: "inherit" });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`migrate exited ${code ?? "null"}`));
+    });
+  });
 }
 
 async function localDb(): Promise<PGlite> {
@@ -171,15 +188,25 @@ async function ensurePilotOrgs(): Promise<void> {
   );
 }
 
-async function ensureAdminPassword(): Promise<void> {
-  const password = (process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
+export async function syncAdminPassword(explicit?: string): Promise<void> {
+  const password = (explicit ?? process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
   if (!passwordOk(password)) return;
-  const query = databaseUrl
-    ? poolQuery
-    : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
-  const rows = (await query("select id from users where role = 'admin' and username = 'admin'")) as { id: string }[];
-  if (!rows[0]) return;
-  await query("update users set password_hash = $1 where role = 'admin' and username = 'admin'", [await hashPassword(password)]);
+  const hash = await hashPassword(password);
+  const updated = await directQuery<{ id: string }>(
+    "update users set password_hash = $1, role = 'admin' where username = 'admin' returning id",
+    [hash],
+  );
+  if (updated.length > 0) return;
+  await directQuery(
+    `insert into users (id, username, name, role, lang, sample, password_hash)
+     values ($1, 'admin', 'Freightlytics-admin', 'admin', 'da', 1, $2)`,
+    [crypto.randomUUID(), hash],
+  );
+}
+
+async function directQuery<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+  if (databaseUrl !== "") return (await poolQuery(text, params)) as T[];
+  return (await (await localDb()).query<T>(text, params)).rows;
 }
 
 async function renameAdminLabel(): Promise<void> {

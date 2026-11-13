@@ -4,7 +4,7 @@ This is the same Node server as the app, reached through a Cloudflare Container.
 
 Cloudflare can run the existing server in a container. Cloudflare does not host Postgres. The database is a normal Postgres connection string, passed in as `DATABASE_URL` when you deploy. Nothing in this file is a secret.
 
-A container sleeps after six hours with no visits. The next visit starts it again. That first visit waits while the server boots. Database migrations run beside the server, so a slow database does not keep the port closed.
+A container sleeps after six hours with no visits. The next visit starts it again. That first visit waits while the server boots. The port opens before migrations. The first database request applies them, then writes the admin hash, so a slow database does not keep the port closed.
 
 `npx wrangler deploy` uploads a new image, but a container that is already running keeps its old image until the Worker stops it. The next visit compares the running image with the one just uploaded. When they differ, that visit stops the old container and starts the new one, then waits until it answers.
 
@@ -25,7 +25,7 @@ npx wrangler secret put DATABASE_URL
 npx wrangler secret put FRAGTBLIK_ADMIN_PASSWORD
 ```
 
-The admin password must be 8 to 80 characters. Wrangler asks for the value on your machine. On each container start, a set `FRAGTBLIK_ADMIN_PASSWORD` replaces the stored admin hash. A container that is already running does not see a new secret until the next visit restarts it. Only the hash is stored, in `users.password_hash` for username admin. The username is admin. Do not commit the password and do not paste it into chat.
+The admin password must be 8 to 80 characters. Wrangler asks for the value on your machine. Leave the secret as it is once it is set. On the next visit the Worker reads that secret and, after the container answers, writes only a hash in `users.password_hash` for username admin. The username is admin. Sign-in compares that row. Do not commit the password and do not paste it into chat.
 
 ```bash
 npx wrangler deploy

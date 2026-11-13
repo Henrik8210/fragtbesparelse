@@ -12,5 +12,5 @@ ENV PORT=8080
 
 EXPOSE 8080
 
-# Migrations must not block the listen. A slow database would leave the port closed and the Worker would throw.
-CMD sh -c "node scripts/migrate.mjs & exec node --experimental-strip-types server/index.ts"
+# The port has to open before migrations. The first database request applies them, then writes the admin hash.
+CMD ["node", "--experimental-strip-types", "server/index.ts"]
