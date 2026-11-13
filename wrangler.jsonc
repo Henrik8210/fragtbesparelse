@@ -1,0 +1,33 @@
+{
+  "name": "freightlytics",
+  "main": "deploy/freightlytics.ts",
+  "compatibility_date": "2026-11-13",
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "freightlytics.io", "custom_domain": true },
+    { "pattern": "www.freightlytics.io", "custom_domain": true }
+  ],
+  "containers": [
+    {
+      "class_name": "FreightlyticsContainer",
+      "scheduling_policy": "durable_object",
+      "max_instances": 1,
+      "images": {
+        "base": {
+          "dockerfile": "./Dockerfile"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "APP", "class_name": "FreightlyticsContainer" }
+    ]
+  },
+  "exports": {
+    "FreightlyticsContainer": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}
