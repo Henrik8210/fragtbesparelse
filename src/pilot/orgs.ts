@@ -153,17 +153,31 @@ export function orgById(id: string): Org {
 export function loadOrgId(): string {
   try {
     const id = localStorage.getItem(ORG_KEY);
-    return id && ORGS.some((org) => org.id === id) ? id : ORGS[0].id;
+    if (id && /^[a-z0-9][a-z0-9-]{0,47}$/.test(id)) return id;
   } catch {
-    return ORGS[0].id;
+    // The browser can block storage. The sample company is the fallback.
   }
+  return ORGS[0].id;
 }
 
 export function saveOrgId(id: string) {
   localStorage.setItem(ORG_KEY, id);
 }
 
+const emptyReport: AuditReport = {
+  lines: [],
+  summary: {
+    billedOre: 0, checkedOre: 0, expectedOre: 0, overOre: 0, underOre: 0,
+    match: 0, over: 0, under: 0, review: 0,
+  },
+};
+
+function hasDataLine(source: string) {
+  return source.split(/\r?\n/).filter((line) => line.trim()).length > 1;
+}
+
 export function orgAudit(org: Org): AuditReport {
+  if (!hasDataLine(org.invoice) || !hasDataLine(org.rates)) return emptyReport;
   const invoiceSheet = parseCsv(org.invoice);
   const rateSheet = parseCsv(org.rates);
   return runAudit(

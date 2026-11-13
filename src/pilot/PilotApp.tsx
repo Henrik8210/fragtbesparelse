@@ -3,13 +3,14 @@ import {
   ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Package, Plus,
 } from "lucide-react";
+import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
 import { AuditFlow } from "./audit.tsx";
 import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
 } from "./freight.ts";
-import { carrierPeers, loadOrgId, orgAudit, orgById, ORGS, peerCount, saveOrgId } from "./orgs.ts";
+import { carrierPeers, loadOrgId, orgAudit, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 
@@ -38,10 +39,17 @@ export function PilotApp() {
   const [reportKey, setReportKey] = useState(0);
   const [history, setHistory] = useState<StoredAudit[]>(() => loadAudits());
   const [orgId, setOrgId] = useState(loadOrgId);
-  const org = orgById(orgId);
+  const [extraOrgs, setExtraOrgs] = useState<Org[]>([]);
+  const [orgsReady, setOrgsReady] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const orgs = useMemo(
+    () => [...ORGS, ...extraOrgs.filter((item) => !ORGS.some((sample) => sample.id === item.id))],
+    [extraOrgs],
+  );
+  const org = orgs.find((item) => item.id === orgId) ?? ORGS[0];
   const sampleReport = useMemo(() => orgAudit(org), [org]);
   const checks = useMemo<StoredAudit[]>(() => [
-    {
+    ...(sampleReport.lines.length === 0 ? [] : [{
       id: `sample:${org.id}`,
       name: "Oktober 2026",
       carrier: org.carrier,
@@ -52,12 +60,35 @@ export function PilotApp() {
       report: sampleReport,
       samples: [],
       orgId: org.id,
-    },
+    }]),
     ...history.filter((item) => item.orgId === org.id),
   ], [history, org, sampleReport]);
   const activeTab = view === "report" ? "check" : view;
   const activeLabel = view === "report" ? "Rapport" : NAV.find((tab) => tab.id === activeTab)?.label;
   const peers = peerCount(org.id);
+
+  useEffect(() => {
+    let gone = false;
+    api<{ orgs: Org[] }>("/api/pilot-orgs")
+      .then((body) => {
+        if (gone) return;
+        setExtraOrgs(body.orgs);
+        setSignedIn(true);
+      })
+      .catch(() => {
+        if (!gone) setSignedIn(false);
+      })
+      .finally(() => {
+        if (!gone) setOrgsReady(true);
+      });
+    return () => {
+      gone = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (orgsReady && !orgs.some((item) => item.id === orgId)) setOrgId(ORGS[0].id);
+  }, [orgsReady, orgs, orgId]);
 
   function navigate(next: View) {
     setView(next);
@@ -172,7 +203,17 @@ export function PilotApp() {
         <header className="topbar">
           <div className="breadcrumb"><span>Arbejdsrum</span><ChevronRight size={14} /><strong>{activeLabel}</strong></div>
           <div className="topbar-right">
-            <OrgSwitch orgId={org.id} onChange={chooseOrg} />
+            <OrgSwitch
+              org={org}
+              orgs={orgs}
+              signedIn={signedIn}
+              onChange={chooseOrg}
+              onCreated={(created) => {
+                setExtraOrgs((current) => [...current.filter((item) => item.id !== created.id), created]);
+                setSignedIn(true);
+                chooseOrg(created.id);
+              }}
+            />
             <span className="pilot-tag"><i /> Pilot</span>
             <div className="avatar" title="Henrik Gandløse" aria-label="Henrik Gandløse">HG</div>
           </div>
@@ -235,10 +276,21 @@ export function PilotApp() {
   );
 }
 
-function OrgSwitch({ orgId, onChange }: { orgId: string; onChange: (id: string) => void }) {
+function OrgSwitch({ org, orgs, signedIn, onChange, onCreated }: {
+  org: Org;
+  orgs: Org[];
+  signedIn: boolean;
+  onChange: (id: string) => void;
+  onCreated: (org: Org) => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [carrier, setCarrier] = useState(carrierProfiles[0]?.name ?? "GLS");
+  const [password, setPassword] = useState("");
+  const [problem, setProblem] = useState("");
+  const [busy, setBusy] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const org = orgById(orgId);
   useEffect(() => {
     if (!open) return;
     function close(event: PointerEvent) {
@@ -247,6 +299,30 @@ function OrgSwitch({ orgId, onChange }: { orgId: string; onChange: (id: string) 
     document.addEventListener("pointerdown", close);
     return () => document.removeEventListener("pointerdown", close);
   }, [open]);
+
+  async function submitOrg() {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setProblem("Skriv et navn.");
+      return;
+    }
+    setBusy(true);
+    setProblem("");
+    try {
+      const created = await createPilotOrg(trimmed, carrier, signedIn ? "" : password);
+      setName("");
+      setPassword("");
+      setCreating(false);
+      setOpen(false);
+      onCreated(created);
+    } catch (error) {
+      const code = error instanceof ApiError ? error.code : "error";
+      setProblem(code === "taken" ? "Navnet er allerede brugt." : code === "sign-in" || code === "login" ? "Adgangskoden blev ikke godkendt." : code === "limit" ? "Der kan ikke oprettes flere lige nu." : "Organisationen blev ikke oprettet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="org-switch" ref={root}>
       <button
@@ -262,7 +338,7 @@ function OrgSwitch({ orgId, onChange }: { orgId: string; onChange: (id: string) 
       </button>
       {open ? (
         <ul className="org-menu" role="listbox" aria-label="Organisationer">
-          {ORGS.map((item) => (
+          {orgs.map((item) => (
             <li key={item.id}>
               <button
                 type="button"
@@ -274,10 +350,46 @@ function OrgSwitch({ orgId, onChange }: { orgId: string; onChange: (id: string) 
               </button>
             </li>
           ))}
+          <li>
+            {creating ? (
+              <form
+                className="org-create"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitOrg();
+                }}
+              >
+                <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Navn" aria-label="Navn" maxLength={80} required />
+                <select value={carrier} onChange={(event) => setCarrier(event.target.value)} aria-label="Transportør">
+                  {carrierProfiles.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+                </select>
+                {signedIn ? null : (
+                  <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Admin-adgangskode" aria-label="Admin-adgangskode" type="password" autoComplete="current-password" required />
+                )}
+                {problem ? <p className="org-note">{problem}</p> : null}
+                <button className="button primary" type="submit" disabled={busy}>Opret</button>
+              </form>
+            ) : (
+              <button type="button" onClick={() => { setCreating(true); setProblem(""); }}>Opret organisation</button>
+            )}
+          </li>
         </ul>
       ) : null}
     </div>
   );
+}
+
+async function createPilotOrg(name: string, carrier: string, password: string): Promise<Org> {
+  const body = JSON.stringify({ name, carrier });
+  try {
+    const created = await api<{ org: Org }>("/api/pilot-orgs", { method: "POST", body });
+    return created.org;
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.code !== "sign-in" || !password) throw error;
+    await api("/api/login", { method: "POST", body: JSON.stringify({ username: "admin", password }) });
+    const created = await api<{ org: Org }>("/api/pilot-orgs", { method: "POST", body });
+    return created.org;
+  }
 }
 
 function BrandMark() {
