@@ -4,6 +4,8 @@ const PORT = 8080;
 const INACTIVITY_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const IMAGE_KEY = "container-image";
 const SECRET_KEY = "admin-secret-fingerprint";
+const TOKEN_KEY = "admin-sync-token";
+const ADMIN_SYNC_PATH = "/api/internal/admin-password";
 
 type Env = {
   APP: {
@@ -13,10 +15,16 @@ type Env = {
   FRAGTBLIK_ADMIN_PASSWORD?: string;
 };
 
+type StartConfig = {
+  adminPassword: string;
+  databaseUrl: string;
+};
+
 export class FreightlyticsContainer extends DurableObject<Env> {
   private starting: Promise<void> | undefined;
   private monitoring: Promise<void> | undefined;
   private monitorGeneration = 0;
+  private syncedFingerprint = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -28,7 +36,10 @@ export class FreightlyticsContainer extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    this.starting ??= this.startAndWait().finally(() => {
+    const url = new URL(request.url);
+    if (isAdminSyncPath(url.pathname)) return new Response("not found", { status: 404 });
+    const config = readStartConfig(this.env, request);
+    this.starting ??= this.startAndWait(config).finally(() => {
       this.starting = undefined;
     });
     await this.starting;
@@ -37,16 +48,23 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     return container.getTcpPort(PORT).fetch(forwardToContainer(request));
   }
 
-  private async startAndWait(): Promise<void> {
+  private async startAndWait(config: StartConfig): Promise<void> {
     const container = this.ctx.container;
     if (!container) throw new Error("container missing");
     const image = container.images.base;
-    const secret = (this.env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
-    const fingerprint = secret.length >= 8 && secret.length <= 80 ? await fingerprintOf(secret) : "";
+    const secret = config.adminPassword;
+    const fingerprint = secret ? await fingerprintOf(secret) : "";
     await this.replaceStaleContainer(container, image, fingerprint);
     if (!container.running) {
-      const env: Record<string, string> = { HOST: "0.0.0.0", PORT: String(PORT) };
-      if (this.env.DATABASE_URL) env.DATABASE_URL = this.env.DATABASE_URL;
+      this.syncedFingerprint = "";
+      const token = newSyncToken();
+      await this.ctx.storage.put(TOKEN_KEY, token);
+      const env: Record<string, string> = {
+        HOST: "0.0.0.0",
+        PORT: String(PORT),
+        FRAGTBLIK_SYNC_TOKEN: token,
+      };
+      if (config.databaseUrl) env.DATABASE_URL = config.databaseUrl;
       if (fingerprint) env.FRAGTBLIK_ADMIN_PASSWORD = secret;
       container.start({
         image,
@@ -65,17 +83,47 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     }
 
     const port = container.getTcpPort(PORT);
+    let ready = false;
     for (let attempt = 0; attempt < 40; attempt++) {
       try {
         const response = await port.fetch("http://container/health", { signal: AbortSignal.timeout(1000) });
         await response.body?.cancel();
-        if (response.ok) return;
+        if (response.ok) {
+          ready = true;
+          break;
+        }
       } catch {
         // The process is still starting.
       }
       await scheduler.wait(500);
     }
-    throw new Error("Freightlytics did not become ready");
+    if (!ready) throw new Error("Freightlytics did not become ready");
+    if (fingerprint) await this.pushAdminPassword(port, secret, fingerprint);
+  }
+
+  private async pushAdminPassword(
+    port: { fetch(input: string, init?: RequestInit): Promise<Response> },
+    secret: string,
+    fingerprint: string,
+  ): Promise<void> {
+    if (this.syncedFingerprint === fingerprint) return;
+    const token = (await this.ctx.storage.get<string>(TOKEN_KEY)) ?? "";
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (token) headers["x-fragtblik-sync"] = token;
+    let ok = false;
+    try {
+      const response = await port.fetch("http://container/api/internal/admin-password", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ password: secret }),
+        signal: AbortSignal.timeout(20000),
+      });
+      await response.body?.cancel();
+      ok = response.status === 200;
+    } catch {
+      ok = false;
+    }
+    if (ok) this.syncedFingerprint = fingerprint;
   }
 
   private async replaceStaleContainer(
@@ -105,6 +153,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     }
     this.monitorGeneration += 1;
     this.monitoring = undefined;
+    this.syncedFingerprint = "";
     await handle.destroy();
   }
 
@@ -126,9 +175,44 @@ export class FreightlyticsContainer extends DurableObject<Env> {
   }
 }
 
+function readStartConfig(env: Env, request: Request): StartConfig {
+  const adminFromEnv = (env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
+  const adminFromHeader = (request.headers.get("x-fragtblik-admin-secret") ?? "").trim();
+  const adminPassword = usablePassword(adminFromEnv)
+    ? adminFromEnv
+    : usablePassword(adminFromHeader)
+      ? adminFromHeader
+      : "";
+  const databaseFromEnv = (env.DATABASE_URL ?? "").trim();
+  const databaseFromHeader = (request.headers.get("x-fragtblik-database-url") ?? "").trim();
+  return {
+    adminPassword,
+    databaseUrl: databaseFromEnv || (headerSafe(databaseFromHeader) ? databaseFromHeader : ""),
+  };
+}
+
+function usablePassword(value: string): boolean {
+  return value.length >= 8 && value.length <= 80;
+}
+
+function headerSafe(value: string): boolean {
+  return value.length > 0 && value.length < 4096 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function newSyncToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function fingerprintOf(secret: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function isAdminSyncPath(pathname: string): boolean {
+  const path = pathname.replace(/\/$/, "") || "/";
+  return path === ADMIN_SYNC_PATH;
 }
 
 function forwardToContainer(request: Request): Request {
@@ -138,7 +222,7 @@ function forwardToContainer(request: Request): Request {
   url.host = "container";
   const headers = new Headers();
   for (const [name, value] of request.headers) {
-    if (name === "host") continue;
+    if (name === "host" || name === "x-fragtblik-admin-secret" || name === "x-fragtblik-database-url" || name === "x-fragtblik-sync") continue;
     headers.append(name, value);
   }
   headers.set("x-forwarded-proto", "https");
@@ -152,6 +236,15 @@ function forwardToContainer(request: Request): Request {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return env.APP.getByName("freightlytics").fetch(request);
+    const url = new URL(request.url);
+    if (isAdminSyncPath(url.pathname)) return new Response("not found", { status: 404 });
+    const headers = new Headers(request.headers);
+    headers.delete("x-fragtblik-admin-secret");
+    headers.delete("x-fragtblik-database-url");
+    const secret = (env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
+    if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
+    const databaseUrl = (env.DATABASE_URL ?? "").trim();
+    if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
+    return env.APP.getByName("freightlytics").fetch(new Request(request, { headers }));
   },
 };

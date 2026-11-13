@@ -1,9 +1,9 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
-import { checkPassword, hashPassword, sql } from "./db.ts";
+import { checkPassword, hashPassword, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
@@ -89,6 +89,20 @@ function clientIp(req: IncomingMessage): string {
   return first || req.socket.remoteAddress || "unknown";
 }
 
+function internalSyncAllowed(req: IncomingMessage): boolean {
+  const host = (req.headers.host ?? "").split(":")[0]?.toLowerCase() ?? "";
+  if (host !== "container" && host !== "127.0.0.1" && host !== "localhost") return false;
+  if (req.headers["x-forwarded-host"] || req.headers["x-forwarded-proto"] || req.headers["x-forwarded-for"]) return false;
+  const expected = (process.env.FRAGTBLIK_SYNC_TOKEN ?? "").trim();
+  if (!expected) return true;
+  const header = req.headers["x-fragtblik-sync"];
+  const got = Array.isArray(header) ? header[0] : header;
+  const left = Buffer.from(expected);
+  const right = Buffer.from(got ?? "");
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -140,6 +154,23 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   const path = url.pathname.replace(/\/$/, "") || "/";
   const method = req.method ?? "GET";
   try {
+    if (method === "POST" && path === "/api/internal/admin-password") {
+      if (!internalSyncAllowed(req)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      const body = (await readJson(req)) as { password?: unknown };
+      const password = typeof body.password === "string" ? body.password.trim() : "";
+      if (!passwordOk(password)) {
+        send(res, 400, { error: "password" });
+        return;
+      }
+      await whenReady();
+      await syncAdminPassword(password);
+      send(res, 200, { ok: true });
+      return;
+    }
+
     if (method === "GET" && path === "/api/sign-in-state") {
       const rows = await sql<{ ready: number }>(
         "select count(*)::int as ready from users where role = 'admin' and password_hash is not null",
@@ -215,6 +246,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const password = typeof body.password === "string" ? body.password : "";
       const userKey = `user:${username}`;
       const ipKey = `ip:${clientIp(req)}`;
+      if (username === "admin") {
+        await whenReady();
+        await syncAdminPassword();
+      }
       const rows = await sql<UserRow>(
         username === "admin"
           ? "select * from users where username = 'admin' and role = 'admin' order by created_at limit 1"
