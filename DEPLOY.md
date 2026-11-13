@@ -6,6 +6,8 @@ Cloudflare can run the existing server in a container. Cloudflare does not host 
 
 A container sleeps after six hours with no visits. The next visit starts it again. That first visit waits while the server boots. Database migrations run beside the server, so a slow database does not keep the port closed.
 
+`npx wrangler deploy` uploads a new image, but a container that is already running keeps its old image until the Worker stops it. The next visit compares the running image with the one just uploaded. When they differ, that visit stops the old container and starts the new one, then waits until it answers.
+
 ## What you do on your machine
 
 Docker Desktop has to be running. `docker info` should return.
