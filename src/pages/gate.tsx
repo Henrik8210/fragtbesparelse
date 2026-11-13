@@ -24,7 +24,7 @@ export function useCustomerGate(): Gate {
       session: session ?? {
         id: "open-admin",
         username: "admin",
-        name: "Fragtblik-admin",
+        name: "Freightlytics-admin",
         role: "admin",
         customerId: null,
         lang: "da",

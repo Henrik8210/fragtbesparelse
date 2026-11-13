@@ -29,6 +29,7 @@ async function ready(): Promise<void> {
     await ensurePilotOrgs();
     await ensureSeed();
     await ensureAdminPassword();
+    await renameAdminLabel();
   })().catch((error: unknown) => {
     seeded = undefined;
     throw error;
@@ -86,7 +87,7 @@ async function ensureSeed(): Promise<void> {
   }
 
   const people: { username: string; name: string; role: "admin" | "customer"; companyId: string | null; seat: string | null }[] = [
-    { username: "admin", name: "Fragtblik-admin", role: "admin", companyId: null, seat: null },
+    { username: "admin", name: "Freightlytics-admin", role: "admin", companyId: null, seat: null },
     { username: "nordhavn", name: "Nordhavn Living", role: "customer", companyId: "nordhavn-living", seat: "Owner" },
     { username: "nordhavn-kollega", name: "Maja Holm", role: "customer", companyId: "nordhavn-living", seat: "Operations" },
     { username: "vesterbro", name: "Vesterbro Cloth", role: "customer", companyId: "vesterbro-cloth", seat: "Owner" },
@@ -182,6 +183,13 @@ async function ensureAdminPassword(): Promise<void> {
   const current = rows[0]?.password_hash ?? null;
   if (!rows[0] || (current && (await checkPassword(password, current)))) return;
   await query("update users set password_hash = $1 where role = 'admin' and username = 'admin'", [await hashPassword(password)]);
+}
+
+async function renameAdminLabel(): Promise<void> {
+  const query = databaseUrl
+    ? poolQuery
+    : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
+  await query("update users set name = $1 where username = 'admin' and name = 'Fragtblik-admin'", ["Freightlytics-admin"]);
 }
 
 async function poolQuery(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {

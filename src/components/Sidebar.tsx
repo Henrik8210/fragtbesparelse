@@ -69,7 +69,7 @@ export function Sidebar() {
       <aside id="sidebar" className="sidebar">
         <div className="sidebar-head">
           <NavLink to={home} end className="brand sidebar-brand" aria-label={t("nav.home")} onClick={closeOnNarrow}>
-            <span className="brand-name">Fragtblik</span>
+            <span className="brand-name">Freightlytics</span>
           </NavLink>
           <button
             type="button"

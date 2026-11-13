@@ -35,7 +35,7 @@ function CustomerDetail({ customer, admin }: { customer: Customer; admin: boolea
   const latestMonth = phrase(`month.${MONTHS[MONTHS.length - 1].id}`, LATEST_MONTH);
 
   useEffect(() => {
-    document.title = `${customer.name} · Fragtblik`;
+    document.title = `${customer.name} · Freightlytics`;
   }, [customer.name]);
 
   return (
