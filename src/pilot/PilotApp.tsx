@@ -41,7 +41,7 @@ export function PilotApp() {
   const [orgId, setOrgId] = useState(loadOrgId);
   const [extraOrgs, setExtraOrgs] = useState<Org[]>([]);
   const [orgsReady, setOrgsReady] = useState(false);
-  const [signedIn, setSignedIn] = useState(false);
+  const [gate, setGate] = useState<"checking" | "closed" | "open">("checking");
   const orgs = useMemo(
     () => [...ORGS, ...extraOrgs.filter((item) => !ORGS.some((sample) => sample.id === item.id))],
     [extraOrgs],
@@ -69,17 +69,30 @@ export function PilotApp() {
 
   useEffect(() => {
     let gone = false;
-    api<{ orgs: Org[] }>("/api/pilot-orgs")
-      .then((body) => {
+    api<{ user: { role: string } | null }>("/api/me")
+      .then(async (me) => {
         if (gone) return;
-        setExtraOrgs(body.orgs);
-        setSignedIn(true);
+        if (!me.user) {
+          setGate("closed");
+          setOrgsReady(true);
+          return;
+        }
+        if (me.user.role === "admin") {
+          try {
+            const body = await api<{ orgs: Org[] }>("/api/pilot-orgs");
+            if (!gone) setExtraOrgs(body.orgs);
+          } catch {
+            // The sample companies still show when the saved list cannot be read.
+          }
+        }
+        setGate("open");
+        setOrgsReady(true);
       })
       .catch(() => {
-        if (!gone) setSignedIn(false);
-      })
-      .finally(() => {
-        if (!gone) setOrgsReady(true);
+        if (!gone) {
+          setGate("closed");
+          setOrgsReady(true);
+        }
       });
     return () => {
       gone = true;
@@ -169,12 +182,23 @@ export function PilotApp() {
     setResult((current) => current?.saved?.id === id && audit ? { ...current, saved: audit } : current);
   }
 
+  async function enter(username: string, password: string) {
+    await api("/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
+    const body = await api<{ orgs: Org[] }>("/api/pilot-orgs");
+    setExtraOrgs(body.orgs);
+    setGate("open");
+  }
+
+  if (gate !== "open") {
+    return <LoginWall ready={gate === "closed"} onEnter={enter} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <button className="brand" type="button" onClick={() => navigate("overview")} aria-label="Fragtblik overblik">
+        <button className="brand" type="button" onClick={() => navigate("overview")} aria-label="Freightlytics overblik">
           <BrandMark />
-          <span>Fragtblik<span className="brand-sub">FRAGTØKONOMI</span></span>
+          <span>Freightlytics<span className="brand-sub">FRAGTØKONOMI</span></span>
         </button>
         <div className="workspace-label">ARBEJDSRUM</div>
         <nav aria-label="Hovedmenu">
@@ -206,13 +230,12 @@ export function PilotApp() {
             <OrgSwitch
               org={org}
               orgs={orgs}
-              signedIn={signedIn}
               onChange={chooseOrg}
               onCreated={(created) => {
                 setExtraOrgs((current) => [...current.filter((item) => item.id !== created.id), created]);
-                setSignedIn(true);
                 chooseOrg(created.id);
               }}
+              onSignedOut={() => setGate("closed")}
             />
             <span className="pilot-tag"><i /> Pilot</span>
             <div className="avatar" title="Henrik Gandløse" aria-label="Henrik Gandløse">HG</div>
@@ -270,24 +293,23 @@ export function PilotApp() {
           ) : null}
           {view === "coverage" ? <BenchmarkView report={sampleReport} orgId={org.id} peers={peers} /> : null}
         </main>
-        <footer className="main-footer"><span>Fragtblik</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
+        <footer className="main-footer"><span>Freightlytics</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
       </div>
     </div>
   );
 }
 
-function OrgSwitch({ org, orgs, signedIn, onChange, onCreated }: {
+function OrgSwitch({ org, orgs, onChange, onCreated, onSignedOut }: {
   org: Org;
   orgs: Org[];
-  signedIn: boolean;
   onChange: (id: string) => void;
   onCreated: (org: Org) => void;
+  onSignedOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [carrier, setCarrier] = useState(carrierProfiles[0]?.name ?? "GLS");
-  const [password, setPassword] = useState("");
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -309,15 +331,18 @@ function OrgSwitch({ org, orgs, signedIn, onChange, onCreated }: {
     setBusy(true);
     setProblem("");
     try {
-      const created = await createPilotOrg(trimmed, carrier, signedIn ? "" : password);
+      const created = await createPilotOrg(trimmed, carrier);
       setName("");
-      setPassword("");
       setCreating(false);
       setOpen(false);
       onCreated(created);
     } catch (error) {
       const code = error instanceof ApiError ? error.code : "error";
-      setProblem(code === "taken" ? "Navnet er allerede brugt." : code === "sign-in" || code === "login" ? "Adgangskoden blev ikke godkendt." : code === "limit" ? "Der kan ikke oprettes flere lige nu." : "Organisationen blev ikke oprettet.");
+      if (code === "sign-in") {
+        onSignedOut();
+        return;
+      }
+      setProblem(code === "taken" ? "Navnet er allerede brugt." : code === "limit" ? "Der kan ikke oprettes flere lige nu." : "Organisationen blev ikke oprettet.");
     } finally {
       setBusy(false);
     }
@@ -363,9 +388,6 @@ function OrgSwitch({ org, orgs, signedIn, onChange, onCreated }: {
                 <select value={carrier} onChange={(event) => setCarrier(event.target.value)} aria-label="Transportør">
                   {carrierProfiles.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
                 </select>
-                {signedIn ? null : (
-                  <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Admin-adgangskode" aria-label="Admin-adgangskode" type="password" autoComplete="current-password" required />
-                )}
                 {problem ? <p className="org-note">{problem}</p> : null}
                 <button className="button primary" type="submit" disabled={busy}>Opret</button>
               </form>
@@ -379,17 +401,54 @@ function OrgSwitch({ org, orgs, signedIn, onChange, onCreated }: {
   );
 }
 
-async function createPilotOrg(name: string, carrier: string, password: string): Promise<Org> {
-  const body = JSON.stringify({ name, carrier });
-  try {
-    const created = await api<{ org: Org }>("/api/pilot-orgs", { method: "POST", body });
-    return created.org;
-  } catch (error) {
-    if (!(error instanceof ApiError) || error.code !== "sign-in" || !password) throw error;
-    await api("/api/login", { method: "POST", body: JSON.stringify({ username: "admin", password }) });
-    const created = await api<{ org: Org }>("/api/pilot-orgs", { method: "POST", body });
-    return created.org;
-  }
+async function createPilotOrg(name: string, carrier: string): Promise<Org> {
+  const created = await api<{ org: Org }>("/api/pilot-orgs", {
+    method: "POST",
+    body: JSON.stringify({ name, carrier }),
+  });
+  return created.org;
+}
+
+function LoginWall({ ready, onEnter }: { ready: boolean; onEnter: (username: string, password: string) => Promise<void> }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [problem, setProblem] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    document.title = "Log ind · Freightlytics";
+  }, []);
+  return (
+    <main className="login-wall">
+      <form
+        className="login-card"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setBusy(true);
+          setProblem("");
+          void onEnter(username.trim(), password)
+            .catch(() => setProblem("Brugernavn og adgangskode passer ikke sammen."))
+            .finally(() => {
+              setPassword("");
+              setBusy(false);
+            });
+        }}
+      >
+        <BrandMark />
+        <h1>Freightlytics</h1>
+        <p>Log ind for at åbne arbejdsrummet.</p>
+        <label>
+          Brugernavn
+          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
+        </label>
+        <label>
+          Adgangskode
+          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
+        </label>
+        {problem ? <p className="org-note">{problem}</p> : null}
+        <button className="button primary" type="submit" disabled={!ready || busy}>Log ind</button>
+      </form>
+    </main>
+  );
 }
 
 function BrandMark() {
@@ -449,7 +508,7 @@ function Overview({
   return (
     <div className="content-flow overview">
       <div className="page-intro">
-        <span className="eyebrow"><i /> FRAGTBLIK ARBEJDSRUM</span>
+        <span className="eyebrow"><i /> FREIGHTLYTICS ARBEJDSRUM</span>
         <h1>Overblik</h1>
         <p>Kontrollér jeres fragtregninger og følg de afvigelser, I finder.</p>
       </div>
@@ -457,7 +516,7 @@ function Overview({
         <div className="hero-copy">
           <span className="hero-label"><span /> GRATIS FAKTURAKONTROL</span>
           <h2>Betaler I den aftalte<br className="desktop-only" /> fragtpris?</h2>
-          <p>Indlæs en faktura og jeres prisaftale. Fragtblik sammenholder beløbene og viser, hvad I kan tage op med transportøren.</p>
+          <p>Indlæs en faktura og jeres prisaftale. Freightlytics sammenholder beløbene og viser, hvad I kan tage op med transportøren.</p>
           <div className="actions">
             <button type="button" className="button hero-primary" onClick={onStart}>Start fakturatjek <ArrowRight size={18} /></button>
             <button type="button" className="button hero-secondary" onClick={onExample}>Se eksempel <ArrowUpRight size={16} /></button>

@@ -101,7 +101,7 @@ export function ReportView({
           <p>{carrier ? `${carrier} · ` : ""}{report.lines.length.toLocaleString("da-DK")} forsendelser · DKK ekskl. moms</p>
         </div>
         <div className="actions">
-          <button type="button" className="button secondary" onClick={() => downloadCsv("fragtblik-fakturarapport.csv", reportCsv(report))}><ArrowDownToLine size={17} /> Eksportér CSV</button>
+          <button type="button" className="button secondary" onClick={() => downloadCsv("freightlytics-fakturarapport.csv", reportCsv(report))}><ArrowDownToLine size={17} /> Eksportér CSV</button>
           {!example && !saved ? (
             <button type="button" className="button primary" aria-expanded={showSave} onClick={() => { setShowSave(!showSave); setError(""); }}><Save size={17} /> Gem rapport</button>
           ) : null}

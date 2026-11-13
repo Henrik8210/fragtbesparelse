@@ -64,7 +64,7 @@ function Space({
     name === "billing" ? t("billing.title") : name === "bills" ? t("bills.title") : name === "users" ? t("users.title") : t("settings.title");
 
   useEffect(() => {
-    document.title = `${title} · Fragtblik`;
+    document.title = `${title} · Freightlytics`;
   }, [title]);
 
   if (!ready) return null;

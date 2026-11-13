@@ -36,5 +36,5 @@ const server = createServer((req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Fragtblik listening on http://${host}:${port}`);
+  console.log(`Freightlytics listening on http://${host}:${port}`);
 });
