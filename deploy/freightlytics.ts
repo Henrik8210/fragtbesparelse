@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 
 const PORT = 8080;
 const INACTIVITY_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+const IMAGE_KEY = "container-image";
 
 type Env = {
   APP: {
@@ -14,6 +15,7 @@ type Env = {
 export class FreightlyticsContainer extends DurableObject<Env> {
   private starting: Promise<void> | undefined;
   private monitoring: Promise<void> | undefined;
+  private monitorGeneration = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -37,16 +39,19 @@ export class FreightlyticsContainer extends DurableObject<Env> {
   private async startAndWait(): Promise<void> {
     const container = this.ctx.container;
     if (!container) throw new Error("container missing");
+    const image = container.images.base;
+    await this.replaceStaleContainer(container, image);
     if (!container.running) {
       const env: Record<string, string> = { HOST: "0.0.0.0", PORT: String(PORT) };
       if (this.env.DATABASE_URL) env.DATABASE_URL = this.env.DATABASE_URL;
       if (this.env.FRAGTBLIK_ADMIN_PASSWORD) env.FRAGTBLIK_ADMIN_PASSWORD = this.env.FRAGTBLIK_ADMIN_PASSWORD;
       container.start({
-        image: container.images.base,
+        image,
         instance: "standard-1",
         enableInternet: true,
         env,
       });
+      await this.ctx.storage.put(IMAGE_KEY, image);
     }
     this.observeExit();
     try {
@@ -69,15 +74,45 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     throw new Error("Freightlytics did not become ready");
   }
 
+  private async replaceStaleContainer(
+    container: NonNullable<DurableObjectState["container"]>,
+    image: string,
+  ): Promise<void> {
+    if (!container.running) return;
+    const handle = container as unknown as {
+      inspect(): Promise<{ image: string } | null>;
+      destroy(): Promise<void>;
+    };
+    let runningImage = "";
+    try {
+      const info = await handle.inspect();
+      runningImage = info?.image ?? "";
+    } catch {
+      runningImage = "";
+    }
+    if (runningImage === image) {
+      await this.ctx.storage.put(IMAGE_KEY, image);
+      return;
+    }
+    if (runningImage === "") {
+      const started = await this.ctx.storage.get<string>(IMAGE_KEY);
+      if (started === image) return;
+    }
+    this.monitorGeneration += 1;
+    this.monitoring = undefined;
+    await handle.destroy();
+  }
+
   private observeExit(): void {
     if (this.monitoring || !this.ctx.container) return;
+    const generation = ++this.monitorGeneration;
     try {
       this.monitoring = this.ctx.container
         .monitor()
         .then(() => undefined)
         .catch(() => undefined)
         .finally(() => {
-          this.monitoring = undefined;
+          if (this.monitorGeneration === generation) this.monitoring = undefined;
         });
       this.ctx.waitUntil(this.monitoring);
     } catch {
