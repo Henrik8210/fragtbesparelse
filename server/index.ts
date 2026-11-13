@@ -5,8 +5,14 @@ import { handleApi } from "./api.ts";
 const requested = Number(process.env.PORT ?? 5173);
 const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 5173;
 const host = process.env.HOST ?? "127.0.0.1";
+const publicBind = host !== "127.0.0.1" && host !== "localhost" && host !== "::1";
 const vite = await createVite({
-  server: { middlewareMode: true, host: "127.0.0.1", port },
+  server: {
+    middlewareMode: true,
+    host: "127.0.0.1",
+    port,
+    allowedHosts: publicBind ? true : undefined,
+  },
   appType: "spa",
 });
 

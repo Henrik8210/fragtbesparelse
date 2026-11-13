@@ -4,7 +4,7 @@ This is the same Node server as the app, reached through a Cloudflare Container.
 
 Cloudflare can run the existing server in a container. Cloudflare does not host Postgres. The database is a normal Postgres connection string, passed in as `DATABASE_URL` when you deploy. Nothing in this file is a secret.
 
-A container sleeps after six hours with no visits. The next visit starts it again. That first visit waits while the server boots.
+A container sleeps after six hours with no visits. The next visit starts it again. That first visit waits while the server boots. Database migrations run beside the server, so a slow database does not keep the port closed.
 
 ## What you do on your machine
 

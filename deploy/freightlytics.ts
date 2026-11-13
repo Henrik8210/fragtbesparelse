@@ -29,17 +29,9 @@ export class FreightlyticsContainer extends DurableObject<Env> {
       this.starting = undefined;
     });
     await this.starting;
-
-    const url = new URL(request.url);
-    const publicHost = url.host;
-    url.protocol = "http:";
-    url.host = "container";
-    const forwarded = new Request(url, request);
-    forwarded.headers.set("x-forwarded-proto", "https");
-    forwarded.headers.set("x-forwarded-host", publicHost);
-    const client = request.headers.get("cf-connecting-ip");
-    if (client) forwarded.headers.set("x-forwarded-for", client);
-    return this.ctx.container!.getTcpPort(PORT).fetch(forwarded);
+    const container = this.ctx.container;
+    if (!container) return new Response("container missing", { status: 503 });
+    return container.getTcpPort(PORT).fetch(forwardToContainer(request));
   }
 
   private async startAndWait(): Promise<void> {
@@ -57,10 +49,14 @@ export class FreightlyticsContainer extends DurableObject<Env> {
       });
     }
     this.observeExit();
-    await container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
+    try {
+      await container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
+    } catch {
+      // A rejected timeout must not turn the page request into a Worker exception.
+    }
 
     const port = container.getTcpPort(PORT);
-    for (let attempt = 0; attempt < 100; attempt++) {
+    for (let attempt = 0; attempt < 40; attempt++) {
       try {
         const response = await port.fetch("http://container/health", { signal: AbortSignal.timeout(1000) });
         await response.body?.cancel();
@@ -68,22 +64,45 @@ export class FreightlyticsContainer extends DurableObject<Env> {
       } catch {
         // The process is still starting.
       }
-      await scheduler.wait(200);
+      await scheduler.wait(500);
     }
     throw new Error("Freightlytics did not become ready");
   }
 
   private observeExit(): void {
     if (this.monitoring || !this.ctx.container) return;
-    this.monitoring = this.ctx.container
-      .monitor()
-      .then(() => undefined)
-      .catch(() => undefined)
-      .finally(() => {
-        this.monitoring = undefined;
-      });
-    this.ctx.waitUntil(this.monitoring);
+    try {
+      this.monitoring = this.ctx.container
+        .monitor()
+        .then(() => undefined)
+        .catch(() => undefined)
+        .finally(() => {
+          this.monitoring = undefined;
+        });
+      this.ctx.waitUntil(this.monitoring);
+    } catch {
+      this.monitoring = undefined;
+    }
   }
+}
+
+function forwardToContainer(request: Request): Request {
+  const url = new URL(request.url);
+  const publicHost = url.host;
+  url.protocol = "http:";
+  url.host = "container";
+  const headers = new Headers();
+  for (const [name, value] of request.headers) {
+    if (name === "host") continue;
+    headers.append(name, value);
+  }
+  headers.set("x-forwarded-proto", "https");
+  headers.set("x-forwarded-host", publicHost);
+  const client = request.headers.get("cf-connecting-ip");
+  if (client) headers.set("x-forwarded-for", client);
+  const method = request.method;
+  const hasBody = method !== "GET" && method !== "HEAD";
+  return new Request(url, { method, headers, body: hasBody ? request.body : undefined, redirect: "manual" });
 }
 
 export default {
