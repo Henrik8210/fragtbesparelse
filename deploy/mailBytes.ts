@@ -4,17 +4,33 @@ export async function readMailBytes(raw: unknown): Promise<Uint8Array> {
   if (raw instanceof Uint8Array) return copyBytes(raw);
   if (raw instanceof ArrayBuffer) return new Uint8Array(raw.slice(0));
   if (ArrayBuffer.isView(raw)) return copyBytes(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
-  const stream = streamOf(raw);
-  if (!stream) return responseBytes(raw);
-  // An email stream locks when it is wrapped in Response, and that wrapper can throw
-  // before a byte is copied. Read the chunks directly first.
+  // getReader() on the Cloudflare email byte stream throws after locking it.
+  // That exception leaves email() before the PDF is posted. Response copies the bytes in the runtime.
   try {
-    return await readStream(stream);
+    const buffered = await responseBytes(raw);
+    if (buffered.byteLength > 0) return buffered;
   } catch (error) {
     if (error instanceof MailTooLarge) throw error;
-    if (stream.locked) throw error instanceof Error ? error : new Error("invoice mail was not read");
   }
-  return responseBytes(stream);
+  const stream = streamOf(raw);
+  if (!stream || stream.locked) throw new Error("invoice mail was not read");
+  return readPipe(stream);
+}
+
+export function packMail(bytes: Uint8Array): string {
+  return JSON.stringify({ v: 1, raw: encodeBase64(bytes) });
+}
+
+export function encodeBase64(bytes: Uint8Array): string {
+  const parts: string[] = [];
+  const step = 0x1000;
+  for (let index = 0; index < bytes.length; index += step) {
+    const slice = bytes.subarray(index, Math.min(index + step, bytes.length));
+    let binary = "";
+    for (let cursor = 0; cursor < slice.length; cursor += 1) binary += String.fromCharCode(slice[cursor] ?? 0);
+    parts.push(binary);
+  }
+  return btoa(parts.join(""));
 }
 
 export function limitMail(bytes: Uint8Array): Uint8Array | "large" {
@@ -44,28 +60,29 @@ async function responseBytes(raw: unknown): Promise<Uint8Array> {
   return buffered;
 }
 
-async function readStream(raw: ReadableStream): Promise<Uint8Array> {
-  const reader = raw.getReader();
+async function readPipe(raw: ReadableStream): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for (;;) {
-    const step = await reader.read();
-    if (step.done) break;
-    const chunk = chunkBytes(step.value);
-    size += chunk.byteLength;
-    if (size > 8_000_000) {
-      await reader.cancel().catch(() => undefined);
-      throw new MailTooLarge();
-    }
-    chunks.push(chunk);
-  }
+  const writable = new WritableStream({
+    write(value: unknown) {
+      const chunk = chunkBytes(value);
+      size += chunk.byteLength;
+      if (size > 8_000_000) throw new MailTooLarge();
+      if (chunk.byteLength > 0) chunks.push(chunk);
+    },
+  });
+  await raw.pipeTo(writable);
+  return joinChunks(chunks, size);
+}
+
+function joinChunks(chunks: Uint8Array[], size: number): Uint8Array {
+  if (size === 0) throw new Error("invoice mail was not read");
   const body = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) {
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  if (body.byteLength === 0) throw new Error("invoice mail was not read");
   return body;
 }
 

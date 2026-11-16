@@ -4,7 +4,7 @@ import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, hashPassword, sql, syncAdminPassword, whenReady } from "./db.ts";
-import { acceptInvoiceMail, companyIdFromRecipient, invoiceAddress, invoiceMailReply, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
+import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceMailReply, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
@@ -247,9 +247,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 404, { error: "missing" });
         return;
       }
-      const raw = await readLimited(req, MAX_MAIL_BYTES);
-      if (raw === "large") {
+      const packed = await readLimited(req, MAX_MAIL_BYTES + 4_000_000);
+      if (packed === "large") {
         send(res, 413, { error: "large" });
+        return;
+      }
+      const raw = decodeMailBody(packed);
+      if (raw === "bad" || raw.length > MAX_MAIL_BYTES) {
+        send(res, raw === "bad" ? 400 : 413, { error: raw === "bad" ? "mail" : "large" });
         return;
       }
       const result = await acceptInvoiceMail(headerValue(req, "x-fragtblik-mail-to"), headerValue(req, "x-fragtblik-mail-from"), raw);
