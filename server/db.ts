@@ -67,7 +67,6 @@ async function ready(): Promise<void> {
       localMode = true;
     }
     if (localMode) await localDb();
-    await ensurePilotOrgs();
     await ensureSeed();
     await syncAdminPassword();
     await renameAdminLabel();
@@ -134,12 +133,11 @@ async function ensureSeed(): Promise<void> {
   const insert = postgres() ? poolQuery : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
 
   for (const company of customers) {
-    await insert("insert into companies (id, name, industry, place) values ($1, $2, $3, $4)", [
-      company.id,
-      company.name,
-      company.industry,
-      company.place,
-    ]);
+    await insert(
+      `insert into companies (id, name, industry, place) values ($1, $2, $3, $4)
+       on conflict (id) do nothing`,
+      [company.id, company.name, company.industry, company.place],
+    );
   }
 
   const people: { username: string; name: string; role: "admin" | "customer"; companyId: string | null; seat: string | null }[] = [
@@ -165,66 +163,58 @@ async function ensureSeed(): Promise<void> {
 
   const nordhavn = customers.find((company) => company.id === "nordhavn-living");
   if (!nordhavn) return;
-  await insert(
-    `insert into bills (id, company_id, label, amount, source, carrier)
-     values ($1, $2, $3, $4, 'manual', $5)`,
-    [crypto.randomUUID(), nordhavn.id, "Tillægsfaktura", 12400, "GLS"],
-  );
-  const latest = latestFromLanes(nordhavn);
-  const answers = accountAnswers(nordhavn);
-  const summary = {
-    month: "oktober 2026",
-    paid: latest.paid,
-    benchmark: latest.benchmark,
-    savings: latest.savings,
-    lines: answers.agreementLines.map((line) => ({
-      carrier: line.carrier,
-      route: line.route,
-      difference: line.difference,
-    })),
-  };
-  await insert(
-    `insert into reports (id, company_id, name, summary)
-     values ($1, $2, $3, $4)`,
-    [crypto.randomUUID(), nordhavn.id, "Oktober 2026 · aftaletjek", JSON.stringify(summary)],
-  );
+  try {
+    await insert(
+      `insert into bills (id, company_id, label, amount, source, carrier)
+       values ($1, $2, $3, $4, 'manual', $5)`,
+      [crypto.randomUUID(), nordhavn.id, "Tillægsfaktura", 12400, "GLS"],
+    );
+    const latest = latestFromLanes(nordhavn);
+    const answers = accountAnswers(nordhavn);
+    const summary = {
+      month: "oktober 2026",
+      paid: latest.paid,
+      benchmark: latest.benchmark,
+      savings: latest.savings,
+      lines: answers.agreementLines.map((line) => ({
+        carrier: line.carrier,
+        route: line.route,
+        difference: line.difference,
+      })),
+    };
+    await insert(
+      `insert into reports (id, company_id, name, summary)
+       values ($1, $2, $3, $4)`,
+      [crypto.randomUUID(), nordhavn.id, "Oktober 2026 · aftaletjek", JSON.stringify(summary)],
+    );
 
-  const packId = crypto.randomUUID();
-  await insert(
-    `insert into tender_packs (id, company_id, title, created_by)
-     values ($1, $2, $3, $4)`,
-    [packId, nordhavn.id, "Udbud · Nordhavn Living", ids.get("nordhavn") ?? null],
-  );
-  for (const lane of nordhavn.lanes) {
+    const packId = crypto.randomUUID();
     await insert(
-      `insert into tender_lines (id, pack_id, origin, destination, service, carrier, shipments)
-       values ($1, $2, $3, $4, $5, $6, $7)`,
-      [crypto.randomUUID(), packId, lane.origin, lane.destination, lane.service, lane.carrier, lane.shipments],
+      `insert into tender_packs (id, company_id, title, created_by)
+       values ($1, $2, $3, $4)`,
+      [packId, nordhavn.id, "Udbud · Nordhavn Living", ids.get("nordhavn") ?? null],
     );
-  }
-  const colleague = ids.get("nordhavn-kollega");
-  if (colleague) {
-    await insert(
-      "insert into tender_comments (id, pack_id, user_id, body) values ($1, $2, $3, $4)",
-      [crypto.randomUUID(), packId, colleague, "Kan vi udelade ø-levering?"],
-    );
+    for (const lane of nordhavn.lanes) {
+      await insert(
+        `insert into tender_lines (id, pack_id, origin, destination, service, carrier, shipments)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [crypto.randomUUID(), packId, lane.origin, lane.destination, lane.service, lane.carrier, lane.shipments],
+      );
+    }
+    const colleague = ids.get("nordhavn-kollega");
+    if (colleague) {
+      await insert(
+        "insert into tender_comments (id, pack_id, user_id, body) values ($1, $2, $3, $4)",
+        [crypto.randomUUID(), packId, colleague, "Kan vi udelade ø-levering?"],
+      );
+    }
+  } catch (error) {
+    if (!missingTable(error)) throw error;
   }
 }
 
-async function ensurePilotOrgs(): Promise<void> {
-  const query = postgres()
-    ? poolQuery
-    : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
-  await query(
-    `create table if not exists pilot_orgs (
-      id text primary key,
-      name text not null,
-      carrier text not null,
-      invoice text not null,
-      rates text not null,
-      created_at timestamptz not null default now()
-    )`,
-  );
+function missingTable(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "42P01";
 }
 
 export async function syncAdminPassword(explicit?: string): Promise<void> {

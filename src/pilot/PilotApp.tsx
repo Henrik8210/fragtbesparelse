@@ -10,7 +10,7 @@ import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
 } from "./freight.ts";
-import { carrierPeers, loadOrgId, orgAudit, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
+import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 
@@ -21,6 +21,7 @@ const NAV = [
   { id: "coverage", label: "Benchmark", icon: BarChart3 },
 ] as const;
 
+type Company = { id: string; name: string; industry: string; place: string };
 type Tab = (typeof NAV)[number]["id"];
 type View = Tab | "report";
 type Result = {
@@ -39,11 +40,12 @@ export function PilotApp() {
   const [reportKey, setReportKey] = useState(0);
   const [history, setHistory] = useState<StoredAudit[]>(() => loadAudits());
   const [orgId, setOrgId] = useState(loadOrgId);
-  const [extraOrgs, setExtraOrgs] = useState<Org[]>([]);
+  const [extraOrgs, setExtraOrgs] = useState<Company[]>([]);
   const [orgsReady, setOrgsReady] = useState(false);
+  const [admin, setAdmin] = useState(false);
   const [gate, setGate] = useState<"checking" | "closed" | "open">("checking");
   const orgs = useMemo(
-    () => [...ORGS, ...extraOrgs.filter((item) => !ORGS.some((sample) => sample.id === item.id))],
+    () => [...ORGS, ...extraOrgs.filter((item) => !ORGS.some((sample) => sample.id === item.id)).map(orgFromCompany)],
     [extraOrgs],
   );
   const org = orgs.find((item) => item.id === orgId) ?? ORGS[0];
@@ -73,13 +75,16 @@ export function PilotApp() {
       .then(async (me) => {
         if (gone) return;
         if (!me.user) {
+          setAdmin(false);
           setGate("closed");
           setOrgsReady(true);
           return;
         }
-        if (me.user.role === "admin") {
+        const isAdmin = me.user.role === "admin";
+        setAdmin(isAdmin);
+        if (isAdmin) {
           try {
-            const body = await api<{ orgs: Org[] }>("/api/pilot-orgs");
+            const body = await api<{ orgs: Company[] }>("/api/pilot-orgs");
             if (!gone) setExtraOrgs(body.orgs);
           } catch {
             // The sample companies still show when the saved list cannot be read.
@@ -183,9 +188,19 @@ export function PilotApp() {
   }
 
   async function enter(username: string, password: string) {
-    await api("/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
-    const body = await api<{ orgs: Org[] }>("/api/pilot-orgs");
-    setExtraOrgs(body.orgs);
+    const signed = await api<{ user: { role: string } }>("/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
+    const isAdmin = signed.user.role === "admin";
+    setAdmin(isAdmin);
+    if (isAdmin) {
+      try {
+        const body = await api<{ orgs: Company[] }>("/api/pilot-orgs");
+        setExtraOrgs(body.orgs);
+      } catch {
+        // The sample companies still show when the saved list cannot be read.
+      }
+    } else {
+      setExtraOrgs([]);
+    }
     setGate("open");
   }
 
@@ -228,14 +243,23 @@ export function PilotApp() {
           <div className="breadcrumb"><span>Arbejdsrum</span><ChevronRight size={14} /><strong>{activeLabel}</strong></div>
           <div className="topbar-right">
             <OrgSwitch
+              admin={admin}
               org={org}
               orgs={orgs}
+              created={extraOrgs}
               onChange={chooseOrg}
               onCreated={(created) => {
                 setExtraOrgs((current) => [...current.filter((item) => item.id !== created.id), created]);
                 chooseOrg(created.id);
               }}
-              onSignedOut={() => setGate("closed")}
+              onUpdated={(updated) => {
+                setExtraOrgs((current) => current.map((item) => item.id === updated.id ? updated : item));
+              }}
+              onRemoved={(id) => {
+                setExtraOrgs((current) => current.filter((item) => item.id !== id));
+                if (orgId === id) chooseOrg(ORGS[0].id);
+              }}
+              onSignedOut={() => { setAdmin(false); setGate("closed"); }}
             />
             <span className="pilot-tag"><i /> Pilot</span>
             <div className="avatar" title="Henrik Gandløse" aria-label="Henrik Gandløse">HG</div>
@@ -299,20 +323,27 @@ export function PilotApp() {
   );
 }
 
-function OrgSwitch({ org, orgs, onChange, onCreated, onSignedOut }: {
+function OrgSwitch({ admin, org, orgs, created, onChange, onCreated, onUpdated, onRemoved, onSignedOut }: {
+  admin: boolean;
   org: Org;
   orgs: Org[];
+  created: Company[];
   onChange: (id: string) => void;
-  onCreated: (org: Org) => void;
+  onCreated: (org: Company) => void;
+  onUpdated: (org: Company) => void;
+  onRemoved: (id: string) => void;
   onSignedOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [carrier, setCarrier] = useState(carrierProfiles[0]?.name ?? "GLS");
+  const [industry, setIndustry] = useState("");
+  const [place, setPlace] = useState("");
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const saved = created.filter((item) => !ORGS.some((sample) => sample.id === item.id));
   useEffect(() => {
     if (!open) return;
     function close(event: PointerEvent) {
@@ -322,27 +353,67 @@ function OrgSwitch({ org, orgs, onChange, onCreated, onSignedOut }: {
     return () => document.removeEventListener("pointerdown", close);
   }, [open]);
 
+  function orgProblem(error: unknown, fallback: string) {
+    const code = error instanceof ApiError ? error.code : "error";
+    if (code === "sign-in") {
+      onSignedOut();
+      return;
+    }
+    if (code === "taken") setProblem("Navnet er allerede brugt.");
+    else if (code === "name") setProblem("Skriv et navn.");
+    else if (code === "industry") setProblem("Skriv en branche.");
+    else if (code === "place") setProblem("Skriv et sted.");
+    else if (code === "limit") setProblem("Der kan ikke oprettes flere lige nu.");
+    else if (code === "used") setProblem("Organisationen har stadig poster og kan ikke slettes.");
+    else if (code === "forbidden") setProblem("De seks prøveorganisationer bliver.");
+    else setProblem(fallback);
+  }
+
   async function submitOrg() {
-    const trimmed = name.trim();
-    if (!trimmed) {
+    if (!name.trim()) {
       setProblem("Skriv et navn.");
       return;
     }
     setBusy(true);
     setProblem("");
     try {
-      const created = await createPilotOrg(trimmed, carrier);
+      const createdOrg = await saveCompany("POST", "/api/pilot-orgs", { name, industry, place });
       setName("");
+      setIndustry("");
+      setPlace("");
       setCreating(false);
       setOpen(false);
-      onCreated(created);
+      onCreated(createdOrg);
     } catch (error) {
-      const code = error instanceof ApiError ? error.code : "error";
-      if (code === "sign-in") {
-        onSignedOut();
-        return;
-      }
-      setProblem(code === "taken" ? "Navnet er allerede brugt." : code === "limit" ? "Der kan ikke oprettes flere lige nu." : "Organisationen blev ikke oprettet.");
+      orgProblem(error, "Organisationen blev ikke oprettet.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEdit(id: string) {
+    setBusy(true);
+    setProblem("");
+    try {
+      const updated = await saveCompany("PATCH", `/api/pilot-orgs/${encodeURIComponent(id)}`, { name, industry, place });
+      setEditing(null);
+      onUpdated(updated);
+    } catch (error) {
+      orgProblem(error, "Organisationen blev ikke gemt.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeOrg(id: string) {
+    setBusy(true);
+    setProblem("");
+    try {
+      await api(`/api/pilot-orgs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (editing === id) setEditing(null);
+      onRemoved(id);
+    } catch (error) {
+      orgProblem(error, "Organisationen blev ikke slettet.");
     } finally {
       setBusy(false);
     }
@@ -363,7 +434,7 @@ function OrgSwitch({ org, orgs, onChange, onCreated, onSignedOut }: {
       </button>
       {open ? (
         <ul className="org-menu" role="listbox" aria-label="Organisationer">
-          {orgs.map((item) => (
+          {orgs.filter((item) => ORGS.some((sample) => sample.id === item.id)).map((item) => (
             <li key={item.id}>
               <button
                 type="button"
@@ -375,38 +446,94 @@ function OrgSwitch({ org, orgs, onChange, onCreated, onSignedOut }: {
               </button>
             </li>
           ))}
-          <li>
-            {creating ? (
-              <form
-                className="org-create"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void submitOrg();
-                }}
-              >
-                <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Navn" aria-label="Navn" maxLength={80} required />
-                <select value={carrier} onChange={(event) => setCarrier(event.target.value)} aria-label="Transportør">
-                  {carrierProfiles.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
-                </select>
-                {problem ? <p className="org-note">{problem}</p> : null}
-                <button className="button primary" type="submit" disabled={busy}>Opret</button>
-              </form>
-            ) : (
-              <button type="button" onClick={() => { setCreating(true); setProblem(""); }}>Opret organisation</button>
-            )}
-          </li>
+          {saved.map((item) => (
+            <li key={item.id}>
+              {admin && editing === item.id ? (
+                <CompanyForm
+                  name={name}
+                  industry={industry}
+                  place={place}
+                  problem={problem}
+                  busy={busy}
+                  submitLabel="Gem"
+                  onName={setName}
+                  onIndustry={setIndustry}
+                  onPlace={setPlace}
+                  onSubmit={() => void saveEdit(item.id)}
+                />
+              ) : (
+                <div className="org-item">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={item.id === org.id}
+                    onClick={() => { onChange(item.id); setOpen(false); }}
+                  >
+                    {item.name}
+                  </button>
+                  {admin ? (
+                    <span className="org-manage">
+                      <button type="button" onClick={() => { setEditing(item.id); setName(item.name); setIndustry(item.industry); setPlace(item.place); setCreating(false); setProblem(""); }}>Ret</button>
+                      <button type="button" onClick={() => void removeOrg(item.id)} disabled={busy}>Slet</button>
+                    </span>
+                  ) : null}
+                </div>
+              )}
+            </li>
+          ))}
+          {problem && !creating && editing === null ? <li><p className="org-note">{problem}</p></li> : null}
+          {admin ? (
+            <li>
+              {creating ? (
+                <CompanyForm
+                  name={name}
+                  industry={industry}
+                  place={place}
+                  problem={problem}
+                  busy={busy}
+                  submitLabel="Opret"
+                  onName={setName}
+                  onIndustry={setIndustry}
+                  onPlace={setPlace}
+                  onSubmit={() => void submitOrg()}
+                />
+              ) : (
+                <button type="button" onClick={() => { setCreating(true); setEditing(null); setName(""); setIndustry(""); setPlace(""); setProblem(""); }}>Opret organisation</button>
+              )}
+            </li>
+          ) : null}
         </ul>
       ) : null}
     </div>
   );
 }
 
-async function createPilotOrg(name: string, carrier: string): Promise<Org> {
-  const created = await api<{ org: Org }>("/api/pilot-orgs", {
-    method: "POST",
-    body: JSON.stringify({ name, carrier }),
-  });
-  return created.org;
+function CompanyForm({ name, industry, place, problem, busy, submitLabel, onName, onIndustry, onPlace, onSubmit }: {
+  name: string;
+  industry: string;
+  place: string;
+  problem: string;
+  busy: boolean;
+  submitLabel: string;
+  onName: (value: string) => void;
+  onIndustry: (value: string) => void;
+  onPlace: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <form className="org-create" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+      <input value={name} onChange={(event) => onName(event.target.value)} placeholder="Navn" aria-label="Navn" maxLength={80} required />
+      <input value={industry} onChange={(event) => onIndustry(event.target.value)} placeholder="Branche" aria-label="Branche" maxLength={80} required />
+      <input value={place} onChange={(event) => onPlace(event.target.value)} placeholder="Sted" aria-label="Sted" maxLength={80} required />
+      {problem ? <p className="org-note">{problem}</p> : null}
+      <button className="button primary" type="submit" disabled={busy}>{submitLabel}</button>
+    </form>
+  );
+}
+
+async function saveCompany(method: "POST" | "PATCH", path: string, fields: { name: string; industry: string; place: string }): Promise<Company> {
+  const saved = await api<{ org: Company }>(path, { method, body: JSON.stringify(fields) });
+  return saved.org;
 }
 
 function LoginWall({ ready, onEnter }: { ready: boolean; onEnter: (username: string, password: string) => Promise<void> }) {
