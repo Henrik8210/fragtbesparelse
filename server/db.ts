@@ -17,7 +17,8 @@ let seeded: Promise<void> | undefined;
 let localMode = false;
 
 function postgres(): boolean {
-  return databaseUrl !== "" && !localMode;
+  // A failed startup probe must not hide public.invoice_mail behind the local database.
+  return databaseUrl !== "";
 }
 
 export function storesInPostgres(): boolean {
@@ -114,10 +115,10 @@ export async function withDatabase<T>(run: (query: SqlQuery) => Promise<T>): Pro
   let failed = false;
   const query = (async (text, params = []) => (await client.query(text, params)).rows) as SqlQuery;
   try {
+    await client.query("select set_config('search_path', 'public', false)");
     return await run(query);
   } catch (error) {
     failed = true;
-    await client.query("rollback").catch(() => undefined);
     throw error;
   } finally {
     client.release(failed);
@@ -126,7 +127,7 @@ export async function withDatabase<T>(run: (query: SqlQuery) => Promise<T>): Pro
 
 export async function sql<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
   await ready();
-  if (postgres()) return (await getPool().query(text, params)).rows as T[];
+  if (postgres()) return poolQuery(text, params) as Promise<T[]>;
   return (await (await localDb()).query<T>(text, params)).rows;
 }
 
@@ -334,5 +335,11 @@ async function renameAdminLabel(): Promise<void> {
 }
 
 async function poolQuery(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-  return (await getPool().query(text, params)).rows as Record<string, unknown>[];
+  const client = await getPool().connect();
+  try {
+    await client.query("select set_config('search_path', 'public', false)");
+    return (await client.query(text, params)).rows as Record<string, unknown>[];
+  } finally {
+    client.release();
+  }
 }

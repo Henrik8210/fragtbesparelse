@@ -12,6 +12,10 @@ export function invoiceAddress(companyId: string): string {
   return `${companyId}@${MAIL_DOMAIN}`;
 }
 
+export function isMailFileId(id: string): boolean {
+  return /^[A-Za-z0-9_-]{1,80}$/.test(id);
+}
+
 export function decodeMailBody(raw: Buffer): Buffer | "bad" {
   const marker = Buffer.from('{"v":1,"raw":');
   if (raw.length < marker.length || !raw.subarray(0, marker.length).equals(marker)) return raw;
@@ -45,7 +49,7 @@ export async function listInvoiceMail(companyId: string): Promise<{ ready: boole
   try {
     const mails = await sql<{ id: string; sender: string; subject: string; received_at: Date | string }>(
       `select id, sender, subject, received_at
-       from invoice_mail
+       from public.invoice_mail
        where company_id = $1
        order by received_at desc
        limit 40`,
@@ -57,7 +61,7 @@ export async function listInvoiceMail(companyId: string): Promise<{ ready: boole
       ? []
       : await sql<{ id: string; mail_id: string; filename: string; byte_size: number }>(
         `select id, mail_id, filename, byte_size
-         from invoice_mail_files
+         from public.invoice_mail_files
          where company_id = $1 and mail_id in (${marks})
          order by filename`,
         [companyId, ...ids],
@@ -68,7 +72,7 @@ export async function listInvoiceMail(companyId: string): Promise<{ ready: boole
         id: mail.id,
         sender: mail.sender,
         subject: mail.subject,
-        receivedAt: String(mail.received_at),
+        receivedAt: receivedStamp(mail.received_at),
         files: files.filter((file) => file.mail_id === mail.id).map((file) => ({
           id: file.id,
           filename: file.filename,
@@ -85,7 +89,7 @@ export async function listInvoiceMail(companyId: string): Promise<{ ready: boole
 export async function readInvoiceFile(id: string): Promise<{ filename: string; companyId: string; content: Buffer } | null> {
   try {
     const rows = await sql<{ filename: string; company_id: string; content: unknown }>(
-      "select filename, company_id, content from invoice_mail_files where id = $1 and company_id is not null",
+      "select filename, company_id, content from public.invoice_mail_files where id = $1 and company_id is not null",
       [id],
     );
     const row = rows[0];
@@ -136,7 +140,7 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
   try {
     await withDatabase(async (query) => {
       await query(
-        "insert into invoice_mail (id, company_id, sender, subject) values ($1, $2, $3, $4)",
+        "insert into public.invoice_mail (id, company_id, sender, subject) values ($1, $2, $3, $4)",
         [mailId, companyId, from, subject],
       );
       for (const file of files) {
@@ -148,14 +152,15 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
     return { result: "later" };
   }
   try {
-    const seen = await sql<{ id: string }>("select id from invoice_mail where id = $1 and company_id = $2", [mailId, companyId]);
-    const saved = await sql<{ id: string }>("select id from invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]);
+    const seen = await sql<{ id: string }>("select id from public.invoice_mail where id = $1 and company_id = $2", [mailId, companyId]);
+    const saved = await sql<{ id: string }>("select id from public.invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]);
     if (!seen[0] || saved.length === 0) {
       await dropMail(mailId, companyId);
       return { result: "later" };
     }
   } catch {
-    return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
+    await dropMail(mailId, companyId);
+    return { result: "later" };
   }
   return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
 }
@@ -180,18 +185,18 @@ function senderLine(parsed: Email | null): string {
 }
 
 async function dropMail(mailId: string, companyId: string): Promise<void> {
-  await sql("delete from invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
-  await sql("delete from invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
+  await sql("delete from public.invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
+  await sql("delete from public.invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
 }
 
 async function ensureMailbox(companyId: string): Promise<"ok" | "unknown" | "later"> {
   try {
-    const found = await sql("select id from companies where id = $1", [companyId]);
+    const found = await sql("select id from public.companies where id = $1", [companyId]);
     if (found[0]) return "ok";
     const sample = customers.find((company) => company.id === companyId);
     if (!sample) return "unknown";
     await sql(
-      `insert into companies (id, name, industry, place) values ($1, $2, $3, $4)
+      `insert into public.companies (id, name, industry, place) values ($1, $2, $3, $4)
        on conflict (id) do nothing`,
       [sample.id, sample.name, sample.industry, sample.place],
     );
@@ -207,15 +212,14 @@ async function insertFile(query: SqlQuery, mailId: string, companyId: string, fi
   const encoded = file.bytes.toString("base64");
   try {
     await query(
-      `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
+      `insert into public.invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
        values ($1, $2, $3, $4, $5, $6, decode($7, 'base64'))`,
       [...values, encoded],
     );
   } catch (error) {
     if (missingTable(error)) throw error;
-    await query("rollback").catch(() => undefined);
     await query(
-      `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
+      `insert into public.invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
        values ($1, $2, $3, $4, $5, $6, $7)`,
       [...values, file.bytes],
     );
@@ -322,6 +326,13 @@ function asBuffer(value: unknown): Buffer {
     return Buffer.from(hex, "hex");
   }
   return Buffer.alloc(0);
+}
+
+function receivedStamp(value: Date | string): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(text)) return `${text.replace(" ", "T")}Z`;
+  return text;
 }
 
 function missingTable(error: unknown): boolean {
