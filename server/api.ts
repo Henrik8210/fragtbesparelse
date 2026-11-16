@@ -692,6 +692,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       res.writeHead(200, {
         "content-type": pdf ? "application/pdf" : "application/octet-stream",
         "content-disposition": pdf ? inlineDisposition(file.filename) : contentDisposition(file.filename),
+        "content-length": String(file.content.byteLength),
+        "x-file-size": String(file.content.byteLength),
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
       });
