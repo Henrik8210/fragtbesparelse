@@ -80,6 +80,32 @@ function setSessionCookie(req: IncomingMessage, res: ServerResponse, token: stri
   res.setHeader("Set-Cookie", value);
 }
 
+function emailOk(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function missingTable(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "42P01";
+}
+
+const demoHits = new Map<string, { n: number; reset: number }>();
+
+function demoLimited(ip: string): boolean {
+  const now = Date.now();
+  const current = demoHits.get(ip);
+  if (!current || current.reset <= now) {
+    if (demoHits.size > 5000) {
+      for (const [key, item] of demoHits) {
+        if (item.reset <= now) demoHits.delete(key);
+      }
+    }
+    demoHits.set(ip, { n: 1, reset: now + 60 * 60 * 1000 });
+    return false;
+  }
+  current.n += 1;
+  return current.n > 8;
+}
+
 function clientIp(req: IncomingMessage): string {
   const forwarded = req.headers["x-forwarded-for"];
   const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
@@ -333,6 +359,48 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return;
     }
 
+    if (method === "POST" && path === "/api/demo") {
+      if (demoLimited(clientIp(req))) {
+        send(res, 429, { error: "limit" });
+        return;
+      }
+      const body = (await readJson(req)) as { name?: unknown; company?: unknown; email?: unknown };
+      const name = text(body.name, 80);
+      const company = text(body.company, 80);
+      const email = text(body.email, 120).toLowerCase();
+      if (!name) {
+        send(res, 400, { error: "name" });
+        return;
+      }
+      if (!company) {
+        send(res, 400, { error: "company" });
+        return;
+      }
+      if (!emailOk(email)) {
+        send(res, 400, { error: "email" });
+        return;
+      }
+      try {
+        if (!(await hasRoom("select count(*)::int as n from notifications", [], 200))) {
+          send(res, 429, { error: "limit" });
+          return;
+        }
+        await sql(
+          `insert into notifications (id, kind, name, company, email)
+           values ($1, 'demo', $2, $3, $4)`,
+          [crypto.randomUUID(), name, company, email],
+        );
+      } catch (error) {
+        if (missingTable(error)) {
+          send(res, 503, { error: "later" });
+          return;
+        }
+        throw error;
+      }
+      send(res, 201, { ok: true });
+      return;
+    }
+
     const user = await actor(req);
     if (!user) {
       send(res, 401, { error: "sign-in" });
@@ -449,6 +517,62 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const code = typeof error === "object" && error !== null && "code" in error ? (error as { code: unknown }).code : "";
         if (code === "23503") {
           send(res, 409, { error: "used" });
+          return;
+        }
+        throw error;
+      }
+      send(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === "GET" && path === "/api/notifications") {
+      if (user.role !== "admin") {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      try {
+        const rows = await sql<{ id: string; name: string; company: string; email: string; created_at: Date | string }>(
+          `select id, name, company, email, created_at
+           from notifications
+           where kind = 'demo' and seen_at is null
+           order by created_at desc
+           limit 20`,
+        );
+        send(res, 200, {
+          notifications: rows.map((row) => ({
+            id: row.id,
+            name: row.name,
+            company: row.company,
+            email: row.email,
+            createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+          })),
+        });
+      } catch (error) {
+        if (missingTable(error)) {
+          send(res, 200, { notifications: [] });
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+
+    const seenNote = path.match(/^\/api\/notifications\/([^/]+)\/seen$/);
+    if (seenNote && method === "POST") {
+      if (user.role !== "admin") {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      const id = decodeURIComponent(seenNote[1]);
+      if (!/^[0-9a-f-]{36}$/i.test(id)) {
+        send(res, 400, { error: "id" });
+        return;
+      }
+      try {
+        await sql("update notifications set seen_at = now() where id = $1 and seen_at is null", [id]);
+      } catch (error) {
+        if (missingTable(error)) {
+          send(res, 200, { ok: true });
           return;
         }
         throw error;
