@@ -203,13 +203,12 @@ async function actor(req: IncomingMessage): Promise<UserRow | null> {
   const token = cookieToken(req);
   if (!token) return null;
   const rows = await sql<UserRow>(
-    `select users.* from public.sessions as sessions
-     join public.users as users on users.id = sessions.user_id
+    `select users.* from sessions join users on users.id = sessions.user_id
      where sessions.token = $1 and sessions.created_at > now() - interval '14 days'`,
     [token],
   );
   if (!rows[0]) {
-    await sql("delete from public.sessions where token = $1", [token]);
+    await sql("delete from sessions where token = $1", [token]);
     return null;
   }
   return rows[0];
@@ -328,7 +327,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       loginSucceeded(guessKey);
       await sql("update users set password_hash = $1 where id = $2", [await hashPassword(password), admin.id]);
       const token = cookieToken(req);
-      await sql("delete from public.sessions where user_id = $1 and token <> $2", [admin.id, token]);
+      await sql("delete from sessions where user_id = $1 and token <> $2", [admin.id, token]);
       send(res, 200, { ok: true });
       return;
     }
@@ -355,7 +354,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         loginSucceeded(userKey);
         loginSucceeded(ipKey);
         const token = randomBytes(32).toString("hex");
-        await sql("insert into public.sessions (token, user_id) values ($1, $2)", [token, user.id]);
+        await sql("insert into sessions (token, user_id) values ($1, $2)", [token, user.id]);
         setSessionCookie(req, res, token);
         send(res, 200, { user: publish(user) });
         return;
@@ -403,7 +402,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const sessionToken = randomBytes(32).toString("hex");
-      await sql("insert into public.sessions (token, user_id) values ($1, $2)", [sessionToken, createdUser.id]);
+      await sql("insert into sessions (token, user_id) values ($1, $2)", [sessionToken, createdUser.id]);
       setSessionCookie(req, res, sessionToken);
       send(res, 201, { ok: true, user: publish(createdUser) });
       return;
@@ -411,7 +410,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
 
     if (method === "POST" && path === "/api/logout") {
       const token = cookieToken(req);
-      if (token) await sql("delete from public.sessions where token = $1", [token]);
+      if (token) await sql("delete from sessions where token = $1", [token]);
       setSessionCookie(req, res, null);
       send(res, 200, { ok: true });
       return;
@@ -846,7 +845,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 404, { error: "missing" });
         return;
       }
-      await sql("delete from public.sessions where user_id = $1", [target.id]);
+      await sql("delete from sessions where user_id = $1", [target.id]);
       send(res, 200, { user: publish(target) });
       return;
     }
