@@ -1,7 +1,7 @@
 import PostalMime from "postal-mime";
 import type { Attachment, Email } from "postal-mime";
 import { customers } from "../src/data/portfolio.ts";
-import { reconnectDatabase, sql, storesInPostgres } from "./db.ts";
+import { reconnectDatabase, sql, storesInPostgres, withDatabase, type SqlQuery } from "./db.ts";
 
 export const MAIL_DOMAIN = "freightlytics.io";
 export const MAX_MAIL_BYTES = 8_000_000;
@@ -120,16 +120,17 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
   const subject = clean(textOrEmpty(parsed?.subject) || subjectFromRaw(raw), 200) || "(uden emne)";
   const from = clean(senderLine(parsed) || sender, 200) || "ukendt";
   try {
-    await sql(
-      "insert into invoice_mail (id, company_id, sender, subject) values ($1, $2, $3, $4)",
-      [mailId, companyId, from, subject],
-    );
-    for (const file of files) {
-      await insertFile(mailId, companyId, file);
-    }
-  } catch (error) {
+    await withDatabase(async (query) => {
+      await query(
+        "insert into invoice_mail (id, company_id, sender, subject) values ($1, $2, $3, $4)",
+        [mailId, companyId, from, subject],
+      );
+      for (const file of files) {
+        await insertFile(query, mailId, companyId, file);
+      }
+    });
+  } catch {
     await dropMail(mailId, companyId);
-    if (missingTable(error)) return { result: "later" };
     return { result: "later" };
   }
   try {
@@ -143,6 +144,17 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
     return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
   }
   return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
+}
+
+export function invoiceMailReply(result: AcceptedMail, inPostgres = storesInPostgres()): { status: number; body: Record<string, unknown> } {
+  if (result.result === "stored" && result.postgres && result.id) {
+    return { status: 200, body: { ok: true, id: result.id, companyId: result.companyId, postgres: true } };
+  }
+  if (result.result === "large") return { status: 413, body: { error: "large" } };
+  if (result.result === "bad") return { status: 400, body: { error: "mail" } };
+  if (result.result === "unknown") return { status: 404, body: { error: "unknown" } };
+  if (!inPostgres || result.result === "stored") return { status: 503, body: { error: "database" } };
+  return { status: 503, body: { error: "later" } };
 }
 
 function senderLine(parsed: Email | null): string {
@@ -176,21 +188,22 @@ async function ensureMailbox(companyId: string): Promise<"ok" | "unknown" | "lat
   }
 }
 
-async function insertFile(mailId: string, companyId: string, file: { name: string; mime: string; bytes: Buffer }): Promise<void> {
+async function insertFile(query: SqlQuery, mailId: string, companyId: string, file: { name: string; mime: string; bytes: Buffer }): Promise<void> {
   const values = [crypto.randomUUID(), mailId, companyId, file.name, file.mime, file.bytes.length];
+  const encoded = file.bytes.toString("base64");
   try {
-    await sql(
+    await query(
       `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
-       values ($1, $2, $3, $4, $5, $6, $7)`,
-      [...values, file.bytes],
+       values ($1, $2, $3, $4, $5, $6, decode($7, 'base64'))`,
+      [...values, encoded],
     );
   } catch (error) {
     if (missingTable(error)) throw error;
-    await sql("rollback").catch(() => undefined);
-    await sql(
+    await query("rollback").catch(() => undefined);
+    await query(
       `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
-       values ($1, $2, $3, $4, $5, $6, decode($7, 'base64'))`,
-      [...values, file.bytes.toString("base64")],
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [...values, file.bytes],
     );
   }
 }

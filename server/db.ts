@@ -37,32 +37,74 @@ export async function reconnectDatabase(): Promise<boolean> {
   }
 }
 
-function sslOptions(connectionString: string): { rejectUnauthorized: false } | undefined {
+export function databaseSsl(connectionString: string): { rejectUnauthorized: false } | undefined {
   const query = connectionString.split("?")[1] ?? "";
   let mode = "";
   for (const part of query.split("&")) {
     const [key, value = ""] = part.split("=");
     if (key === "sslmode") mode = decodeURIComponent(value);
   }
+  if (mode === "disable") return undefined;
   if (mode === "require" || mode === "prefer" || mode === "verify-ca" || mode === "verify-full") {
     return { rejectUnauthorized: false };
   }
-  return undefined;
+  const host = databaseHost(connectionString);
+  if (host === "" || host === "localhost" || host === "127.0.0.1" || host === "::1") return undefined;
+  // Supabase rejects a non-TLS connection. That failure used to leave mail on the local database.
+  return { rejectUnauthorized: false };
+}
+
+function databaseHost(connectionString: string): string {
+  const withoutQuery = connectionString.split("?")[0] ?? "";
+  const at = withoutQuery.lastIndexOf("@");
+  if (at < 0) return "";
+  const hostport = withoutQuery.slice(at + 1);
+  const slash = hostport.indexOf("/");
+  const host = (slash >= 0 ? hostport.slice(0, slash) : hostport).trim();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end > 1 ? host.slice(1, end) : "";
+  }
+  return host.split(":")[0] ?? "";
 }
 
 function pgOptions(connectionString: string): pg.PoolConfig {
   const options: pg.PoolConfig = { connectionString, max: 5, connectionTimeoutMillis: 5000 };
-  const ssl = sslOptions(connectionString);
+  const ssl = databaseSsl(connectionString);
   if (ssl) options.ssl = ssl;
   return options;
 }
 
+function getPool(): pg.Pool {
+  pool ??= new pg.Pool(pgOptions(databaseUrl));
+  return pool;
+}
+
+export type SqlQuery = <T = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<T[]>;
+
+export async function withDatabase<T>(run: (query: SqlQuery) => Promise<T>): Promise<T> {
+  await ready();
+  if (!postgres()) {
+    const query = (async (text, params = []) => (await (await localDb()).query(text, params)).rows) as SqlQuery;
+    return run(query);
+  }
+  const client = await getPool().connect();
+  let failed = false;
+  const query = (async (text, params = []) => (await client.query(text, params)).rows) as SqlQuery;
+  try {
+    return await run(query);
+  } catch (error) {
+    failed = true;
+    await client.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release(failed);
+  }
+}
+
 export async function sql<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
   await ready();
-  if (postgres()) {
-    pool ??= new pg.Pool(pgOptions(databaseUrl));
-    return (await pool.query(text, params)).rows as T[];
-  }
+  if (postgres()) return (await getPool().query(text, params)).rows as T[];
   return (await (await localDb()).query<T>(text, params)).rows;
 }
 
@@ -270,6 +312,5 @@ async function renameAdminLabel(): Promise<void> {
 }
 
 async function poolQuery(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-  pool ??= new pg.Pool(pgOptions(databaseUrl));
-  return (await pool.query(text, params)).rows as Record<string, unknown>[];
+  return (await getPool().query(text, params)).rows as Record<string, unknown>[];
 }
