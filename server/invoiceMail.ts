@@ -1,7 +1,7 @@
 import PostalMime from "postal-mime";
 import type { Attachment, Email } from "postal-mime";
 import { customers } from "../src/data/portfolio.ts";
-import { sql, storesInPostgres } from "./db.ts";
+import { reconnectDatabase, sql, storesInPostgres } from "./db.ts";
 
 export const MAIL_DOMAIN = "freightlytics.io";
 export const MAX_MAIL_BYTES = 8_000_000;
@@ -90,6 +90,7 @@ export type AcceptedMail =
 export async function acceptInvoiceMail(recipient: string, sender: string, raw: Buffer): Promise<AcceptedMail> {
   if (!Buffer.isBuffer(raw)) return { result: "bad" };
   if (raw.length > MAX_MAIL_BYTES) return { result: "large" };
+  await reconnectDatabase();
   const companyId = companyIdFromRecipient(recipient);
   if (!companyId) return { result: "unknown" };
   const mailbox = await ensureMailbox(companyId);
@@ -117,7 +118,7 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
 
   const mailId = crypto.randomUUID();
   const subject = clean(textOrEmpty(parsed?.subject) || subjectFromRaw(raw), 200) || "(uden emne)";
-  const from = clean(sender, 200) || "ukendt";
+  const from = clean(senderLine(parsed) || sender, 200) || "ukendt";
   try {
     await sql(
       "insert into invoice_mail (id, company_id, sender, subject) values ($1, $2, $3, $4)",
@@ -139,10 +140,17 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
       return { result: "later" };
     }
   } catch {
-    await dropMail(mailId, companyId);
-    return { result: "later" };
+    return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
   }
   return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
+}
+
+function senderLine(parsed: Email | null): string {
+  const from = parsed?.from;
+  if (!from || typeof from !== "object" || typeof from.address !== "string" || !from.address.trim()) return "";
+  const name = typeof from.name === "string" ? from.name.trim() : "";
+  const address = from.address.trim();
+  return name ? `${name} <${address}>` : address;
 }
 
 async function dropMail(mailId: string, companyId: string): Promise<void> {
@@ -178,6 +186,7 @@ async function insertFile(mailId: string, companyId: string, file: { name: strin
     );
   } catch (error) {
     if (missingTable(error)) throw error;
+    await sql("rollback").catch(() => undefined);
     await sql(
       `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
        values ($1, $2, $3, $4, $5, $6, decode($7, 'base64'))`,
