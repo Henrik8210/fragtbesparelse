@@ -423,14 +423,21 @@ function LoginWall({ ready, onEnter }: { ready: boolean; onEnter: (username: str
         className="login-card"
         onSubmit={(event) => {
           event.preventDefault();
+          const data = new FormData(event.currentTarget);
+          const typedUsername = String(data.get("username") ?? username).trim();
+          const typedPassword = String(data.get("password") ?? password);
+          setUsername(typedUsername);
+          setPassword(typedPassword);
           setBusy(true);
           setProblem("");
-          void onEnter(username.trim(), password)
-            .catch(() => setProblem("Brugernavn og adgangskode passer ikke sammen."))
-            .finally(() => {
-              setPassword("");
-              setBusy(false);
-            });
+          void onEnter(typedUsername, typedPassword)
+            .catch((error: unknown) => {
+              const code = error instanceof ApiError ? error.code : "";
+              setProblem(code === "login" || code === "sign-in"
+                ? "Brugernavn og adgangskode passer ikke sammen."
+                : "Kunne ikke logge ind. Prøv igen.");
+            })
+            .finally(() => setBusy(false));
         }}
       >
         <BrandMark />
@@ -438,11 +445,11 @@ function LoginWall({ ready, onEnter }: { ready: boolean; onEnter: (username: str
         <p>Log ind for at åbne arbejdsrummet.</p>
         <label>
           Brugernavn
-          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
+          <input name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
         </label>
         <label>
           Adgangskode
-          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
+          <input name="password" value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
         </label>
         {problem ? <p className="org-note">{problem}</p> : null}
         <button className="button primary" type="submit" disabled={!ready || busy}>Log ind</button>

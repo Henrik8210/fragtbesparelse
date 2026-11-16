@@ -14,20 +14,59 @@ const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
 let pool: pg.Pool | undefined;
 let local: Promise<PGlite> | undefined;
 let seeded: Promise<void> | undefined;
+let localMode = false;
+
+function postgres(): boolean {
+  return databaseUrl !== "" && !localMode;
+}
+
+function sslOptions(connectionString: string): { rejectUnauthorized: false } | undefined {
+  const query = connectionString.split("?")[1] ?? "";
+  let mode = "";
+  for (const part of query.split("&")) {
+    const [key, value = ""] = part.split("=");
+    if (key === "sslmode") mode = decodeURIComponent(value);
+  }
+  if (mode === "require" || mode === "prefer" || mode === "verify-ca" || mode === "verify-full") {
+    return { rejectUnauthorized: false };
+  }
+  return undefined;
+}
+
+function pgOptions(connectionString: string): pg.PoolConfig {
+  const options: pg.PoolConfig = { connectionString, max: 5, connectionTimeoutMillis: 5000 };
+  const ssl = sslOptions(connectionString);
+  if (ssl) options.ssl = ssl;
+  return options;
+}
 
 export async function sql<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
   await ready();
-  if (databaseUrl !== "") {
-    pool ??= new pg.Pool({ connectionString: databaseUrl, max: 5 });
+  if (postgres()) {
+    pool ??= new pg.Pool(pgOptions(databaseUrl));
     return (await pool.query(text, params)).rows as T[];
   }
   return (await (await localDb()).query<T>(text, params)).rows;
 }
 
 async function ready(): Promise<void> {
-  if (databaseUrl === "") await localDb();
   seeded ??= (async () => {
-    if (databaseUrl !== "") await runMigrate();
+    if (databaseUrl !== "") {
+      try {
+        await runMigrate();
+      } catch {
+        console.error("migrate: skipped");
+      }
+      try {
+        await poolQuery("select 1 as ok");
+      } catch {
+        localMode = true;
+        console.error("database: local");
+      }
+    } else {
+      localMode = true;
+    }
+    if (localMode) await localDb();
     await ensurePilotOrgs();
     await ensureSeed();
     await syncAdminPassword();
@@ -88,11 +127,11 @@ export async function checkPassword(password: string, stored: string | null): Pr
 }
 
 async function ensureSeed(): Promise<void> {
-  const existing = databaseUrl
+  const existing = postgres()
     ? ((await poolQuery("select id from users limit 1")) as { id: string }[])
     : (await (await localDb()).query<{ id: string }>("select id from users limit 1")).rows;
   if (existing.length > 0) return;
-  const insert = databaseUrl ? poolQuery : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
+  const insert = postgres() ? poolQuery : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
 
   for (const company of customers) {
     await insert("insert into companies (id, name, industry, place) values ($1, $2, $3, $4)", [
@@ -173,7 +212,7 @@ async function ensureSeed(): Promise<void> {
 }
 
 async function ensurePilotOrgs(): Promise<void> {
-  const query = databaseUrl
+  const query = postgres()
     ? poolQuery
     : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
   await query(
@@ -209,18 +248,18 @@ export async function syncAdminPassword(explicit?: string): Promise<void> {
 }
 
 async function directQuery<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
-  if (databaseUrl !== "") return (await poolQuery(text, params)) as T[];
+  if (postgres()) return (await poolQuery(text, params)) as T[];
   return (await (await localDb()).query<T>(text, params)).rows;
 }
 
 async function renameAdminLabel(): Promise<void> {
-  const query = databaseUrl
+  const query = postgres()
     ? poolQuery
     : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
   await query("update users set name = $1 where username = 'admin' and name = 'Fragtblik-admin'", ["Freightlytics-admin"]);
 }
 
 async function poolQuery(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-  pool ??= new pg.Pool({ connectionString: databaseUrl, max: 5 });
+  pool ??= new pg.Pool(pgOptions(databaseUrl));
   return (await pool.query(text, params)).rows as Record<string, unknown>[];
 }

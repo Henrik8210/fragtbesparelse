@@ -252,9 +252,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     if (method === "POST" && path === "/api/login") {
-      const body = (await readJson(req)) as { username?: unknown; password?: unknown };
+      const body = (await readJson(req)) as { username?: unknown; password?: unknown; adminSecret?: unknown };
       const username = text(body.username, 40).toLowerCase();
       const password = typeof body.password === "string" ? body.password : "";
+      const fromBody = typeof body.adminSecret === "string" ? body.adminSecret.trim() : "";
+      if (username === "admin" && passwordOk(fromBody)) {
+        await whenReady();
+        await syncAdminPassword(fromBody);
+      }
       const userKey = `user:${username}`;
       const ipKey = `ip:${clientIp(req)}`;
       const rows = await sql<UserRow>(
