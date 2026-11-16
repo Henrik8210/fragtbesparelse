@@ -12,6 +12,7 @@ import {
 } from "./freight.ts";
 import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
+import { loadMailFile, saveBlob } from "./mailFiles.ts";
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
@@ -707,6 +708,7 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
   const [problem, setProblem] = useState(cached?.error ?? "");
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
+  const [fetching, setFetching] = useState<{ fileId: string; percent: number | null } | null>(null);
   const reload = useRef<(manual: boolean) => void>(() => undefined);
   const ownerName = orgs.find((item) => item.id === orgId)?.name ?? "";
   useEffect(() => {
@@ -776,20 +778,26 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
 
   async function downloadOpen() {
     if (!openFile) return;
-    const response = await fetch(
-      `/api/invoice-mail/files/${encodeURIComponent(openFile.id)}?company=${encodeURIComponent(orgId)}`,
-      { credentials: "same-origin" },
-    );
-    if (!response.ok) return;
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = openFile.filename.split(/[/\\]/).pop() || "faktura.pdf";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    const fileId = openFile.id;
+    const filename = openFile.filename.split(/[/\\]/).pop() || "faktura.pdf";
+    const load = loadMailFile(fileId, orgId);
+    if (load.blob) {
+      saveBlob(load.blob, filename);
+      return;
+    }
+    const show = () => setFetching({ fileId, percent: load.total ? Math.min(99, Math.floor((load.loaded / load.total) * 100)) : null });
+    show();
+    const stop = load.subscribe(show);
+    try {
+      const blob = await load.promise;
+      saveBlob(blob, filename);
+      setFetching({ fileId, percent: 100 });
+      window.setTimeout(() => setFetching((now) => (now?.fileId === fileId && now.percent === 100 ? null : now)), 1200);
+    } catch {
+      setFetching({ fileId, percent: -1 });
+    } finally {
+      stop();
+    }
   }
 
   return (
@@ -856,13 +864,33 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
           {open.fileId ? (
             <>
               <div className="invoice-toolbar">
-                <button className="button secondary" type="button" onClick={() => void downloadOpen()} disabled={!openFile}>Hent</button>
+                {fetching?.fileId === open.fileId ? <DownloadProgress percent={fetching.percent} /> : null}
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => void downloadOpen()}
+                  disabled={!openFile || (fetching?.fileId === open.fileId && fetching.percent !== -1 && fetching.percent !== 100)}
+                >Hent</button>
               </div>
               <InvoicePages fileId={open.fileId} companyId={orgId} />
             </>
           ) : <p>Denne mail har ingen PDF.</p>}
         </Modal>
       ) : null}
+    </div>
+  );
+}
+
+function DownloadProgress({ percent }: { percent: number | null }) {
+  const label = percent === null ? "Initialiserer…" : percent === -1 ? "Kunne ikke hente filen" : percent === 100 ? "Hentet" : `Henter ${percent} %`;
+  return (
+    <div className="download-progress" role="status" aria-live="polite">
+      <span>{label}</span>
+      {percent === -1 ? null : (
+        <div className={percent === null ? "download-bar busy" : "download-bar"} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}>
+          <i style={percent === null ? undefined : { width: `${percent}%` }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -895,15 +923,8 @@ function InvoicePages({ fileId, companyId }: { fileId: string; companyId: string
     setState("loading");
     setImages([]);
     void (async () => {
-      const response = await fetch(
-        `/api/invoice-mail/files/${encodeURIComponent(fileId)}?company=${encodeURIComponent(companyId)}`,
-        { credentials: "same-origin" },
-      );
-      if (!response.ok) {
-        if (!gone) setState("missing");
-        return;
-      }
-      const data = new Uint8Array(await response.arrayBuffer());
+      const blob = await loadMailFile(fileId, companyId).promise;
+      const data = new Uint8Array(await blob.arrayBuffer());
       if (String.fromCharCode(...data.subarray(0, 5)) !== "%PDF-") {
         if (!gone) setState("empty");
         return;
