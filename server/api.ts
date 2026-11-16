@@ -4,6 +4,7 @@ import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, hashPassword, sql, syncAdminPassword, whenReady } from "./db.ts";
+import { acceptInvoiceMail, companyIdFromRecipient, invoiceAddress, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
@@ -126,10 +127,37 @@ function suppliedAdminPassword(req: IncomingMessage): string {
 function internalSyncAllowed(req: IncomingMessage): boolean {
   const expected = (process.env.FRAGTBLIK_SYNC_TOKEN ?? "").trim();
   if (!expected) return true;
+  return tokenMatches(expected, headerValue(req, "x-fragtblik-sync"));
+}
+
+function mailIngressAllowed(req: IncomingMessage): boolean {
+  const expected = (process.env.FRAGTBLIK_SYNC_TOKEN ?? "").trim();
+  if (!expected) return false;
+  return tokenMatches(expected, headerValue(req, "x-fragtblik-sync"));
+}
+
+function tokenMatches(expected: string, given: string): boolean {
   const left = Buffer.from(expected);
-  const right = Buffer.from(headerValue(req, "x-fragtblik-sync"));
+  const right = Buffer.from(given);
   if (left.length !== right.length) return false;
   return timingSafeEqual(left, right);
+}
+
+async function readLimited(req: IncomingMessage, max: number): Promise<Buffer | "large"> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > max) return "large";
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+function contentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "") || "vedhaeftning";
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -203,6 +231,25 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       await whenReady();
       await syncAdminPassword(password);
       send(res, 200, { ok: true });
+      return;
+    }
+
+    if (method === "POST" && path === "/api/internal/invoice-mail") {
+      if (!mailIngressAllowed(req)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      const raw = await readLimited(req, MAX_MAIL_BYTES);
+      if (raw === "large") {
+        send(res, 413, { error: "large" });
+        return;
+      }
+      const result = await acceptInvoiceMail(headerValue(req, "x-fragtblik-mail-to"), headerValue(req, "x-fragtblik-mail-from"), raw);
+      if (result === "stored") send(res, 200, { ok: true });
+      else if (result === "later") send(res, 503, { error: "later" });
+      else if (result === "large") send(res, 413, { error: "large" });
+      else if (result === "bad") send(res, 400, { error: "mail" });
+      else send(res, 404, { error: "unknown" });
       return;
     }
 
@@ -583,6 +630,40 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
 
     if (method === "GET" && path === "/api/me") {
       send(res, 200, { user: publish(user) });
+      return;
+    }
+
+    if (method === "GET" && path === "/api/invoice-mail") {
+      const requested = text(url.searchParams.get("company") ?? "", 80);
+      if (user.role !== "admin" && requested && requested !== user.company_id) {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      const companyId = user.role === "admin" ? requested : (user.company_id ?? "");
+      if (!companyIdFromRecipient(invoiceAddress(companyId))) {
+        send(res, user.role === "admin" ? 400 : 404, { error: user.role === "admin" ? "company" : "missing" });
+        return;
+      }
+      const listed = await listInvoiceMail(companyId);
+      send(res, 200, { address: invoiceAddress(companyId), ready: listed.ready, mails: listed.mails });
+      return;
+    }
+
+    const invoiceFile = path.match(/^\/api\/invoice-mail\/files\/([^/]+)$/);
+    if (invoiceFile && method === "GET") {
+      const id = decodeURIComponent(invoiceFile[1] ?? "");
+      const file = /^[0-9a-f-]{36}$/i.test(id) ? await readInvoiceFile(id) : null;
+      if (!file || !canSee(user, file.companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-disposition": contentDisposition(file.filename),
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(file.content);
       return;
     }
 

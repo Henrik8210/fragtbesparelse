@@ -7,6 +7,7 @@ const IMAGE_KEY = "container-image";
 const SECRET_KEY = "admin-secret-fingerprint";
 const TOKEN_KEY = "admin-sync-token";
 const ADMIN_SYNC_PATH = "/api/internal/admin-password";
+const INVOICE_MAIL_PATH = "/api/internal/invoice-mail";
 
 type Env = {
   APP: {
@@ -38,7 +39,12 @@ export class FreightlyticsContainer extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (isAdminSyncPath(url.pathname)) return new Response("not found", { status: 404 });
+    const path = url.pathname.replace(/\/$/, "") || "/";
+    if (path === INVOICE_MAIL_PATH) {
+      if (request.headers.get("x-fragtblik-mail-ingress") !== "1") return new Response("not found", { status: 404 });
+      return this.receiveMail(request);
+    }
+    if (isClosedPath(path)) return new Response("not found", { status: 404 });
     const config = readStartConfig(this.env, request);
     this.starting ??= this.startAndWait(config).finally(() => {
       this.starting = undefined;
@@ -142,6 +148,34 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     if (!container.running) await this.boot(container, image, fingerprint, config);
   }
 
+  private async receiveMail(request: Request): Promise<Response> {
+    const config = readStartConfig(this.env, request);
+    this.starting ??= this.startAndWait(config).finally(() => {
+      this.starting = undefined;
+    });
+    try {
+      await this.starting;
+    } catch {
+      return new Response("not ready", { status: 503 });
+    }
+    const container = this.ctx.container;
+    if (!container) return new Response("container missing", { status: 503 });
+    const token = (await this.ctx.storage.get<string>(TOKEN_KEY)) ?? "";
+    if (!token) return new Response("not ready", { status: 503 });
+    const url = new URL(request.url);
+    url.protocol = "http:";
+    url.host = "container";
+    const headers = new Headers();
+    headers.set("content-type", "message/rfc822");
+    headers.set("x-fragtblik-sync", token);
+    const recipient = request.headers.get("x-fragtblik-mail-to") ?? "";
+    const sender = request.headers.get("x-fragtblik-mail-from") ?? "";
+    if (recipient) headers.set("x-fragtblik-mail-to", recipient);
+    if (sender) headers.set("x-fragtblik-mail-from", sender);
+    const body = await request.arrayBuffer();
+    return container.getTcpPort(PORT).fetch(new Request(url, { method: "POST", headers, body }));
+  }
+
   private async pushAdminPassword(
     port: { fetch(input: string, init?: RequestInit): Promise<Response> },
     secret: string,
@@ -236,6 +270,10 @@ function readStartConfig(env: Env, request: Request): StartConfig {
   };
 }
 
+function headerPlain(value: string): string {
+  return value.replace(/[\r\n]/g, "").trim().slice(0, 320);
+}
+
 function usablePassword(value: string): boolean {
   return value.length >= 8 && value.length <= 80;
 }
@@ -255,9 +293,9 @@ async function fingerprintOf(secret: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function isAdminSyncPath(pathname: string): boolean {
+function isClosedPath(pathname: string): boolean {
   const path = pathname.replace(/\/$/, "") || "/";
-  return path === ADMIN_SYNC_PATH;
+  return path === ADMIN_SYNC_PATH || path === INVOICE_MAIL_PATH;
 }
 
 async function forwardToContainer(request: Request, secret: string): Promise<Request> {
@@ -300,15 +338,53 @@ async function forwardToContainer(request: Request, secret: string): Promise<Req
   return new Request(url, { method, headers, body, redirect: "manual" });
 }
 
+type InboundMail = {
+  from: string;
+  to: string;
+  raw: ReadableStream;
+  rawSize: number;
+  setReject(reason: string): void;
+};
+
 export default {
+  async email(message: InboundMail, env: Env): Promise<void> {
+    const to = headerPlain(message.to);
+    const from = headerPlain(message.from);
+    if (!to.toLowerCase().endsWith("@freightlytics.io")) {
+      message.setReject("Ukendt modtager");
+      return;
+    }
+    if (message.rawSize > 8_000_000) {
+      message.setReject("Vedhæftningen er for stor");
+      return;
+    }
+    const raw = await new Response(message.raw).arrayBuffer();
+    const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
+      method: "POST",
+      headers: {
+        "content-type": "message/rfc822",
+        "x-fragtblik-mail-ingress": "1",
+        "x-fragtblik-mail-to": to,
+        "x-fragtblik-mail-from": from,
+      },
+      body: raw,
+    }));
+    await response.arrayBuffer();
+    if (response.status === 200) return;
+    if (response.status === 413) message.setReject("Vedhæftningen er for stor");
+    else if (response.status === 503) message.setReject("Indbakken er ikke klar");
+    else message.setReject("Ukendt modtager");
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (isAdminSyncPath(url.pathname)) return new Response("not found", { status: 404 });
+    if (isClosedPath(url.pathname)) return new Response("not found", { status: 404 });
     const headers = new Headers(request.headers);
     headers.delete("host");
     headers.delete("content-length");
     headers.delete("x-fragtblik-admin-secret");
     headers.delete("x-fragtblik-database-url");
+    headers.delete("x-fragtblik-mail-ingress");
     const secret = (env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
     if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
     const databaseUrl = (env.DATABASE_URL ?? "").trim();

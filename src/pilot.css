@@ -156,6 +156,12 @@ small { font-size: .8rem; }
 .notice strong { display: block; }
 .notice p { color: var(--muted); font-size: .86rem; }
 .notice button { border: 0; background: transparent; color: var(--green); font: inherit; font-weight: 700; }
+.mail-address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.mail-address input { flex: 1; min-width: min(100%, 240px); height: 42px; border: 1px solid var(--line-dark); border-radius: 10px; padding: 0 12px; color: var(--ink); background: #fff; }
+.mail-list { list-style: none; margin: 0; padding: 0; }
+.mail-list li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); }
+.mail-list a { font-weight: 600; }
+.mail-list small { display: block; margin-top: 3px; color: var(--muted); }
 
 .main-content { max-width: 1440px; margin: 0 auto; padding: 30px 32px 28px; width: 100%; flex: 1; }
 .content-flow { display: grid; gap: 19px; min-width: 0; }
