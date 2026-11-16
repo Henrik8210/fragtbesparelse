@@ -146,6 +146,13 @@ export function carrierPeers(orgId: string, index: number) {
   return SAMPLE_COVERAGE[orgId]?.groups[index] ?? 0;
 }
 
+const HEADER_INVOICE = "forsendelse;dato;service;vaegt_kg;beloeb_dkk;fra_land;til_land\n";
+const HEADER_RATES = "service;maks_kg;grundpris_dkk;braendstof_pct;fast_tillaeg_dkk;gyldig_fra;gyldig_til\n";
+
+export function orgFromCompany(row: { id: string; name: string }): Org {
+  return { id: row.id, name: row.name, carrier: "", invoice: HEADER_INVOICE, rates: HEADER_RATES };
+}
+
 export function orgById(id: string): Org {
   return ORGS.find((org) => org.id === id) ?? ORGS[0];
 }

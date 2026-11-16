@@ -9,10 +9,8 @@ import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
 
 const SEATS = ["Owner", "Billing", "Operations"] as const;
-const BLANK_INVOICE = "forsendelse;dato;service;vaegt_kg;beloeb_dkk;fra_land;til_land\n";
-const BLANK_RATES = "service;maks_kg;grundpris_dkk;braendstof_pct;fast_tillaeg_dkk;gyldig_fra;gyldig_til\n";
 
-type PilotOrg = { id: string; name: string; carrier: string; invoice: string; rates: string };
+type CompanyRow = { id: string; name: string; industry: string; place: string };
 
 function orgSlug(name: string): string {
   const ascii = name.toLowerCase().replace(/æ/g, "ae").replace(/ø/g, "o").replace(/å/g, "a");
@@ -341,54 +339,121 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return;
     }
 
-    if (path === "/api/pilot-orgs" && (method === "GET" || method === "POST")) {
+    const pilotOrg = path.match(/^\/api\/pilot-orgs(?:\/([^/]+))?$/);
+    if (pilotOrg && (method === "GET" || method === "POST" || method === "PATCH" || method === "DELETE")) {
       if (user.role !== "admin") {
         send(res, 403, { error: "forbidden" });
         return;
       }
+      const target = pilotOrg[1] ? decodeURIComponent(pilotOrg[1]) : "";
+      if ((method === "GET" || method === "POST") && target) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
       if (method === "GET") {
-        const rows = await sql<PilotOrg>("select id, name, carrier, invoice, rates from pilot_orgs order by created_at");
+        const rows = await sql<CompanyRow>("select id, name, industry, place from companies order by name");
         send(res, 200, { orgs: rows });
         return;
       }
-      const createKey = `org:${clientIp(req)}`;
-      if (loginBlocked(createKey)) {
-        send(res, 429, { error: "limit" });
+      if (method === "POST") {
+        const createKey = `org:${clientIp(req)}`;
+        if (loginBlocked(createKey)) {
+          send(res, 429, { error: "limit" });
+          return;
+        }
+        const body = (await readJson(req)) as { name?: unknown; industry?: unknown; place?: unknown };
+        const name = text(body.name, 80);
+        const industry = text(body.industry, 80);
+        const place = text(body.place, 80);
+        const id = orgSlug(name);
+        if (!name || !id) {
+          send(res, 400, { error: "name" });
+          return;
+        }
+        if (!industry) {
+          send(res, 400, { error: "industry" });
+          return;
+        }
+        if (!place) {
+          send(res, 400, { error: "place" });
+          return;
+        }
+        if (companyOk(id)) {
+          send(res, 409, { error: "taken" });
+          return;
+        }
+        if (!(await hasRoom("select count(*)::int as n from companies", [], 40))) {
+          send(res, 429, { error: "limit" });
+          return;
+        }
+        const taken = await sql("select id from companies where id = $1", [id]);
+        if (taken.length > 0) {
+          send(res, 409, { error: "taken" });
+          return;
+        }
+        loginFailed(createKey);
+        const rows = await sql<CompanyRow>(
+          `insert into companies (id, name, industry, place)
+           values ($1, $2, $3, $4)
+           returning id, name, industry, place`,
+          [id, name, industry, place],
+        );
+        send(res, 201, { org: rows[0] });
         return;
       }
-      const body = (await readJson(req)) as { name?: unknown; carrier?: unknown };
-      const name = text(body.name, 80);
-      const carrier = text(body.carrier, 80);
-      const id = orgSlug(name);
-      if (!name || !id) {
-        send(res, 400, { error: "name" });
+      if (!target) {
+        send(res, 404, { error: "missing" });
         return;
       }
-      if (!knownCarrier(carrier)) {
-        send(res, 400, { error: "carrier" });
+      if (companyOk(target)) {
+        send(res, 403, { error: "forbidden" });
         return;
       }
-      if (customers.some((company) => company.id === id)) {
-        send(res, 409, { error: "taken" });
+      if (method === "PATCH") {
+        const body = (await readJson(req)) as { name?: unknown; industry?: unknown; place?: unknown };
+        const name = text(body.name, 80);
+        const industry = text(body.industry, 80);
+        const place = text(body.place, 80);
+        if (!name) {
+          send(res, 400, { error: "name" });
+          return;
+        }
+        if (!industry) {
+          send(res, 400, { error: "industry" });
+          return;
+        }
+        if (!place) {
+          send(res, 400, { error: "place" });
+          return;
+        }
+        const rows = await sql<CompanyRow>(
+          `update companies set name = $1, industry = $2, place = $3
+           where id = $4
+           returning id, name, industry, place`,
+          [name, industry, place, target],
+        );
+        if (!rows[0]) {
+          send(res, 404, { error: "missing" });
+          return;
+        }
+        send(res, 200, { org: rows[0] });
         return;
       }
-      if (!(await hasRoom("select count(*)::int as n from pilot_orgs", [], 40))) {
-        send(res, 429, { error: "limit" });
-        return;
+      try {
+        const rows = await sql<{ id: string }>("delete from companies where id = $1 returning id", [target]);
+        if (!rows[0]) {
+          send(res, 404, { error: "missing" });
+          return;
+        }
+      } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error ? (error as { code: unknown }).code : "";
+        if (code === "23503") {
+          send(res, 409, { error: "used" });
+          return;
+        }
+        throw error;
       }
-      const taken = await sql("select id from pilot_orgs where id = $1", [id]);
-      if (taken.length > 0) {
-        send(res, 409, { error: "taken" });
-        return;
-      }
-      loginFailed(createKey);
-      const rows = await sql<PilotOrg>(
-        `insert into pilot_orgs (id, name, carrier, invoice, rates)
-         values ($1, $2, $3, $4, $5)
-         returning id, name, carrier, invoice, rates`,
-        [id, name, carrier, BLANK_INVOICE, BLANK_RATES],
-      );
-      send(res, 201, { org: rows[0] });
+      send(res, 200, { ok: true });
       return;
     }
 
