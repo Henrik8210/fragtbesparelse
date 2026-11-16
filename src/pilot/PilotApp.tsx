@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Package, Plus,
@@ -416,25 +416,26 @@ function AccountMenu({ admin, onCreated, onSignedOut }: {
       {open ? (
         <div className="account-pop" role="menu" aria-label="Konto">
           {admin ? (
-            creating ? (
-              <CompanyForm
-                name={name}
-                industry={industry}
-                place={place}
-                problem={problem}
-                busy={busy}
-                submitLabel="Opret"
-                onName={setName}
-                onIndustry={setIndustry}
-                onPlace={setPlace}
-                onSubmit={() => void submitOrg()}
-              />
-            ) : (
-              <button type="button" role="menuitem" onClick={() => { setCreating(true); setName(""); setIndustry(""); setPlace(""); setProblem(""); }}>Opret organisation</button>
-            )
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); setCreating(true); setName(""); setIndustry(""); setPlace(""); setProblem(""); }}>Opret organisation</button>
           ) : null}
           <button type="button" role="menuitem" onClick={() => void logout()}>Log ud</button>
         </div>
+      ) : null}
+      {admin && creating ? (
+        <Modal title="Opret organisation" onClose={() => { if (!busy) setCreating(false); }}>
+          <CompanyForm
+            name={name}
+            industry={industry}
+            place={place}
+            problem={problem}
+            busy={busy}
+            submitLabel="Opret"
+            onName={setName}
+            onIndustry={setIndustry}
+            onPlace={setPlace}
+            onSubmit={() => void submitOrg()}
+          />
+        </Modal>
       ) : null}
     </div>
   );
@@ -618,11 +619,51 @@ async function loadNotices(): Promise<Notice[]> {
   }
 }
 
+function clearHash(hash: string) {
+  if (window.location.hash === hash) {
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+  }
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  const card = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    (card.current?.querySelector<HTMLElement>("input, select, textarea") ?? card.current?.querySelector<HTMLElement>("button"))?.focus();
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") close.current();
+    }
+    document.addEventListener("keydown", onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+      previous?.focus();
+    };
+  }, []);
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close.current(); }}>
+      <div className="modal-card" ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div className="modal-head">
+          <h2 id="modal-title">{title}</h2>
+          <button type="button" className="modal-close" onClick={() => close.current()}>Luk</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: string, password: string) => Promise<void> }) {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [demoOpen, setDemoOpen] = useState(false);
   const [demoName, setDemoName] = useState("");
   const [demoCompany, setDemoCompany] = useState("");
   const [demoEmail, setDemoEmail] = useState("");
@@ -631,10 +672,22 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
   const [demoDone, setDemoDone] = useState(false);
   useEffect(() => {
     document.title = "Freightlytics";
-    if (window.location.hash === "#/login" || window.location.hash === "#login") {
-      document.getElementById("login")?.scrollIntoView();
-    }
+    const hash = window.location.hash;
+    if (hash === "#/login" || hash === "#login") setLoginOpen(true);
+    if (hash === "#/demo" || hash === "#demo") setDemoOpen(true);
   }, []);
+
+  function closeLogin() {
+    setLoginOpen(false);
+    clearHash("#login");
+    clearHash("#/login");
+  }
+
+  function closeDemo() {
+    setDemoOpen(false);
+    clearHash("#demo");
+    clearHash("#/demo");
+  }
 
   async function askDemo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -663,8 +716,8 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
       <header className="marketing-bar">
         <a href="#top"><BrandMark />Freightlytics</a>
         <nav>
-          <a href="#demo">Prøv demo</a>
-          <a className="button primary" href="#login">Log ind</a>
+          <button type="button" className="bar-link" onClick={() => setDemoOpen(true)}>Prøv demo</button>
+          <button type="button" className="button primary" onClick={() => setLoginOpen(true)}>Log ind</button>
         </nav>
       </header>
       <main id="top">
@@ -673,8 +726,8 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
             <h1>Betaler I den aftalte fragtpris?</h1>
             <p>Sammenhold fakturaen med prisaftalen. Se afvigelsen i kroner, og hvad I kan tage op med transportøren.</p>
             <div className="actions">
-              <a className="button primary" href="#demo">Prøv vores demo</a>
-              <a className="button secondary" href="#login">Log ind</a>
+              <button type="button" className="button primary" onClick={() => setDemoOpen(true)}>Prøv vores demo</button>
+              <button type="button" className="button secondary" onClick={() => setLoginOpen(true)}>Log ind</button>
             </div>
           </div>
           <CoverMotion />
@@ -697,8 +750,9 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
           </article>
         </section>
         <p className="marketing-note">Tallene i arbejdsrummet er prøvedata.</p>
-        <section className="marketing-demo" id="demo">
-          <h2>Prøv vores demo</h2>
+      </main>
+      {demoOpen ? (
+        <Modal title="Prøv vores demo" onClose={closeDemo}>
           <p>Skriv navn, firma og e-mail. Admin ser ønsket efter login. Der sendes ingen e-mail.</p>
           {demoDone ? <p className="marketing-done">Tak. Vi har noteret det.</p> : (
             <form onSubmit={(event) => void askDemo(event)}>
@@ -718,10 +772,12 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
               <button className="button primary" type="submit" disabled={demoBusy}>Prøv vores demo</button>
             </form>
           )}
-        </section>
-        <section id="login">
+        </Modal>
+      ) : null}
+      {loginOpen ? (
+        <Modal title="Log ind" onClose={closeLogin}>
+          <p>Log ind for at åbne arbejdsrummet.</p>
           <form
-            className="login-card"
             onSubmit={(event) => {
               event.preventDefault();
               const data = new FormData(event.currentTarget);
@@ -741,9 +797,6 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
                 .finally(() => setBusy(false));
             }}
           >
-            <BrandMark />
-            <h1>Freightlytics</h1>
-            <p>Log ind for at åbne arbejdsrummet.</p>
             <label>
               Brugernavn
               <input name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
@@ -755,8 +808,8 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
             {problem ? <p className="org-note">{problem}</p> : null}
             <button className="button primary" type="submit" disabled={!ready || busy}>Log ind</button>
           </form>
-        </section>
-      </main>
+        </Modal>
+      ) : null}
     </div>
   );
 }

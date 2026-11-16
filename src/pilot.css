@@ -100,8 +100,8 @@ small { font-size: .8rem; }
 .marketing-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; padding: 16px 40px; border-bottom: 1px solid var(--line); }
 .marketing-bar > a { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); font-weight: 760; font-size: 1.05rem; text-decoration: none; letter-spacing: -.02em; }
 .marketing-bar nav { display: flex; align-items: center; gap: 18px; }
-.marketing-bar nav a { color: var(--green); font-weight: 680; font-size: .9rem; text-decoration: none; }
-.marketing-bar nav a.button { min-height: 36px; color: #fff; }
+.marketing-bar nav .bar-link { border: 0; background: transparent; padding: 0; color: var(--green); font-weight: 680; font-size: .9rem; }
+.marketing-bar nav .button { min-height: 36px; color: #fff; }
 .marketing-hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(280px, .95fr); gap: 48px; align-items: center; width: 100%; padding: 64px 40px 28px; }
 .marketing-hero h1 { color: var(--ink); font-size: clamp(36px, 4.6vw, 58px); letter-spacing: -1.6px; line-height: 1.02; }
 .marketing-hero p { margin-top: 14px; max-width: 36rem; color: var(--muted); font-size: 1.05rem; line-height: 1.45; }
@@ -131,18 +131,21 @@ small { font-size: .8rem; }
 .marketing-card span { color: var(--green); font-size: .72rem; font-weight: 760; letter-spacing: .06em; text-transform: uppercase; }
 .marketing-card h2 { margin-top: 8px; font-size: 1.2rem; letter-spacing: -.02em; line-height: 1.25; }
 .marketing-card p { margin-top: 8px; color: var(--muted); font-size: .95rem; line-height: 1.45; }
-.marketing-note { color: var(--muted); font-size: .9rem; padding: 0 40px 8px; }
-.marketing-demo { width: 100%; background: var(--green-light); color: var(--ink); border-radius: 0; padding: 56px 40px; display: grid; gap: 8px; }
-.marketing-demo h2 { font-size: 1.7rem; letter-spacing: -.03em; }
-.marketing-demo > p { color: var(--muted); max-width: 36rem; }
-.marketing-demo form { display: grid; gap: 10px; margin-top: 8px; width: min(480px, 100%); background: #fff; border-radius: 16px; padding: 18px; }
-.marketing-demo label { display: grid; gap: 6px; font-size: .82rem; font-weight: 650; }
-.marketing-demo input { height: 40px; border: 1px solid var(--line-dark); border-radius: 10px; padding: 0 12px; color: var(--ink); background: #fff; }
-.marketing-done { color: var(--green); font-weight: 700; }
-.marketing #login { width: 100%; display: flex; justify-content: center; padding: 56px 40px 80px; }
-.marketing .login-card { width: min(420px, 100%); border: 1px solid var(--line); }
+.marketing-note { color: var(--muted); font-size: .9rem; padding: 0 40px 72px; }
+.marketing-done { color: var(--green); font-weight: 700; margin-top: 12px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(17, 39, 41, .46); }
+.modal-card { width: min(420px, 100%); max-height: min(90dvh, 720px); overflow: auto; background: #fff; color: var(--ink); border-radius: 18px; padding: 22px; box-shadow: 0 18px 50px rgba(17, 39, 41, .18); }
+.modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.modal-head h2 { font-size: 1.35rem; letter-spacing: -.03em; }
+.modal-close { border: 0; background: transparent; color: var(--green); font-weight: 700; padding: 2px 0; }
+.modal-card > p { margin-top: 8px; color: var(--muted); }
+.modal-card form { display: grid; gap: 10px; margin-top: 14px; }
+.modal-card label { display: grid; gap: 6px; font-size: .82rem; font-weight: 650; }
+.modal-card input { height: 40px; border: 1px solid var(--line-dark); border-radius: 10px; padding: 0 12px; color: var(--ink); background: #fff; }
+.modal-card .org-create { border-top: 0; margin-top: 14px; padding: 0; }
+.modal-card form .button { width: 100%; }
 @media (max-width: 800px) {
-  .marketing-bar, .marketing-hero, .marketing-points, .marketing-note, .marketing-demo, .marketing #login { padding-left: 20px; padding-right: 20px; }
+  .marketing-bar, .marketing-hero, .marketing-points, .marketing-note { padding-left: 20px; padding-right: 20px; }
   .marketing-hero { grid-template-columns: 1fr; gap: 12px; padding-top: 36px; }
   .marketing-points { grid-template-columns: 1fr; }
   .cover { height: 300px; }
@@ -153,12 +156,6 @@ small { font-size: .8rem; }
 .notice strong { display: block; }
 .notice p { color: var(--muted); font-size: .86rem; }
 .notice button { border: 0; background: transparent; color: var(--green); font: inherit; font-weight: 700; }
-.login-card { width: min(400px, 100%); display: grid; gap: 14px; padding: 28px 24px; background: #fff; border-radius: 18px; }
-.login-card h1 { font-size: 1.7rem; letter-spacing: -.03em; }
-.login-card p { color: var(--muted); }
-.login-card label { display: grid; gap: 6px; font-size: .82rem; font-weight: 650; }
-.login-card input { height: 40px; border: 1px solid var(--line-dark); border-radius: 10px; padding: 0 12px; color: var(--ink); background: #fff; }
-.login-card .button { justify-content: center; }
 
 .main-content { max-width: 1440px; margin: 0 auto; padding: 30px 32px 28px; width: 100%; flex: 1; }
 .content-flow { display: grid; gap: 19px; min-width: 0; }
