@@ -126,19 +126,22 @@ export async function checkPassword(password: string, stored: string | null): Pr
 }
 
 async function ensureSeed(): Promise<void> {
+  const insert = postgres() ? poolQuery : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
+  try {
+    for (const company of customers) {
+      await insert(
+        `insert into companies (id, name, industry, place) values ($1, $2, $3, $4)
+         on conflict (id) do nothing`,
+        [company.id, company.name, company.industry, company.place],
+      );
+    }
+  } catch (error) {
+    if (!missingTable(error)) throw error;
+  }
   const existing = postgres()
     ? ((await poolQuery("select id from users limit 1")) as { id: string }[])
     : (await (await localDb()).query<{ id: string }>("select id from users limit 1")).rows;
   if (existing.length > 0) return;
-  const insert = postgres() ? poolQuery : async (text: string, params: unknown[] = []) => (await (await localDb()).query(text, params)).rows;
-
-  for (const company of customers) {
-    await insert(
-      `insert into companies (id, name, industry, place) values ($1, $2, $3, $4)
-       on conflict (id) do nothing`,
-      [company.id, company.name, company.industry, company.place],
-    );
-  }
 
   const people: { username: string; name: string; role: "admin" | "customer"; companyId: string | null; seat: string | null }[] = [
     { username: "admin", name: "Freightlytics-admin", role: "admin", companyId: null, seat: null },
