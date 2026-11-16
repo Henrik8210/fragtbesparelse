@@ -172,8 +172,17 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     const sender = request.headers.get("x-fragtblik-mail-from") ?? "";
     if (recipient) headers.set("x-fragtblik-mail-to", recipient);
     if (sender) headers.set("x-fragtblik-mail-from", sender);
-    const body = await request.arrayBuffer();
-    return container.getTcpPort(PORT).fetch(new Request(url, { method: "POST", headers, body }));
+    let body: ArrayBuffer;
+    try {
+      body = await request.arrayBuffer();
+    } catch {
+      return new Response("not ready", { status: 503 });
+    }
+    try {
+      return await container.getTcpPort(PORT).fetch(new Request(url, { method: "POST", headers, body }));
+    } catch {
+      return new Response("not ready", { status: 503 });
+    }
   }
 
   private async pushAdminPassword(
@@ -275,28 +284,101 @@ function headerPlain(value: unknown): string {
   return value.replace(/[\r\n]/g, "").trim().slice(0, 320);
 }
 
-async function readRawMail(raw: ReadableStream | undefined): Promise<Uint8Array | "large"> {
-  if (!raw) return new Uint8Array();
-  const reader = raw.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const step = await reader.read();
-    if (step.done) break;
-    size += step.value.byteLength;
-    if (size > 8_000_000) {
-      await reader.cancel().catch(() => undefined);
-      return "large";
+async function acceptRoutedMail(message: InboundMail, env: Env): Promise<void> {
+  const to = headerPlain(message?.to);
+  const from = headerPlain(message?.from);
+  if (!to.toLowerCase().endsWith("@freightlytics.io")) {
+    safeReject(message, "Ukendt modtager");
+    return;
+  }
+  const size = typeof message?.rawSize === "number" ? message.rawSize : 0;
+  if (size > 8_000_000) {
+    safeReject(message, "Vedhæftningen er for stor");
+    return;
+  }
+  const raw = await readRawMail(message?.raw);
+  if (raw === "large") {
+    safeReject(message, "Vedhæftningen er for stor");
+    return;
+  }
+  if (raw.byteLength === 0 && size > 0) return;
+  let status = await postInvoice(env, to, from, raw);
+  if (status !== 200 && status !== 404 && status !== 413) status = await postInvoice(env, to, from, raw);
+  if (status === 200) return;
+  if (status === 413) safeReject(message, "Vedhæftningen er for stor");
+  else if (status === 404) safeReject(message, "Ukendt modtager");
+}
+
+async function postInvoice(env: Env, to: string, from: string, raw: Uint8Array): Promise<number> {
+  try {
+    const headers = new Headers();
+    headers.set("content-type", "message/rfc822");
+    headers.set("x-fragtblik-mail-ingress", "1");
+    if (to) headers.set("x-fragtblik-mail-to", to);
+    if (from) headers.set("x-fragtblik-mail-from", from);
+    const secret = typeof env?.FRAGTBLIK_ADMIN_PASSWORD === "string" ? env.FRAGTBLIK_ADMIN_PASSWORD.trim() : "";
+    if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
+    const databaseUrl = typeof env?.DATABASE_URL === "string" ? env.DATABASE_URL.trim() : "";
+    if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
+    const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
+      method: "POST",
+      headers,
+      body: raw,
+    }));
+    const status = response.status;
+    try {
+      await response.arrayBuffer();
+    } catch {
+      // The response body is optional. A 200 means the row is stored.
     }
-    chunks.push(step.value);
+    return status;
+  } catch {
+    return 0;
   }
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
+}
+
+function safeReject(message: InboundMail, reason: string): void {
+  try {
+    message?.setReject?.(reason);
+  } catch {
+    // The reject reason is optional.
   }
-  return body;
+}
+
+async function readRawMail(raw: ReadableStream | undefined): Promise<Uint8Array | "large"> {
+  try {
+    if (!raw || typeof raw.getReader !== "function") return new Uint8Array();
+    const reader = raw.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const step = await reader.read();
+      if (step.done) break;
+      const chunk = chunkBytes(step.value);
+      size += chunk.byteLength;
+      if (size > 8_000_000) {
+        await reader.cancel().catch(() => undefined);
+        return "large";
+      }
+      chunks.push(chunk);
+    }
+    const body = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return body;
+  } catch {
+    return new Uint8Array();
+  }
+}
+
+function chunkBytes(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new Uint8Array();
 }
 
 function usablePassword(value: string): boolean {
@@ -364,56 +446,20 @@ async function forwardToContainer(request: Request, secret: string): Promise<Req
 }
 
 type InboundMail = {
-  from: string;
-  to: string;
-  raw: ReadableStream;
-  rawSize: number;
-  setReject(reason: string): void;
+  from?: unknown;
+  to?: unknown;
+  raw?: ReadableStream;
+  rawSize?: number;
+  setReject?(reason: string): void;
 };
 
 export default {
   async email(message: InboundMail, env: Env): Promise<void> {
-    const to = headerPlain(message.to);
-    const from = headerPlain(message.from);
-    if (!to.toLowerCase().endsWith("@freightlytics.io")) {
-      message.setReject("Ukendt modtager");
-      return;
+    try {
+      await acceptRoutedMail(message, env);
+    } catch {
+      // A missing optional field must not escape the worker. Cloudflare treats that as a failed delivery.
     }
-    if ((message.rawSize ?? 0) > 8_000_000) {
-      message.setReject("Vedhæftningen er for stor");
-      return;
-    }
-    const raw = await readRawMail(message.raw);
-    if (raw === "large") {
-      message.setReject("Vedhæftningen er for stor");
-      return;
-    }
-    const headers = new Headers();
-    headers.set("content-type", "message/rfc822");
-    headers.set("x-fragtblik-mail-ingress", "1");
-    headers.set("x-fragtblik-mail-to", to);
-    if (from) headers.set("x-fragtblik-mail-from", from);
-    const secret = (env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
-    if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
-    const databaseUrl = (env.DATABASE_URL ?? "").trim();
-    if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
-    const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
-      method: "POST",
-      headers,
-      body: raw,
-    }));
-    await response.arrayBuffer();
-    if (response.status === 200) return;
-    if (response.status === 413) {
-      message.setReject("Vedhæftningen er for stor");
-      return;
-    }
-    if (response.status === 404) {
-      message.setReject("Ukendt modtager");
-      return;
-    }
-    // A 503 while the container restarts must stay a temporary failure so the sender retries.
-    throw new Error("invoice mail was not stored");
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {

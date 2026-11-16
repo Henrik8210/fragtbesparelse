@@ -84,6 +84,7 @@ export async function readInvoiceFile(id: string): Promise<{ filename: string; c
 }
 
 export async function acceptInvoiceMail(recipient: string, sender: string, raw: Buffer): Promise<"stored" | "unknown" | "later" | "large" | "bad"> {
+  if (!Buffer.isBuffer(raw)) return "bad";
   if (raw.length > MAX_MAIL_BYTES) return "large";
   const companyId = companyIdFromRecipient(recipient);
   if (!companyId) return "unknown";
@@ -96,14 +97,22 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
   } catch {
     parsed = null;
   }
-  const files = parsed ? filesFrom(parsed) : [];
-  if (files === "large") return "large";
+  let files: { name: string; mime: string; bytes: Buffer }[] = [];
+  if (parsed) {
+    try {
+      const collected = filesFrom(parsed);
+      if (collected === "large") return "large";
+      files = collected;
+    } catch {
+      files = [];
+    }
+  }
   if (files.length === 0 && raw.length > 0) {
     files.push({ name: "besked.eml", mime: "message/rfc822", bytes: raw });
   }
 
   const mailId = crypto.randomUUID();
-  const subject = clean(parsed?.subject || subjectFromRaw(raw), 200) || "(uden emne)";
+  const subject = clean(textOrEmpty(parsed?.subject) || subjectFromRaw(raw), 200) || "(uden emne)";
   const from = clean(sender, 200) || "ukendt";
   try {
     await sql(
@@ -111,18 +120,12 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
       [mailId, companyId, from, subject],
     );
     for (const file of files) {
-      await sql(
-        `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
-         values ($1, $2, $3, $4, $5, $6, $7)`,
-        [crypto.randomUUID(), mailId, companyId, file.name, file.mime, file.bytes.length, file.bytes],
-      );
+      await insertFile(mailId, companyId, file);
     }
   } catch (error) {
-    if (!missingTable(error)) {
-      await sql("delete from invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
-    }
+    await sql("delete from invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
     if (missingTable(error)) return "later";
-    throw error;
+    return "later";
   }
   return "stored";
 }
@@ -141,15 +144,40 @@ async function ensureMailbox(companyId: string): Promise<"ok" | "unknown" | "lat
     return "ok";
   } catch (error) {
     if (missingTable(error)) return "later";
-    throw error;
+    return "later";
+  }
+}
+
+async function insertFile(mailId: string, companyId: string, file: { name: string; mime: string; bytes: Buffer }): Promise<void> {
+  const values = [crypto.randomUUID(), mailId, companyId, file.name, file.mime, file.bytes.length];
+  try {
+    await sql(
+      `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [...values, file.bytes],
+    );
+  } catch (error) {
+    if (missingTable(error)) throw error;
+    await sql(
+      `insert into invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
+       values ($1, $2, $3, $4, $5, $6, decode($7, 'base64'))`,
+      [...values, file.bytes.toString("base64")],
+    );
   }
 }
 
 function filesFrom(parsed: Email): { name: string; mime: string; bytes: Buffer }[] | "large" {
   const files: { name: string; mime: string; bytes: Buffer }[] = [];
   let total = 0;
-  for (const attachment of (parsed.attachments ?? []).slice(0, 20)) {
-    const file = fileFrom(attachment);
+  const attachments = Array.isArray(parsed.attachments) ? parsed.attachments.slice(0, 20) : [];
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== "object") continue;
+    let file: { name: string; mime: string; bytes: Buffer } | null = null;
+    try {
+      file = fileFrom(attachment);
+    } catch {
+      file = null;
+    }
     if (!file) continue;
     total += file.bytes.length;
     if (file.bytes.length > MAX_MAIL_BYTES || total > MAX_MAIL_BYTES) return "large";
@@ -159,20 +187,26 @@ function filesFrom(parsed: Email): { name: string; mime: string; bytes: Buffer }
 }
 
 function fileFrom(attachment: Attachment): { name: string; mime: string; bytes: Buffer } | null {
-  const mime = typeof attachment.mimeType === "string" ? attachment.mimeType : "";
-  if (!wanted(attachment.disposition ?? null, mime, attachment.filename ?? null)) return null;
+  const mime = textOrEmpty(attachment.mimeType);
+  const filename = textOrEmpty(attachment.filename);
+  const disposition = textOrEmpty(attachment.disposition);
+  if (!wanted(disposition || null, mime, filename || null)) return null;
   let bytes: Buffer;
   try {
-    bytes = contentBytes(attachment.content, attachment.encoding);
+    bytes = contentBytes(attachment.content, textOrEmpty(attachment.encoding));
   } catch {
     return null;
   }
   if (bytes.length === 0) return null;
   return {
-    name: fileName(attachment.filename, mime),
+    name: fileName(filename || null, mime),
     mime: mime.slice(0, 120) || "application/octet-stream",
     bytes,
   };
+}
+
+function textOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function wanted(disposition: string | null, mime: string, filename: string | null): boolean {
@@ -214,9 +248,10 @@ function fileName(name: string | null, mime: string): string {
   return "vedhaeftning";
 }
 
-function clean(value: string, max: number): string {
+function clean(value: unknown, max: number): string {
+  const text = typeof value === "string" ? value : "";
   let cleaned = "";
-  for (const char of value) {
+  for (const char of text) {
     const code = char.charCodeAt(0);
     cleaned += code < 32 || code === 127 ? " " : char;
   }
