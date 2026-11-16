@@ -1,10 +1,12 @@
-import { benchmarkSamples, type AuditInput, type AuditReport, type Contribution, type Coverage, type SavedAudit } from "./freight.ts";
+import { benchmarkSamples, type AuditInput, type AuditReport, type Contribution, type Coverage, type InvoiceRow, type RateRow, type SavedAudit } from "./freight.ts";
 
 const KEY = "fragtblik-pilot-audits";
 
 export type StoredAudit = SavedAudit & {
   samples: { group: string; cvr: string }[];
   orgId?: string;
+  invoice?: InvoiceRow[];
+  rates?: RateRow[];
 };
 
 export function loadAudits(): StoredAudit[] {
@@ -37,6 +39,8 @@ export function recordAudit(input: AuditInput, report: AuditReport, contribution
     report,
     samples,
     orgId,
+    invoice: input.invoice,
+    rates: input.rates,
   };
 }
 
