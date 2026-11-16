@@ -159,9 +159,17 @@ small { font-size: .8rem; }
 .mail-address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
 .mail-address input { flex: 1; min-width: min(100%, 240px); height: 42px; border: 1px solid var(--line-dark); border-radius: 10px; padding: 0 12px; color: var(--ink); background: #fff; }
 .mail-list { list-style: none; margin: 0; padding: 0; }
-.mail-list li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); }
-.mail-list a { font-weight: 600; }
-.mail-list small { display: block; margin-top: 3px; color: var(--muted); }
+.mail-list li { border-top: 1px solid var(--line); }
+.mail-row { width: 100%; display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 18px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.mail-row:hover { background: #f4faf7; }
+.mail-row strong { font-weight: 700; }
+.mail-row small { display: block; margin-top: 3px; color: var(--muted); }
+.invoice-modal { width: min(880px, 100%); }
+.invoice-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.invoice-files button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 4px 10px; font: inherit; cursor: pointer; }
+.invoice-files button.active { border-color: var(--green); color: var(--green); font-weight: 700; }
+.invoice-scroll { margin-top: 14px; overflow: auto; max-height: min(72dvh, 760px); background: #f4f7f6; border-radius: 12px; padding: 12px; display: grid; gap: 12px; }
+.invoice-scroll img { width: 100%; height: auto; background: #fff; }
 
 .main-content { max-width: 1440px; margin: 0 auto; padding: 30px 32px 28px; width: 100%; flex: 1; }
 .content-flow { display: grid; gap: 19px; min-width: 0; }

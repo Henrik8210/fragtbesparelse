@@ -156,8 +156,16 @@ async function readLimited(req: IncomingMessage, max: number): Promise<Buffer | 
 }
 
 function contentDisposition(filename: string): string {
+  return fileDisposition("attachment", filename);
+}
+
+function inlineDisposition(filename: string): string {
+  return fileDisposition("inline", filename);
+}
+
+function fileDisposition(kind: "attachment" | "inline", filename: string): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "") || "vedhaeftning";
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -655,14 +663,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const invoiceFile = path.match(/^\/api\/invoice-mail\/files\/([^/]+)$/);
     if (invoiceFile && method === "GET") {
       const id = decodeURIComponent(invoiceFile[1] ?? "");
+      const requested = text(url.searchParams.get("company") ?? "", 80);
       const file = /^[0-9a-f-]{36}$/i.test(id) ? await readInvoiceFile(id) : null;
-      if (!file || !canSee(user, file.companyId)) {
+      if (!file || !requested || requested !== file.companyId || !canSee(user, file.companyId)) {
         send(res, 404, { error: "missing" });
         return;
       }
+      const pdf = file.content.subarray(0, 5).toString("latin1") === "%PDF-";
       res.writeHead(200, {
-        "content-type": "application/octet-stream",
-        "content-disposition": contentDisposition(file.filename),
+        "content-type": pdf ? "application/pdf" : "application/octet-stream",
+        "content-disposition": pdf ? inlineDisposition(file.filename) : contentDisposition(file.filename),
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
       });
