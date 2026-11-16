@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { confirmedMail } from "./mailResult.ts";
 import { REVISION, healthMatchesRevision } from "./revision.ts";
 
 const PORT = 8080;
@@ -176,12 +177,37 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     try {
       body = await request.arrayBuffer();
     } catch {
-      return new Response("not ready", { status: 503 });
+      return new Response(JSON.stringify({ error: "later" }), { status: 503, headers: { "content-type": "application/json" } });
     }
+    const kept = body.slice(0);
+    const posted = await this.postMail(headers, kept.slice(0));
+    const text = await posted.text();
+    if (posted.status === 200 && text.includes('"postgres":true')) {
+      return new Response(text, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (config.databaseUrl && (text.includes('"error":"database"') || text.includes('"postgres":false'))) {
+      const image = container.images.base;
+      const fingerprint = config.adminPassword ? await fingerprintOf(config.adminPassword) : "";
+      await this.forceRestart(container, image, fingerprint, config);
+      await this.waitForRevision(container);
+      const token = (await this.ctx.storage.get<string>(TOKEN_KEY)) ?? "";
+      if (token) headers.set("x-fragtblik-sync", token);
+      return await this.postMail(headers, kept.slice(0));
+    }
+    return new Response(text, { status: posted.status, headers: { "content-type": "application/json" } });
+  }
+
+  private async postMail(headers: Headers, body: ArrayBuffer): Promise<Response> {
+    const container = this.ctx.container;
+    if (!container) return new Response(JSON.stringify({ error: "later" }), { status: 503 });
     try {
-      return await container.getTcpPort(PORT).fetch(new Request(url, { method: "POST", headers, body }));
+      return await container.getTcpPort(PORT).fetch(new Request("http://container/api/internal/invoice-mail", {
+        method: "POST",
+        headers,
+        body,
+      }));
     } catch {
-      return new Response("not ready", { status: 503 });
+      return new Response(JSON.stringify({ error: "later" }), { status: 503, headers: { "content-type": "application/json" } });
     }
   }
 
@@ -287,7 +313,8 @@ function headerPlain(value: unknown): string {
 async function acceptRoutedMail(message: InboundMail, env: Env): Promise<void> {
   const to = headerPlain(message?.to);
   const from = headerPlain(message?.from);
-  if (!to.toLowerCase().endsWith("@freightlytics.io")) {
+  const companyId = companyFromAddress(to);
+  if (!companyId) {
     safeReject(message, "Ukendt modtager");
     return;
   }
@@ -301,40 +328,60 @@ async function acceptRoutedMail(message: InboundMail, env: Env): Promise<void> {
     safeReject(message, "Vedhæftningen er for stor");
     return;
   }
-  if (raw.byteLength === 0 && size > 0) return;
-  let status = await postInvoice(env, to, from, raw);
-  if (status !== 200 && status !== 404 && status !== 413) status = await postInvoice(env, to, from, raw);
-  if (status === 200) return;
-  if (status === 413) safeReject(message, "Vedhæftningen er for stor");
-  else if (status === 404) safeReject(message, "Ukendt modtager");
+  let outcome = await postInvoice(env, to, from, companyId, raw);
+  if (outcome !== "stored" && outcome !== "unknown" && outcome !== "large") {
+    outcome = await postInvoice(env, to, from, companyId, raw);
+  }
+  if (outcome === "stored") return;
+  if (outcome === "large") {
+    safeReject(message, "Vedhæftningen er for stor");
+    return;
+  }
+  if (outcome === "unknown") {
+    safeReject(message, "Ukendt modtager");
+    return;
+  }
+  throw new Error("invoice mail was not stored");
 }
 
-async function postInvoice(env: Env, to: string, from: string, raw: Uint8Array): Promise<number> {
+async function postInvoice(env: Env, to: string, from: string, companyId: string, raw: Uint8Array): Promise<"stored" | "unknown" | "large" | "miss"> {
+  const headers = new Headers();
+  headers.set("content-type", "message/rfc822");
+  headers.set("x-fragtblik-mail-ingress", "1");
+  if (to) headers.set("x-fragtblik-mail-to", to);
+  if (from) headers.set("x-fragtblik-mail-from", from);
+  const secret = typeof env?.FRAGTBLIK_ADMIN_PASSWORD === "string" ? env.FRAGTBLIK_ADMIN_PASSWORD.trim() : "";
+  if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
+  const databaseUrl = typeof env?.DATABASE_URL === "string" ? env.DATABASE_URL.trim() : "";
+  if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
+  const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
+    method: "POST",
+    headers,
+    body: raw.slice(),
+  }));
+  const text = await response.text();
+  let body: unknown = null;
   try {
-    const headers = new Headers();
-    headers.set("content-type", "message/rfc822");
-    headers.set("x-fragtblik-mail-ingress", "1");
-    if (to) headers.set("x-fragtblik-mail-to", to);
-    if (from) headers.set("x-fragtblik-mail-from", from);
-    const secret = typeof env?.FRAGTBLIK_ADMIN_PASSWORD === "string" ? env.FRAGTBLIK_ADMIN_PASSWORD.trim() : "";
-    if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
-    const databaseUrl = typeof env?.DATABASE_URL === "string" ? env.DATABASE_URL.trim() : "";
-    if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
-    const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
-      method: "POST",
-      headers,
-      body: raw,
-    }));
-    const status = response.status;
-    try {
-      await response.arrayBuffer();
-    } catch {
-      // The response body is optional. A 200 means the row is stored.
-    }
-    return status;
+    body = JSON.parse(text);
   } catch {
-    return 0;
+    body = null;
   }
+  if (response.status === 200 && confirmedMail(body, companyId)) return "stored";
+  if (response.status === 404) return "unknown";
+  if (response.status === 413) return "large";
+  return "miss";
+}
+
+function companyFromAddress(address: string): string {
+  const trimmed = address.trim().toLowerCase();
+  const angled = trimmed.match(/<([^>]+)>\s*$/);
+  const email = (angled?.[1] ?? trimmed).trim();
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return "";
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  if (domain !== "freightlytics.io" || !/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/.test(local)) return "";
+  return local;
 }
 
 function safeReject(message: InboundMail, reason: string): void {
@@ -345,33 +392,51 @@ function safeReject(message: InboundMail, reason: string): void {
   }
 }
 
-async function readRawMail(raw: ReadableStream | undefined): Promise<Uint8Array | "large"> {
+class MailTooLarge extends Error {}
+
+async function readRawMail(raw: unknown): Promise<Uint8Array | "large"> {
   try {
-    if (!raw || typeof raw.getReader !== "function") return new Uint8Array();
-    const reader = raw.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    for (;;) {
-      const step = await reader.read();
-      if (step.done) break;
-      const chunk = chunkBytes(step.value);
-      size += chunk.byteLength;
-      if (size > 8_000_000) {
-        await reader.cancel().catch(() => undefined);
-        return "large";
-      }
-      chunks.push(chunk);
+    if (raw instanceof Uint8Array) return capMail(raw);
+    if (raw instanceof ArrayBuffer) return capMail(new Uint8Array(raw));
+    if (raw && typeof (raw as ReadableStream).getReader === "function") {
+      return capMail(await readStream(raw as ReadableStream));
     }
-    const body = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return body;
-  } catch {
-    return new Uint8Array();
+    return capMail(new Uint8Array(await new Response(raw as BodyInit).arrayBuffer()));
+  } catch (error) {
+    if (error instanceof MailTooLarge) return "large";
+    throw error;
   }
+}
+
+async function readStream(raw: ReadableStream): Promise<Uint8Array> {
+  const reader = raw.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const step = await reader.read();
+    if (step.done) break;
+    const chunk = chunkBytes(step.value);
+    size += chunk.byteLength;
+    if (size > 8_000_000) {
+      await reader.cancel().catch(() => undefined);
+      throw new MailTooLarge();
+    }
+    chunks.push(chunk);
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  if (body.byteLength === 0) throw new Error("invoice mail was not read");
+  return body;
+}
+
+function capMail(bytes: Uint8Array): Uint8Array | "large" {
+  if (bytes.byteLength > 8_000_000) return "large";
+  if (bytes.byteLength === 0) throw new Error("invoice mail was not read");
+  return bytes;
 }
 
 function chunkBytes(value: unknown): Uint8Array {
@@ -455,11 +520,7 @@ type InboundMail = {
 
 export default {
   async email(message: InboundMail, env: Env): Promise<void> {
-    try {
-      await acceptRoutedMail(message, env);
-    } catch {
-      // A missing optional field must not escape the worker. Cloudflare treats that as a failed delivery.
-    }
+    await acceptRoutedMail(message, env);
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {

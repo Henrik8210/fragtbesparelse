@@ -20,6 +20,10 @@ function postgres(): boolean {
   return databaseUrl !== "" && !localMode;
 }
 
+export function storesInPostgres(): boolean {
+  return postgres();
+}
+
 function sslOptions(connectionString: string): { rejectUnauthorized: false } | undefined {
   const query = connectionString.split("?")[1] ?? "";
   let mode = "";
