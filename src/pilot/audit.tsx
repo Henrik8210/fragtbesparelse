@@ -24,10 +24,11 @@ export function downloadCsv(name: string, contents: string) {
 }
 
 export function AuditFlow({
-  onReport, onExample,
+  onReport, onExample, embedded = false,
 }: {
   onReport: (input: AuditInput, report: AuditReport) => void;
   onExample: () => void;
+  embedded?: boolean;
 }) {
   const [invoice, setInvoice] = useState<Uploaded | null>(null);
   const [rates, setRates] = useState<Uploaded | null>(null);
@@ -61,21 +62,25 @@ export function AuditFlow({
 
   return (
     <div className="content-flow">
-      <div className="page-intro split">
-        <div>
-          <span className="eyebrow"><i /> FAKTURAKONTROL</span>
-          <h1>Nyt fakturatjek</h1>
-          <p>Indlæs et udtræk af fakturaen og den prisaftale, der gjaldt for forsendelserne.</p>
-        </div>
-        <button type="button" className="button secondary" onClick={onExample}><FileText size={17} /> Prøv med eksempel</button>
-      </div>
-      <div className="step-strip" aria-label="Trin i fakturakontrol">
-        <div className="step current"><span>01</span><div><strong>Indlæs filer</strong><small>Faktura og prisaftale</small></div></div>
-        <ChevronDown className="step-arrow" size={16} />
-        <div className="step"><span>02</span><div><strong>Kontrollér</strong><small>Sammenlign priser</small></div></div>
-        <ChevronDown className="step-arrow" size={16} />
-        <div className="step"><span>03</span><div><strong>Gennemgå</strong><small>Se afvigelser</small></div></div>
-      </div>
+      {embedded ? null : (
+        <>
+          <div className="page-intro split">
+            <div>
+              <span className="eyebrow"><i /> FAKTURAKONTROL</span>
+              <h1>Nyt fakturatjek</h1>
+              <p>Indlæs et udtræk af fakturaen og den prisaftale, der gjaldt for forsendelserne.</p>
+            </div>
+            <button type="button" className="button secondary" onClick={onExample}><FileText size={17} /> Prøv med eksempel</button>
+          </div>
+          <div className="step-strip" aria-label="Trin i fakturakontrol">
+            <div className="step current"><span>01</span><div><strong>Indlæs filer</strong><small>Faktura og prisaftale</small></div></div>
+            <ChevronDown className="step-arrow" size={16} />
+            <div className="step"><span>02</span><div><strong>Kontrollér</strong><small>Sammenlign priser</small></div></div>
+            <ChevronDown className="step-arrow" size={16} />
+            <div className="step"><span>03</span><div><strong>Gennemgå</strong><small>Se afvigelser</small></div></div>
+          </div>
+        </>
+      )}
 
       <form onSubmit={submit}>
         <div className="upload-grid">
@@ -97,9 +102,12 @@ export function AuditFlow({
         {error ? <div className="message error" role="alert">{error}</div> : null}
         <div className="form-actions">
           <p className="quiet"><ShieldCheck size={17} /> Filerne læses i browseren. Du vælger, om resultatet skal gemmes.</p>
-          <button type="submit" className="button primary" disabled={!invoice || !rates}>
-            Beregn afvigelser <ArrowRight size={17} />
-          </button>
+          <div className="actions">
+            {embedded ? <button type="button" className="button secondary" onClick={onExample}><FileText size={17} /> Prøv med eksempel</button> : null}
+            <button type="submit" className="button primary" disabled={!invoice || !rates}>
+              Beregn afvigelser <ArrowRight size={17} />
+            </button>
+          </div>
         </div>
       </form>
 
