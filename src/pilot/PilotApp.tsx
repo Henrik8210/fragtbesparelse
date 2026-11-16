@@ -86,13 +86,11 @@ export function PilotApp() {
         const isAdmin = me.user.role === "admin";
         setAdmin(isAdmin);
         if (isAdmin) {
-          try {
-            const body = await api<{ orgs: Company[] }>("/api/pilot-orgs");
-            if (!gone) setExtraOrgs(body.orgs);
-          } catch {
-            // The sample companies still show when the saved list cannot be read.
-          }
-          const notes = await loadNotices();
+          const [body, notes] = await Promise.all([
+            api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
+            loadNotices(),
+          ]);
+          if (!gone && body) setExtraOrgs(body.orgs);
           if (!gone) setNotices(notes);
         }
         setGate("open");
@@ -213,13 +211,12 @@ export function PilotApp() {
     const isAdmin = signed.user.role === "admin";
     setAdmin(isAdmin);
     if (isAdmin) {
-      try {
-        const body = await api<{ orgs: Company[] }>("/api/pilot-orgs");
-        setExtraOrgs(body.orgs);
-      } catch {
-        // The sample companies still show when the saved list cannot be read.
-      }
-      setNotices(await loadNotices());
+      const [body, notes] = await Promise.all([
+        api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
+        loadNotices(),
+      ]);
+      if (body) setExtraOrgs(body.orgs);
+      setNotices(notes);
     } else {
       setExtraOrgs([]);
       setNotices([]);
@@ -375,6 +372,7 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
   const [address, setAddress] = useState("");
   const [ready, setReady] = useState(true);
   const [mails, setMails] = useState<MailRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [problem, setProblem] = useState("");
   const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
@@ -383,6 +381,8 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     let gone = false;
     const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
     setCopied(false);
+    setLoading(true);
+    setProblem("");
     api<{ address: string; ready: boolean; error?: string; mails: MailRow[] }>(`/api/invoice-mail${query}`)
       .then((body) => {
         if (gone) return;
@@ -393,6 +393,9 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
       })
       .catch(() => {
         if (!gone) setProblem("Kunne ikke hente indbakken.");
+      })
+      .finally(() => {
+        if (!gone) setLoading(false);
       });
     return () => {
       gone = true;
@@ -402,18 +405,37 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     setOpen(null);
   }, [address, orgId]);
 
+  const shownAddress = address || (orgId ? `${orgId}@freightlytics.io` : "");
+  const mailboxId = shownAddress.split("@")[0] ?? "";
+  const ownerName = orgs.find((item) => item.id === mailboxId)?.name ?? "";
+  const openFile = open?.files.find((file) => file.id === open.fileId) ?? null;
+
   async function copyAddress() {
     field.current?.select();
     try {
-      await navigator.clipboard.writeText(address);
+      await navigator.clipboard.writeText(shownAddress);
     } catch {
       field.current?.focus();
     }
     setCopied(true);
   }
-
-  const mailboxId = address.split("@")[0] ?? "";
-  const ownerName = orgs.find((item) => item.id === mailboxId)?.name ?? "";
+  async function downloadOpen() {
+    if (!openFile || !mailboxId) return;
+    const response = await fetch(
+      `/api/invoice-mail/files/${encodeURIComponent(openFile.id)}?company=${encodeURIComponent(mailboxId)}`,
+      { credentials: "same-origin" },
+    );
+    if (!response.ok) return;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = openFile.filename.split(/[/\\]/).pop() || "faktura.pdf";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
   return (
     <div className="content-flow">
       <div className="page-intro">
@@ -424,16 +446,18 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
       <section className="panel">
         <div className="section-heading">
           <h2>Fakturamail</h2>
-          <p>{problem ? "Indbakken kunne ikke læses." : ready ? "Mail til adressen lander her." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op."}</p>
+          <p>{loading || !problem ? (ready || loading ? "Mail til adressen lander her." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op.") : "Indbakken kunne ikke læses."}</p>
         </div>
         <div className="mail-address" style={{ padding: "0 18px 18px" }}>
-          <input ref={field} readOnly value={address} aria-label="Indbakke" spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
-          <button className="button secondary" type="button" onClick={() => void copyAddress()} disabled={!address}>{copied ? "Kopieret" : "Kopiér"}</button>
+          {loading && !shownAddress ? <span className="bone address" /> : (
+            <input ref={field} readOnly value={shownAddress} aria-label="Indbakke" spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
+          )}
+          <button className="button secondary" type="button" onClick={() => void copyAddress()} disabled={!shownAddress}>{copied ? "Kopieret" : "Kopiér"}</button>
         </div>
       </section>
-      <section className="panel">
+      <section className="panel" aria-busy={loading}>
         <div className="section-heading"><h2>Modtaget</h2></div>
-        {problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : mails.length === 0 ? (
+        {loading ? <MailSkeleton /> : problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : mails.length === 0 ? (
           <p className="quiet" style={{ padding: "0 18px 16px" }}>Ingen fakturamail endnu.</p>
         ) : (
           <ul className="mail-list">
@@ -467,10 +491,35 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
               ))}
             </div>
           ) : null}
-          {open.fileId ? <InvoicePages fileId={open.fileId} companyId={mailboxId} /> : <p>Denne mail har ingen PDF.</p>}
+          {open.fileId ? (
+            <>
+              <div className="invoice-toolbar">
+                <button className="button secondary" type="button" onClick={() => void downloadOpen()} disabled={!openFile}>Hent</button>
+              </div>
+              <InvoicePages fileId={open.fileId} companyId={mailboxId} />
+            </>
+          ) : <p>Denne mail har ingen PDF.</p>}
         </Modal>
       ) : null}
     </div>
+  );
+}
+
+function MailSkeleton() {
+  return (
+    <ul className="mail-list" aria-hidden="true">
+      {[0, 1, 2].map((row) => (
+        <li key={row}>
+          <div className="mail-row mail-skeleton">
+            <span>
+              <i className="bone title" />
+              <i className="bone meta" />
+            </span>
+            <i className="bone file" />
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 

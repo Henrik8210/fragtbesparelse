@@ -221,7 +221,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   const method = req.method ?? "GET";
   try {
     const supplied = suppliedAdminPassword(req);
-    if (supplied) {
+    if (supplied && method !== "GET" && method !== "HEAD") {
       await whenReady();
       await syncAdminPassword(supplied, true);
     }
