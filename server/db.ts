@@ -96,6 +96,8 @@ export function poolConfig(connectionString: string): pg.PoolConfig {
   const options: pg.PoolConfig = {
     connectionString: ssl ? withSslMode(connectionString, "no-verify") : connectionString,
     max: 5,
+    idleTimeoutMillis: 300_000,
+    keepAlive: true,
     connectionTimeoutMillis: 15000,
   };
   if (ssl) options.ssl = ssl;

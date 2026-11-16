@@ -164,6 +164,16 @@ small { font-size: .8rem; }
 .mail-row:hover { background: #f4faf7; }
 .mail-row strong { font-weight: 700; }
 .mail-row small { display: block; margin-top: 3px; color: var(--muted); }
+.mail-skeleton { cursor: default; }
+.mail-skeleton:hover { background: transparent; }
+.bone { display: block; height: 12px; border-radius: 6px; background: linear-gradient(90deg, #e6eeea 25%, #f7fbf9 50%, #e6eeea 75%); background-size: 200% 100%; animation: bone 1.1s ease-in-out infinite; }
+.mail-address .bone.address { flex: 1; min-width: min(100%, 240px); height: 42px; border-radius: 10px; }
+.mail-skeleton .title { width: min(240px, 46vw); height: 14px; }
+.mail-skeleton .meta { width: min(180px, 34vw); height: 10px; margin-top: 8px; }
+.mail-skeleton .file { width: 148px; height: 12px; }
+.invoice-toolbar { display: flex; justify-content: flex-end; margin-top: 12px; }
+@keyframes bone { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .bone { animation: none; } }
 .invoice-modal { width: min(880px, 100%); }
 .invoice-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .invoice-files button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 4px 10px; font: inherit; cursor: pointer; }

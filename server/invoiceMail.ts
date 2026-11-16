@@ -46,25 +46,23 @@ export type MailFile = { id: string; filename: string; bytes: number };
 export type MailItem = { id: string; sender: string; subject: string; receivedAt: string; files: MailFile[] };
 
 export async function listInvoiceMail(companyId: string): Promise<{ ready: boolean; mails: MailItem[] }> {
-  const mails = await postgresSql<{ id: string; sender: string; subject: string; received_at: Date | string }>(
-    `select id, sender, subject, received_at
-     from public.invoice_mail
-     where company_id = $1
-     order by received_at desc
-     limit 40`,
-    [companyId],
-  );
-  const ids = mails.map((mail) => mail.id);
-  const marks = ids.map((_, index) => `$${index + 2}`).join(", ");
-  const files = ids.length === 0
-    ? []
-    : await postgresSql<{ id: string; mail_id: string; filename: string; byte_size: number }>(
+  const [mails, files] = await Promise.all([
+    postgresSql<{ id: string; sender: string; subject: string; received_at: Date | string }>(
+      `select id, sender, subject, received_at
+       from public.invoice_mail
+       where company_id = $1
+       order by received_at desc
+       limit 40`,
+      [companyId],
+    ),
+    postgresSql<{ id: string; mail_id: string; filename: string; byte_size: number }>(
       `select id, mail_id, filename, byte_size
        from public.invoice_mail_files
-       where company_id = $1 and mail_id in (${marks})
+       where company_id = $1
        order by filename`,
-      [companyId, ...ids],
-    );
+      [companyId],
+    ),
+  ]);
   return {
     ready: true,
     mails: mails.map((mail) => ({
