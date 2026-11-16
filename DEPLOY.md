@@ -59,6 +59,47 @@ If you only want `www` to redirect to the apex, skip the `www` custom domain and
 
 `100::` is a placeholder. The orange cloud means Cloudflare answers it and applies the redirect. Requests do not go to that address.
 
+## Fakturamail
+
+Each organization receives at `{company id}@freightlytics.io`. Nordhavn Living is `nordhavn-living@freightlytics.io`. There is no second domain.
+
+Run this in the Supabase SQL editor before the deploy. No RLS. The app does not create the tables.
+
+```sql
+create table if not exists public.invoice_mail (
+  id text primary key,
+  company_id text not null references public.companies (id),
+  sender text not null,
+  subject text not null,
+  received_at timestamptz not null default now(),
+  unique (id, company_id)
+);
+
+create table if not exists public.invoice_mail_files (
+  id text primary key,
+  mail_id text not null,
+  company_id text not null references public.companies (id),
+  filename text not null,
+  mime text not null,
+  byte_size integer not null,
+  content bytea not null,
+  foreign key (mail_id, company_id) references public.invoice_mail (id, company_id)
+);
+
+create index if not exists invoice_mail_company_received
+  on public.invoice_mail (company_id, received_at desc);
+```
+
+After `npx wrangler deploy`, in the Cloudflare account that owns `freightlytics.io`:
+
+1. Select the zone `freightlytics.io`.
+2. Email → Email Routing → Enable Email Routing.
+3. Confirm the MX and SPF records Cloudflare offers for `freightlytics.io`. That confirmation is the DNS change. Do not add another domain.
+4. Routing rules → Catch-all address → Edit → Action: Send to a Worker → worker `freightlytics` → Save.
+5. Leave custom addresses empty. The catch-all delivers every organization address to the worker.
+
+Do not point the catch-all at a personal inbox. The worker stores the attachment on the organization in the address, and on no other.
+
 ## What could not be done from here
 
 There is no Cloudflare login on this machine, so the zone was not read, the Worker was not deployed, and no DNS record was created. `DATABASE_URL` for the Cursor app was not copied. freightlytics.io needs its own database.

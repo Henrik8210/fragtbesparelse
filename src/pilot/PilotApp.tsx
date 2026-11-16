@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
-  FileText, History, LayoutGrid, LockKeyhole, Package, Plus,
+  FileText, History, LayoutGrid, LockKeyhole, Package, Plus, Settings,
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
@@ -19,6 +19,7 @@ const NAV = [
   { id: "check", label: "Fakturakontrol", icon: ClipboardCheck },
   { id: "history", label: "Historik", icon: History },
   { id: "coverage", label: "Benchmark", icon: BarChart3 },
+  { id: "settings", label: "Indstillinger", icon: Settings },
 ] as const;
 
 type Company = { id: string; name: string; industry: string; place: string };
@@ -343,9 +344,92 @@ export function PilotApp() {
             </div>
           ) : null}
           {view === "coverage" ? <BenchmarkView report={sampleReport} orgId={org.id} peers={peers} /> : null}
+          {view === "settings" ? <SettingsView admin={admin} orgId={org.id} orgs={orgs} /> : null}
         </main>
         <footer className="main-footer"><span>Freightlytics</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
       </div>
+    </div>
+  );
+}
+
+function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
+  const [address, setAddress] = useState("");
+  const [ready, setReady] = useState(true);
+  const [mails, setMails] = useState<{ id: string; sender: string; subject: string; receivedAt: string; files: { id: string; filename: string; bytes: number }[] }[]>([]);
+  const [copied, setCopied] = useState(false);
+  const [problem, setProblem] = useState("");
+  const field = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    let gone = false;
+    const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
+    setCopied(false);
+    api<{ address: string; ready: boolean; mails: { id: string; sender: string; subject: string; receivedAt: string; files: { id: string; filename: string; bytes: number }[] }[] }>(`/api/invoice-mail${query}`)
+      .then((body) => {
+        if (gone) return;
+        setAddress(body.address);
+        setReady(body.ready);
+        setMails(body.mails);
+        setProblem("");
+      })
+      .catch(() => {
+        if (!gone) setProblem("Kunne ikke hente indbakken.");
+      });
+    return () => {
+      gone = true;
+    };
+  }, [admin, orgId]);
+
+  async function copyAddress() {
+    field.current?.select();
+    try {
+      await navigator.clipboard.writeText(address);
+    } catch {
+      field.current?.focus();
+    }
+    setCopied(true);
+  }
+
+  const ownerName = orgs.find((item) => item.id === address.split("@")[0])?.name ?? "";
+  return (
+    <div className="content-flow">
+      <div className="page-intro">
+        <span className="eyebrow"><i /> ORGANISATION</span>
+        <h1>Indstillinger</h1>
+        <p>Bed transportøren om at sætte adressen på som CC. Vedhæftningerne gemmes kun på {ownerName || "denne organisation"}.</p>
+      </div>
+      <section className="panel">
+        <div className="section-heading">
+          <h2>Fakturamail</h2>
+          <p>{ready ? "Mail til adressen lander her." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op."}</p>
+        </div>
+        <div className="mail-address" style={{ padding: "0 18px 18px" }}>
+          <input ref={field} readOnly value={address} aria-label="Indbakke" spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
+          <button className="button secondary" type="button" onClick={() => void copyAddress()} disabled={!address}>{copied ? "Kopieret" : "Kopiér"}</button>
+        </div>
+        {problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : null}
+      </section>
+      <section className="panel">
+        <div className="section-heading"><h2>Modtaget</h2></div>
+        {mails.length === 0 ? (
+          <p className="quiet" style={{ padding: "0 18px 16px" }}>{ready ? "Ingen fakturamail endnu." : "Ingen vedhæftninger endnu."}</p>
+        ) : (
+          <ul className="mail-list">
+            {mails.map((mail) => (
+              <li key={mail.id}>
+                <div>
+                  <strong>{mail.subject}</strong>
+                  <small>{mail.sender} · {dateLabel(mail.receivedAt)}</small>
+                </div>
+                <div>
+                  {mail.files.length === 0 ? <small>Ingen vedhæftning</small> : mail.files.map((file) => (
+                    <a key={file.id} href={`/api/invoice-mail/files/${encodeURIComponent(file.id)}`}>{file.filename}</a>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
