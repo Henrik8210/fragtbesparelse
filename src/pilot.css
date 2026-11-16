@@ -117,7 +117,10 @@ small { font-size: .8rem; }
 .marketing-hero p { margin-top: 14px; max-width: 36rem; color: var(--muted); font-size: 1.05rem; line-height: 1.45; }
 .marketing-hero .actions { margin-top: 22px; }
 .cover { position: relative; height: 380px; overflow: hidden; }
-.marketing-bar svg { width: 28px; height: 28px; }
+.brand-mark { display: block; flex: none; width: auto; height: 37px; }
+.marketing-bar .brand-mark { height: 30px; }
+.sidebar .brand { gap: 8px; padding: 0 4px; }
+.sidebar .brand-mark { height: 28px; }
 .cover-sheet, .cover-card { position: absolute; background: #fff; border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 12px 30px rgba(20, 40, 42, .06); }
 .cover-sheet { width: 168px; height: 214px; padding: 24px 18px; display: grid; gap: 14px; align-content: start; }
 .cover-sheet span { display: block; height: 8px; border-radius: 99px; background: var(--green-light); }
@@ -441,7 +444,7 @@ select { max-width: 100%; }
   .app-shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: sticky; height: auto; padding: 10px 12px 8px; gap: 8px; border: 0; }
   .brand { padding: 0 3px; gap: 8px; }
-  .brand-mark { width: 30px; height: 30px; }
+  .brand-mark { height: 28px; }
   .brand > span { font-size: 17px; }
   .brand-sub { display: none; }
   .sidebar nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
