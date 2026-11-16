@@ -12,6 +12,20 @@ export function invoiceAddress(companyId: string): string {
   return `${companyId}@${MAIL_DOMAIN}`;
 }
 
+export function decodeMailBody(raw: Buffer): Buffer | "bad" {
+  const marker = Buffer.from('{"v":1,"raw":');
+  if (raw.length < marker.length || !raw.subarray(0, marker.length).equals(marker)) return raw;
+  try {
+    const parsed = JSON.parse(raw.toString("utf8")) as { v?: unknown; raw?: unknown };
+    if (parsed.v !== 1 || typeof parsed.raw !== "string" || parsed.raw.length === 0) return "bad";
+    const bytes = Buffer.from(parsed.raw, "base64");
+    if (bytes.length === 0) return "bad";
+    return bytes;
+  } catch {
+    return "bad";
+  }
+}
+
 export function companyIdFromRecipient(recipient: string): string | null {
   const trimmed = recipient.trim().toLowerCase();
   const angled = trimmed.match(/<([^>]+)>\s*$/);

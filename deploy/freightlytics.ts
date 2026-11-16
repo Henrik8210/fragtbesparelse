@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { headerField, limitMail, MailTooLarge, readMailBytes } from "./mailBytes.ts";
+import { headerField, limitMail, MailTooLarge, packMail, readMailBytes } from "./mailBytes.ts";
 import { confirmedMail } from "./mailResult.ts";
 import { REVISION, healthMatchesRevision } from "./revision.ts";
 
@@ -168,7 +168,8 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     url.protocol = "http:";
     url.host = "container";
     const headers = new Headers();
-    headers.set("content-type", "message/rfc822");
+    const incomingType = request.headers.get("content-type") ?? "";
+    headers.set("content-type", incomingType.includes("json") ? "application/json" : "application/octet-stream");
     headers.set("x-fragtblik-sync", token);
     const recipient = request.headers.get("x-fragtblik-mail-to") ?? "";
     const sender = request.headers.get("x-fragtblik-mail-from") ?? "";
@@ -358,7 +359,7 @@ async function acceptRoutedMail(message: InboundMail, env: Env): Promise<void> {
 async function postInvoice(env: Env, to: string, from: string, companyId: string, raw: Uint8Array): Promise<"stored" | "unknown" | "large" | "miss"> {
   try {
     const headers = new Headers();
-    headers.set("content-type", "message/rfc822");
+    headers.set("content-type", "application/json");
     headers.set("x-fragtblik-mail-ingress", "1");
     const recipient = headerField(to);
     const sender = headerField(from);
@@ -368,11 +369,10 @@ async function postInvoice(env: Env, to: string, from: string, companyId: string
     if (usablePassword(secret) && headerField(secret) === secret) headers.set("x-fragtblik-admin-secret", secret);
     const databaseUrl = typeof env?.DATABASE_URL === "string" ? env.DATABASE_URL.trim() : "";
     if (headerSafe(databaseUrl) && headerField(databaseUrl) === databaseUrl) headers.set("x-fragtblik-database-url", databaseUrl);
-    const bytes = raw.slice();
     const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
       method: "POST",
       headers,
-      body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      body: packMail(raw),
     }));
     const text = await response.text();
     let body: unknown = null;
