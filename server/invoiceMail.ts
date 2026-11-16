@@ -1,4 +1,6 @@
 import PostalMime from "postal-mime";
+import type { Attachment, Email } from "postal-mime";
+import { customers } from "../src/data/portfolio.ts";
 import { sql } from "./db.ts";
 
 export const MAIL_DOMAIN = "freightlytics.io";
@@ -85,37 +87,23 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
   if (raw.length > MAX_MAIL_BYTES) return "large";
   const companyId = companyIdFromRecipient(recipient);
   if (!companyId) return "unknown";
-  let parsed;
+  const mailbox = await ensureMailbox(companyId);
+  if (mailbox !== "ok") return mailbox;
+
+  let parsed: Email | null = null;
   try {
     parsed = await PostalMime.parse(raw);
   } catch {
-    return "bad";
+    parsed = null;
   }
-  const files: { name: string; mime: string; bytes: Buffer }[] = [];
-  for (const attachment of (parsed.attachments ?? []).slice(0, 20)) {
-    if (!wanted(attachment.disposition, attachment.mimeType)) continue;
-    const bytes = contentBytes(attachment.content);
-    if (bytes.length > MAX_MAIL_BYTES) return "large";
-    if (bytes.length === 0) continue;
-    files.push({
-      name: fileName(attachment.filename, attachment.mimeType),
-      mime: attachment.mimeType.slice(0, 120) || "application/octet-stream",
-      bytes,
-    });
+  const files = parsed ? filesFrom(parsed) : [];
+  if (files === "large") return "large";
+  if (files.length === 0 && raw.length > 0) {
+    files.push({ name: "besked.eml", mime: "message/rfc822", bytes: raw });
   }
-  if (files.reduce((sum, file) => sum + file.bytes.length, 0) > MAX_MAIL_BYTES) return "large";
-
-  let company;
-  try {
-    company = await sql("select id from companies where id = $1", [companyId]);
-  } catch (error) {
-    if (missingTable(error)) return "later";
-    throw error;
-  }
-  if (!company[0]) return "unknown";
 
   const mailId = crypto.randomUUID();
-  const subject = clean(parsed.subject ?? "", 200) || "(uden emne)";
+  const subject = clean(parsed?.subject || subjectFromRaw(raw), 200) || "(uden emne)";
   const from = clean(sender, 200) || "ukendt";
   try {
     await sql(
@@ -139,21 +127,83 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
   return "stored";
 }
 
-function wanted(disposition: string | null, mime: string): boolean {
-  if (mime.startsWith("image/") && disposition !== "attachment") return false;
-  if (disposition === "attachment") return true;
-  return mime === "application/pdf"
+async function ensureMailbox(companyId: string): Promise<"ok" | "unknown" | "later"> {
+  try {
+    const found = await sql("select id from companies where id = $1", [companyId]);
+    if (found[0]) return "ok";
+    const sample = customers.find((company) => company.id === companyId);
+    if (!sample) return "unknown";
+    await sql(
+      `insert into companies (id, name, industry, place) values ($1, $2, $3, $4)
+       on conflict (id) do nothing`,
+      [sample.id, sample.name, sample.industry, sample.place],
+    );
+    return "ok";
+  } catch (error) {
+    if (missingTable(error)) return "later";
+    throw error;
+  }
+}
+
+function filesFrom(parsed: Email): { name: string; mime: string; bytes: Buffer }[] | "large" {
+  const files: { name: string; mime: string; bytes: Buffer }[] = [];
+  let total = 0;
+  for (const attachment of (parsed.attachments ?? []).slice(0, 20)) {
+    const file = fileFrom(attachment);
+    if (!file) continue;
+    total += file.bytes.length;
+    if (file.bytes.length > MAX_MAIL_BYTES || total > MAX_MAIL_BYTES) return "large";
+    files.push(file);
+  }
+  return files;
+}
+
+function fileFrom(attachment: Attachment): { name: string; mime: string; bytes: Buffer } | null {
+  const mime = typeof attachment.mimeType === "string" ? attachment.mimeType : "";
+  if (!wanted(attachment.disposition ?? null, mime, attachment.filename ?? null)) return null;
+  let bytes: Buffer;
+  try {
+    bytes = contentBytes(attachment.content, attachment.encoding);
+  } catch {
+    return null;
+  }
+  if (bytes.length === 0) return null;
+  return {
+    name: fileName(attachment.filename, mime),
+    mime: mime.slice(0, 120) || "application/octet-stream",
+    bytes,
+  };
+}
+
+function wanted(disposition: string | null, mime: string, filename: string | null): boolean {
+  const name = (filename ?? "").toLowerCase();
+  const invoice = mime === "application/pdf"
     || mime === "text/csv"
     || mime === "application/xml"
     || mime === "text/xml"
     || mime === "application/vnd.ms-excel"
-    || mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    || mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    || name.endsWith(".pdf")
+    || name.endsWith(".csv")
+    || name.endsWith(".xml")
+    || name.endsWith(".xls")
+    || name.endsWith(".xlsx");
+  if (mime.startsWith("image/") && disposition !== "attachment" && !invoice) return false;
+  if (disposition === "attachment" || invoice) return true;
+  return false;
 }
 
-function contentBytes(content: ArrayBuffer | Uint8Array | string): Buffer {
-  if (typeof content === "string") return Buffer.from(content);
+function contentBytes(content: ArrayBuffer | Uint8Array | string | undefined, encoding?: string): Buffer {
+  if (content == null) return Buffer.alloc(0);
+  if (typeof content === "string") return Buffer.from(content, encoding === "base64" ? "base64" : "utf8");
   if (content instanceof Uint8Array) return Buffer.from(content);
   return Buffer.from(new Uint8Array(content));
+}
+
+function subjectFromRaw(raw: Buffer): string {
+  const head = raw.subarray(0, Math.min(raw.length, 8000)).toString("latin1");
+  const match = head.match(/^Subject:[ \t]*([^\r\n]+)/im);
+  return match?.[1]?.trim() ?? "";
 }
 
 function fileName(name: string | null, mime: string): string {

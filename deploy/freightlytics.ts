@@ -270,8 +270,33 @@ function readStartConfig(env: Env, request: Request): StartConfig {
   };
 }
 
-function headerPlain(value: string): string {
+function headerPlain(value: unknown): string {
+  if (typeof value !== "string") return "";
   return value.replace(/[\r\n]/g, "").trim().slice(0, 320);
+}
+
+async function readRawMail(raw: ReadableStream | undefined): Promise<Uint8Array | "large"> {
+  if (!raw) return new Uint8Array();
+  const reader = raw.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const step = await reader.read();
+    if (step.done) break;
+    size += step.value.byteLength;
+    if (size > 8_000_000) {
+      await reader.cancel().catch(() => undefined);
+      return "large";
+    }
+    chunks.push(step.value);
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
 }
 
 function usablePassword(value: string): boolean {
@@ -354,26 +379,41 @@ export default {
       message.setReject("Ukendt modtager");
       return;
     }
-    if (message.rawSize > 8_000_000) {
+    if ((message.rawSize ?? 0) > 8_000_000) {
       message.setReject("Vedhæftningen er for stor");
       return;
     }
-    const raw = await new Response(message.raw).arrayBuffer();
+    const raw = await readRawMail(message.raw);
+    if (raw === "large") {
+      message.setReject("Vedhæftningen er for stor");
+      return;
+    }
+    const headers = new Headers();
+    headers.set("content-type", "message/rfc822");
+    headers.set("x-fragtblik-mail-ingress", "1");
+    headers.set("x-fragtblik-mail-to", to);
+    if (from) headers.set("x-fragtblik-mail-from", from);
+    const secret = (env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
+    if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
+    const databaseUrl = (env.DATABASE_URL ?? "").trim();
+    if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
     const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
       method: "POST",
-      headers: {
-        "content-type": "message/rfc822",
-        "x-fragtblik-mail-ingress": "1",
-        "x-fragtblik-mail-to": to,
-        "x-fragtblik-mail-from": from,
-      },
+      headers,
       body: raw,
     }));
     await response.arrayBuffer();
     if (response.status === 200) return;
-    if (response.status === 413) message.setReject("Vedhæftningen er for stor");
-    else if (response.status === 503) message.setReject("Indbakken er ikke klar");
-    else message.setReject("Ukendt modtager");
+    if (response.status === 413) {
+      message.setReject("Vedhæftningen er for stor");
+      return;
+    }
+    if (response.status === 404) {
+      message.setReject("Ukendt modtager");
+      return;
+    }
+    // A 503 while the container restarts must stay a temporary failure so the sender retries.
+    throw new Error("invoice mail was not stored");
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
