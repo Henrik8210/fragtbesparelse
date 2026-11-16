@@ -352,18 +352,22 @@ export function PilotApp() {
   );
 }
 
+type MailFile = { id: string; filename: string; bytes: number };
+type MailRow = { id: string; sender: string; subject: string; receivedAt: string; files: MailFile[] };
+
 function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
   const [address, setAddress] = useState("");
   const [ready, setReady] = useState(true);
-  const [mails, setMails] = useState<{ id: string; sender: string; subject: string; receivedAt: string; files: { id: string; filename: string; bytes: number }[] }[]>([]);
+  const [mails, setMails] = useState<MailRow[]>([]);
   const [copied, setCopied] = useState(false);
   const [problem, setProblem] = useState("");
+  const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
   const field = useRef<HTMLInputElement>(null);
   useEffect(() => {
     let gone = false;
     const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
     setCopied(false);
-    api<{ address: string; ready: boolean; mails: { id: string; sender: string; subject: string; receivedAt: string; files: { id: string; filename: string; bytes: number }[] }[] }>(`/api/invoice-mail${query}`)
+    api<{ address: string; ready: boolean; mails: MailRow[] }>(`/api/invoice-mail${query}`)
       .then((body) => {
         if (gone) return;
         setAddress(body.address);
@@ -378,6 +382,9 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
       gone = true;
     };
   }, [admin, orgId]);
+  useEffect(() => {
+    setOpen(null);
+  }, [address, orgId]);
 
   async function copyAddress() {
     field.current?.select();
@@ -389,7 +396,8 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     setCopied(true);
   }
 
-  const ownerName = orgs.find((item) => item.id === address.split("@")[0])?.name ?? "";
+  const mailboxId = address.split("@")[0] ?? "";
+  const ownerName = orgs.find((item) => item.id === mailboxId)?.name ?? "";
   return (
     <div className="content-flow">
       <div className="page-intro">
@@ -414,22 +422,103 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
           <p className="quiet" style={{ padding: "0 18px 16px" }}>{ready ? "Ingen fakturamail endnu." : "Ingen vedhæftninger endnu."}</p>
         ) : (
           <ul className="mail-list">
-            {mails.map((mail) => (
-              <li key={mail.id}>
-                <div>
-                  <strong>{mail.subject}</strong>
-                  <small>{mail.sender} · {dateLabel(mail.receivedAt)}</small>
-                </div>
-                <div>
-                  {mail.files.length === 0 ? <small>Ingen vedhæftning</small> : mail.files.map((file) => (
-                    <a key={file.id} href={`/api/invoice-mail/files/${encodeURIComponent(file.id)}`}>{file.filename}</a>
-                  ))}
-                </div>
-              </li>
-            ))}
+            {mails.map((mail) => {
+              const pdfs = mail.files.filter((file) => file.filename.toLowerCase().endsWith(".pdf"));
+              return (
+                <li key={mail.id}>
+                  <button
+                    type="button"
+                    className="mail-row"
+                    onClick={() => setOpen({ subject: mail.subject, files: pdfs, fileId: pdfs[0]?.id ?? "" })}
+                  >
+                    <span>
+                      <strong>{mail.subject}</strong>
+                      <small>{mail.sender} · {dateLabel(mail.receivedAt)}</small>
+                    </span>
+                    <span>{pdfs[0]?.filename ?? "Ingen PDF"}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
+      {open ? (
+        <Modal title={open.subject} wide onClose={() => setOpen(null)}>
+          {open.files.length > 1 ? (
+            <div className="invoice-files">
+              {open.files.map((file) => (
+                <button key={file.id} type="button" className={file.id === open.fileId ? "active" : ""} onClick={() => setOpen({ ...open, fileId: file.id })}>{file.filename}</button>
+              ))}
+            </div>
+          ) : null}
+          {open.fileId ? <InvoicePages fileId={open.fileId} companyId={mailboxId} /> : <p>Denne mail har ingen PDF.</p>}
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+function InvoicePages({ fileId, companyId }: { fileId: string; companyId: string }) {
+  const [images, setImages] = useState<string[]>([]);
+  const [state, setState] = useState<"loading" | "ready" | "missing" | "empty">("loading");
+  useEffect(() => {
+    let gone = false;
+    let task: { destroy: () => Promise<void> } | null = null;
+    setState("loading");
+    setImages([]);
+    void (async () => {
+      const response = await fetch(
+        `/api/invoice-mail/files/${encodeURIComponent(fileId)}?company=${encodeURIComponent(companyId)}`,
+        { credentials: "same-origin" },
+      );
+      if (!response.ok) {
+        if (!gone) setState("missing");
+        return;
+      }
+      const data = new Uint8Array(await response.arrayBuffer());
+      if (String.fromCharCode(...data.subarray(0, 5)) !== "%PDF-") {
+        if (!gone) setState("empty");
+        return;
+      }
+      const pdfjs = await import("pdfjs-dist");
+      const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+      pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+      const loading = pdfjs.getDocument({ data });
+      task = loading;
+      const document = await loading.promise;
+      const urls: string[] = [];
+      for (let number = 1; number <= document.numPages; number += 1) {
+        if (gone) return;
+        const page = await document.getPage(number);
+        const viewport = page.getViewport({ scale: 1.35 });
+        const canvas = window.document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        await page.render({ canvas, viewport }).promise;
+        urls.push(canvas.toDataURL("image/png"));
+        page.cleanup();
+      }
+      if (!gone) {
+        setImages(urls);
+        setState(urls.length ? "ready" : "empty");
+      }
+    })().catch(() => {
+      if (!gone) setState("missing");
+    });
+    return () => {
+      gone = true;
+      void task?.destroy();
+    };
+  }, [fileId, companyId]);
+  if (state === "loading") return <p>Henter faktura…</p>;
+  if (state === "empty") return <p>Denne mail har ingen PDF.</p>;
+  if (state !== "ready") return <p>Kunne ikke vise fakturaen.</p>;
+  return (
+    <div className="invoice-scroll">
+      {images.map((src, index) => (
+        <img key={`${fileId}-${index}`} src={src} alt={`Side ${index + 1}`} />
+      ))}
     </div>
   );
 }
@@ -709,7 +798,7 @@ function clearHash(hash: string) {
   }
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const close = useRef(onClose);
   close.current = onClose;
   const card = useRef<HTMLDivElement>(null);
@@ -730,7 +819,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   }, []);
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close.current(); }}>
-      <div className="modal-card" ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div className={wide ? "modal-card invoice-modal" : "modal-card"} ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div className="modal-head">
           <h2 id="modal-title">{title}</h2>
           <button type="button" className="modal-close" onClick={() => close.current()}>Luk</button>
