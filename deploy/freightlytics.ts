@@ -54,7 +54,8 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     await this.starting;
     const container = this.ctx.container;
     if (!container) return new Response("container missing", { status: 503 });
-    return container.getTcpPort(PORT).fetch(await forwardToContainer(request, config.adminPassword));
+    const response = await container.getTcpPort(PORT).fetch(await forwardToContainer(request, config.adminPassword));
+    return passSession(response);
   }
 
   private async startAndWait(config: StartConfig): Promise<void> {
@@ -446,6 +447,50 @@ function isClosedPath(pathname: string): boolean {
   return path === ADMIN_SYNC_PATH || path === INVOICE_MAIL_PATH;
 }
 
+function cookieHeader(request: Request): string {
+  return request.headers.get("cookie") ?? "";
+}
+
+function sessionCookieValues(headers: Headers): string[] {
+  const reader = headers as Headers & { getSetCookie?: () => string[]; getAll?: (name: string) => string[] };
+  if (typeof reader.getSetCookie === "function") {
+    const values = reader.getSetCookie();
+    if (values.length > 0) return values;
+  }
+  if (typeof reader.getAll === "function") {
+    try {
+      const values = reader.getAll("set-cookie");
+      if (values.length > 0) return values;
+    } catch {
+      // getAll is only valid for Set-Cookie.
+    }
+  }
+  const single = headers.get("set-cookie");
+  return single ? [single] : [];
+}
+
+function passSession(response: Response): Response {
+  const issued = response.headers.get("x-fragtblik-session");
+  const cookies = sessionCookieValues(response.headers);
+  if (issued === null && cookies.length === 0) return response;
+  const headers = new Headers(response.headers);
+  headers.delete("x-fragtblik-session");
+  headers.delete("content-length");
+  headers.delete("set-cookie");
+  for (const cookie of cookies) {
+    if (issued !== null && cookie.toLowerCase().startsWith("fragtblik=")) continue;
+    headers.append("set-cookie", cookie);
+  }
+  if (issued !== null) {
+    const secure = "; Secure";
+    const value = issued === "clear"
+      ? `fragtblik=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`
+      : `fragtblik=${encodeURIComponent(issued)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600${secure}`;
+    headers.append("set-cookie", value);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 async function forwardToContainer(request: Request, secret: string): Promise<Request> {
   const url = new URL(request.url);
   const publicHost = url.host;
@@ -454,6 +499,8 @@ async function forwardToContainer(request: Request, secret: string): Promise<Req
   url.host = "container";
   const method = request.method;
   const headers = new Headers(request.headers);
+  const cookie = cookieHeader(request);
+  if (cookie) headers.set("cookie", cookie);
   headers.delete("host");
   headers.delete("content-length");
   headers.delete("x-fragtblik-admin-secret");
@@ -503,6 +550,8 @@ export default {
     const url = new URL(request.url);
     if (isClosedPath(url.pathname)) return new Response("not found", { status: 404 });
     const headers = new Headers(request.headers);
+    const cookie = cookieHeader(request);
+    if (cookie) headers.set("cookie", cookie);
     headers.delete("host");
     headers.delete("content-length");
     headers.delete("x-fragtblik-admin-secret");
@@ -514,6 +563,7 @@ export default {
     if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
     const method = request.method;
     const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
-    return env.APP.getByName("freightlytics").fetch(new Request(request.url, { method, headers, body, redirect: "manual" }));
+    const response = await env.APP.getByName("freightlytics").fetch(new Request(request.url, { method, headers, body, redirect: "manual" }));
+    return passSession(response);
   },
 };

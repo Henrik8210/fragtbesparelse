@@ -73,12 +73,15 @@ function cookieToken(req: IncomingMessage): string | null {
 
 function setSessionCookie(req: IncomingMessage, res: ServerResponse, token: string | null) {
   const proto = req.headers["x-forwarded-proto"];
-  const https = proto === "https" || (Array.isArray(proto) && proto[0] === "https");
+  const forwarded = Array.isArray(proto) ? proto.join(",") : (proto ?? "");
+  const https = forwarded.split(",").some((item) => item.trim().toLowerCase() === "https");
   const secure = https ? "; Secure" : "";
   const value = token
     ? `fragtblik=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600${secure}`
     : `fragtblik=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`;
   res.setHeader("Set-Cookie", value);
+  // The worker reads this and sets the browser cookie. It is removed before the response leaves the edge.
+  if (https) res.setHeader("x-fragtblik-session", token ?? "clear");
 }
 
 function emailOk(value: string): boolean {
@@ -203,13 +206,14 @@ async function actor(req: IncomingMessage): Promise<UserRow | null> {
   const token = cookieToken(req);
   if (!token) return null;
   const rows = await postgresSql<UserRow>(
-    `select users.* from sessions join users on users.id = sessions.user_id
-     where sessions.token = $1 and sessions.created_at > now() - interval '14 days'`,
+    `select u.* from public.sessions s
+     join public.users u on u.id = s.user_id
+     where s.token = $1 and s.created_at > now() - interval '14 days'`,
     [token],
     true,
   );
   if (!rows[0]) {
-    await postgresSql("delete from sessions where token = $1", [token], true);
+    await postgresSql("delete from public.sessions where token = $1", [token], true);
     return null;
   }
   return rows[0];
