@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
-import { checkPassword, hashPassword, sql, syncAdminPassword, whenReady } from "./db.ts";
+import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
@@ -202,13 +202,14 @@ function canSee(user: UserRow, companyId: string): boolean {
 async function actor(req: IncomingMessage): Promise<UserRow | null> {
   const token = cookieToken(req);
   if (!token) return null;
-  const rows = await sql<UserRow>(
+  const rows = await postgresSql<UserRow>(
     `select users.* from sessions join users on users.id = sessions.user_id
      where sessions.token = $1 and sessions.created_at > now() - interval '14 days'`,
     [token],
+    true,
   );
   if (!rows[0]) {
-    await sql("delete from sessions where token = $1", [token]);
+    await postgresSql("delete from sessions where token = $1", [token], true);
     return null;
   }
   return rows[0];
@@ -222,7 +223,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const supplied = suppliedAdminPassword(req);
     if (supplied) {
       await whenReady();
-      await syncAdminPassword(supplied);
+      await syncAdminPassword(supplied, true);
     }
 
     if (method === "POST" && path === "/api/internal/admin-password") {
@@ -327,7 +328,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       loginSucceeded(guessKey);
       await sql("update users set password_hash = $1 where id = $2", [await hashPassword(password), admin.id]);
       const token = cookieToken(req);
-      await sql("delete from sessions where user_id = $1 and token <> $2", [admin.id, token]);
+      await postgresSql("delete from sessions where user_id = $1 and token <> $2", [admin.id, token], true);
       send(res, 200, { ok: true });
       return;
     }
@@ -339,22 +340,23 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const fromBody = typeof body.adminSecret === "string" ? body.adminSecret.trim() : "";
       if (username === "admin" && passwordOk(fromBody)) {
         await whenReady();
-        await syncAdminPassword(fromBody);
+        await syncAdminPassword(fromBody, true);
       }
       const userKey = `user:${username}`;
       const ipKey = `ip:${clientIp(req)}`;
-      const rows = await sql<UserRow>(
+      const rows = await postgresSql<UserRow>(
         username === "admin"
           ? "select * from users where username = 'admin' and role = 'admin' order by created_at limit 1"
           : "select * from users where username = $1 order by created_at limit 1",
         username === "admin" ? [] : [username],
+        true,
       );
       const user = rows[0];
       if (user?.password_hash && (await checkPassword(password, user.password_hash))) {
         loginSucceeded(userKey);
         loginSucceeded(ipKey);
         const token = randomBytes(32).toString("hex");
-        await sql("insert into sessions (token, user_id) values ($1, $2)", [token, user.id]);
+        await postgresSql("insert into sessions (token, user_id) values ($1, $2)", [token, user.id], true);
         setSessionCookie(req, res, token);
         send(res, 200, { user: publish(user) });
         return;
@@ -402,7 +404,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const sessionToken = randomBytes(32).toString("hex");
-      await sql("insert into sessions (token, user_id) values ($1, $2)", [sessionToken, createdUser.id]);
+      await postgresSql("insert into sessions (token, user_id) values ($1, $2)", [sessionToken, createdUser.id], true);
       setSessionCookie(req, res, sessionToken);
       send(res, 201, { ok: true, user: publish(createdUser) });
       return;
@@ -410,7 +412,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
 
     if (method === "POST" && path === "/api/logout") {
       const token = cookieToken(req);
-      if (token) await sql("delete from sessions where token = $1", [token]);
+      if (token) await postgresSql("delete from sessions where token = $1", [token], true);
       setSessionCookie(req, res, null);
       send(res, 200, { ok: true });
       return;
@@ -654,8 +656,22 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, user.role === "admin" ? 400 : 404, { error: user.role === "admin" ? "company" : "missing" });
         return;
       }
-      const listed = await listInvoiceMail(companyId);
-      send(res, 200, { address: invoiceAddress(companyId), ready: listed.ready, mails: listed.mails });
+      try {
+        const listed = await listInvoiceMail(companyId);
+        send(res, 200, { address: invoiceAddress(companyId), ready: true, mails: listed.mails });
+      } catch (error) {
+        send(res, 200, { address: invoiceAddress(companyId), ready: false, error: publicDbError(error), mails: [] });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/api/admin/db-status") {
+      if (user.role !== "admin") {
+        send(res, 403, { error: "forbidden" });
+        return;
+      }
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      send(res, 200, await databaseStatus(companyId));
       return;
     }
 
@@ -845,7 +861,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 404, { error: "missing" });
         return;
       }
-      await sql("delete from sessions where user_id = $1", [target.id]);
+      await postgresSql("delete from sessions where user_id = $1", [target.id], true);
       send(res, 200, { user: publish(target) });
       return;
     }
@@ -1096,7 +1112,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     send(res, 404, { error: "missing" });
-  } catch {
+  } catch (error) {
+    if (error instanceof DatabaseError) {
+      send(res, 503, { error: "database", message: error.message });
+      return;
+    }
     send(res, 500, { error: "server" });
   }
 }

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { headerField, limitMail, MailTooLarge, packMail, readMailBytes } from "./mailBytes.ts";
-import { confirmedMail } from "./mailResult.ts";
+import { confirmedMail, mailFailure, visibleDatabaseError } from "./mailResult.ts";
 import { REVISION, healthMatchesRevision } from "./revision.ts";
 
 const PORT = 8080;
@@ -203,7 +203,10 @@ export class FreightlyticsContainer extends DurableObject<Env> {
         if (nextToken) headers.set("x-fragtblik-sync", nextToken);
         return await this.postMail(headers, kept.slice(0));
       } catch {
-        return new Response(JSON.stringify({ error: "database" }), { status: 503, headers: { "content-type": "application/json" } });
+        return new Response(text || JSON.stringify({ error: "database", message: "invoice mail was not stored" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
       }
     }
     return new Response(text, { status: posted.status, headers: { "content-type": "application/json" } });
@@ -353,10 +356,10 @@ async function acceptRoutedMail(message: InboundMail, env: Env): Promise<void> {
     safeReject(message, "Ukendt modtager");
     return;
   }
-  throw new Error("invoice mail was not stored");
+  throw new Error(outcome.error);
 }
 
-async function postInvoice(env: Env, to: string, from: string, companyId: string, raw: Uint8Array): Promise<"stored" | "unknown" | "large" | "miss"> {
+async function postInvoice(env: Env, to: string, from: string, companyId: string, raw: Uint8Array): Promise<"stored" | "unknown" | "large" | { error: string }> {
   try {
     const headers = new Headers();
     headers.set("content-type", "application/json");
@@ -384,9 +387,9 @@ async function postInvoice(env: Env, to: string, from: string, companyId: string
     if (response.status === 200 && confirmedMail(body, companyId)) return "stored";
     if (response.status === 404) return "unknown";
     if (response.status === 413) return "large";
-    return "miss";
-  } catch {
-    return "miss";
+    return { error: mailFailure(body, response.status) };
+  } catch (error) {
+    return { error: visibleDatabaseError(error) };
   }
 }
 
