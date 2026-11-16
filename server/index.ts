@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { createServer as createVite } from "vite";
+import { REVISION } from "../deploy/revision.ts";
 import { handleApi } from "./api.ts";
 
 const requested = Number(process.env.PORT ?? 5173);
@@ -22,7 +23,7 @@ const server = createServer((req, res) => {
   if (path === "/health") {
     res.statusCode = 200;
     res.setHeader("content-type", "text/plain");
-    res.end("ok");
+    res.end(`ok ${REVISION}`);
     return;
   }
   if (url.startsWith("/api/")) {

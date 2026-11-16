@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { REVISION, healthMatchesRevision } from "./revision.ts";
 
 const PORT = 8080;
 const INACTIVITY_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -55,50 +56,90 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     const secret = config.adminPassword;
     const fingerprint = secret ? await fingerprintOf(secret) : "";
     await this.replaceStaleContainer(container, image, fingerprint);
-    if (!container.running) {
-      this.syncedFingerprint = "";
-      const token = newSyncToken();
-      await this.ctx.storage.put(TOKEN_KEY, token);
-      const env: Record<string, string> = {
-        HOST: "0.0.0.0",
-        PORT: String(PORT),
-        FRAGTBLIK_SYNC_TOKEN: token,
-      };
-      if (config.databaseUrl) env.DATABASE_URL = config.databaseUrl;
-      if (fingerprint) env.FRAGTBLIK_ADMIN_PASSWORD = secret;
-      container.start({
-        image,
-        instance: "standard-1",
-        enableInternet: true,
-        env,
-      });
-      await this.ctx.storage.put(IMAGE_KEY, image);
-      if (fingerprint) await this.ctx.storage.put(SECRET_KEY, fingerprint);
+    if (!container.running) await this.boot(container, image, fingerprint, config);
+    const probed = await this.probeHealth(container);
+    // A running process can still be the previous page when its image name matches.
+    if (probed !== null && !healthMatchesRevision(probed)) {
+      await this.forceRestart(container, image, fingerprint, config);
     }
+    const body = await this.waitForRevision(container);
+    if (!healthMatchesRevision(body)) throw new Error("Freightlytics did not become ready");
+    if (fingerprint) await this.pushAdminPassword(container.getTcpPort(PORT), secret, fingerprint);
+  }
+
+  private async boot(
+    container: NonNullable<DurableObjectState["container"]>,
+    image: string,
+    fingerprint: string,
+    config: StartConfig,
+  ): Promise<void> {
+    this.syncedFingerprint = "";
+    const token = newSyncToken();
+    await this.ctx.storage.put(TOKEN_KEY, token);
+    const env: Record<string, string> = {
+      HOST: "0.0.0.0",
+      PORT: String(PORT),
+      FRAGTBLIK_SYNC_TOKEN: token,
+    };
+    if (config.databaseUrl) env.DATABASE_URL = config.databaseUrl;
+    if (fingerprint) env.FRAGTBLIK_ADMIN_PASSWORD = config.adminPassword;
+    container.start({
+      image,
+      instance: "standard-1",
+      enableInternet: true,
+      env,
+    });
+    await this.ctx.storage.put(IMAGE_KEY, image);
+    if (fingerprint) await this.ctx.storage.put(SECRET_KEY, fingerprint);
     this.observeExit();
     try {
       await container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
     } catch {
       // A rejected timeout must not turn the page request into a Worker exception.
     }
+  }
 
+  private async probeHealth(container: NonNullable<DurableObjectState["container"]>): Promise<string | null> {
+    try {
+      const response = await container.getTcpPort(PORT).fetch("http://container/health", { signal: AbortSignal.timeout(1000) });
+      const body = await response.text();
+      return response.ok ? body : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async waitForRevision(container: NonNullable<DurableObjectState["container"]>): Promise<string> {
     const port = container.getTcpPort(PORT);
-    let ready = false;
+    let last = "";
     for (let attempt = 0; attempt < 40; attempt++) {
       try {
         const response = await port.fetch("http://container/health", { signal: AbortSignal.timeout(1000) });
-        await response.text();
-        if (response.ok) {
-          ready = true;
-          break;
-        }
+        const body = await response.text();
+        if (response.ok && healthMatchesRevision(body)) return body;
+        if (response.ok) last = body;
       } catch {
         // The process is still starting.
       }
       await scheduler.wait(500);
     }
-    if (!ready) throw new Error("Freightlytics did not become ready");
-    if (fingerprint) await this.pushAdminPassword(port, secret, fingerprint);
+    return last;
+  }
+
+  private async forceRestart(
+    container: NonNullable<DurableObjectState["container"]>,
+    image: string,
+    fingerprint: string,
+    config: StartConfig,
+  ): Promise<void> {
+    if (container.running) {
+      this.monitorGeneration += 1;
+      this.monitoring = undefined;
+      this.syncedFingerprint = "";
+      const handle = container as unknown as { destroy(): Promise<void> };
+      await handle.destroy();
+    }
+    if (!container.running) await this.boot(container, image, fingerprint, config);
   }
 
   private async pushAdminPassword(
