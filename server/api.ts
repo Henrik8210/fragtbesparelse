@@ -245,10 +245,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const result = await acceptInvoiceMail(headerValue(req, "x-fragtblik-mail-to"), headerValue(req, "x-fragtblik-mail-from"), raw);
-      if (result === "stored") send(res, 200, { ok: true });
-      else if (result === "later") send(res, 503, { error: "later" });
-      else if (result === "large") send(res, 413, { error: "large" });
-      else if (result === "bad") send(res, 400, { error: "mail" });
+      if (result.result === "stored" && result.postgres) {
+        send(res, 200, { ok: true, id: result.id, companyId: result.companyId, postgres: true });
+      } else if (result.result === "stored") {
+        send(res, 503, { error: "database" });
+      } else if (result.result === "later") send(res, 503, { error: "later" });
+      else if (result.result === "large") send(res, 413, { error: "large" });
+      else if (result.result === "bad") send(res, 400, { error: "mail" });
       else send(res, 404, { error: "unknown" });
       return;
     }

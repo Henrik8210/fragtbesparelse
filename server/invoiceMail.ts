@@ -1,7 +1,7 @@
 import PostalMime from "postal-mime";
 import type { Attachment, Email } from "postal-mime";
 import { customers } from "../src/data/portfolio.ts";
-import { sql } from "./db.ts";
+import { sql, storesInPostgres } from "./db.ts";
 
 export const MAIL_DOMAIN = "freightlytics.io";
 export const MAX_MAIL_BYTES = 8_000_000;
@@ -83,13 +83,17 @@ export async function readInvoiceFile(id: string): Promise<{ filename: string; c
   }
 }
 
-export async function acceptInvoiceMail(recipient: string, sender: string, raw: Buffer): Promise<"stored" | "unknown" | "later" | "large" | "bad"> {
-  if (!Buffer.isBuffer(raw)) return "bad";
-  if (raw.length > MAX_MAIL_BYTES) return "large";
+export type AcceptedMail =
+  | { result: "stored"; id: string; companyId: string; postgres: boolean }
+  | { result: "unknown" | "later" | "large" | "bad" };
+
+export async function acceptInvoiceMail(recipient: string, sender: string, raw: Buffer): Promise<AcceptedMail> {
+  if (!Buffer.isBuffer(raw)) return { result: "bad" };
+  if (raw.length > MAX_MAIL_BYTES) return { result: "large" };
   const companyId = companyIdFromRecipient(recipient);
-  if (!companyId) return "unknown";
+  if (!companyId) return { result: "unknown" };
   const mailbox = await ensureMailbox(companyId);
-  if (mailbox !== "ok") return mailbox;
+  if (mailbox !== "ok") return { result: mailbox };
 
   let parsed: Email | null = null;
   try {
@@ -101,7 +105,7 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
   if (parsed) {
     try {
       const collected = filesFrom(parsed);
-      if (collected === "large") return "large";
+      if (collected === "large") return { result: "large" };
       files = collected;
     } catch {
       files = [];
@@ -123,11 +127,27 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
       await insertFile(mailId, companyId, file);
     }
   } catch (error) {
-    await sql("delete from invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
-    if (missingTable(error)) return "later";
-    return "later";
+    await dropMail(mailId, companyId);
+    if (missingTable(error)) return { result: "later" };
+    return { result: "later" };
   }
-  return "stored";
+  try {
+    const seen = await sql<{ id: string }>("select id from invoice_mail where id = $1 and company_id = $2", [mailId, companyId]);
+    const saved = await sql<{ id: string }>("select id from invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]);
+    if (!seen[0] || saved.length === 0) {
+      await dropMail(mailId, companyId);
+      return { result: "later" };
+    }
+  } catch {
+    await dropMail(mailId, companyId);
+    return { result: "later" };
+  }
+  return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
+}
+
+async function dropMail(mailId: string, companyId: string): Promise<void> {
+  await sql("delete from invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
+  await sql("delete from invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
 }
 
 async function ensureMailbox(companyId: string): Promise<"ok" | "unknown" | "later"> {
