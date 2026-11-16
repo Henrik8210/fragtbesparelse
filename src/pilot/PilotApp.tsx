@@ -455,7 +455,7 @@ export function PilotApp() {
     <div className="app-shell">
       <aside className="sidebar">
         <button className="brand" type="button" onClick={() => navigate("overview")} aria-label="Freightlytics overblik">
-          <BrandMark />
+          <BrandMark onDark />
           <span>Freightlytics<span className="brand-sub">FRAGTØKONOMI</span></span>
         </button>
         <div className="workspace-label">ARBEJDSRUM</div>
@@ -1494,13 +1494,8 @@ function CoverMotion() {
   );
 }
 
-function BrandMark() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 40 40" width="37" height="37">
-      <rect width="40" height="40" rx="11" fill="#a9efd8" />
-      <path d="M10 27h9l11-13h-8L11 26m19-12v8M10 27v-7" stroke="#173c35" strokeWidth="2.65" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+function BrandMark({ onDark = false }: { onDark?: boolean }) {
+  return <img className="brand-mark" src={onDark ? "/logo-dark.svg" : "/logo.svg"} alt="" aria-hidden="true" width="56" height="37" />;
 }
 
 function HeroArt() {
