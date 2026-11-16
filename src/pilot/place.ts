@@ -1,8 +1,10 @@
-export type WorkspaceView = "overview" | "check" | "history" | "coverage" | "settings" | "report";
+export type WorkspaceView = "overview" | "check" | "inbox" | "agreements" | "history" | "coverage" | "settings" | "report";
 
 const HASHES: Record<string, WorkspaceView> = {
   "#/overblik": "overview",
   "#/fakturakontrol": "check",
+  "#/fakturakontrol/modtaget": "inbox",
+  "#/fakturakontrol/prisaftaler": "agreements",
   "#/historik": "history",
   "#/benchmark": "coverage",
   "#/indstillinger": "settings",
@@ -14,6 +16,8 @@ export function viewFromHash(hash: string): WorkspaceView {
 
 export function hashForView(view: WorkspaceView): string {
   if (view === "settings") return "#/indstillinger";
+  if (view === "inbox") return "#/fakturakontrol/modtaget";
+  if (view === "agreements") return "#/fakturakontrol/prisaftaler";
   if (view === "check" || view === "report") return "#/fakturakontrol";
   if (view === "history") return "#/historik";
   if (view === "coverage") return "#/benchmark";

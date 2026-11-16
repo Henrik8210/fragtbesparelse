@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
-  FileText, History, LayoutGrid, LockKeyhole, Package, Plus, Settings,
+  FileText, History, LayoutGrid, LockKeyhole, Mail, Package, Plus, RefreshCw, Settings,
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
@@ -10,7 +10,7 @@ import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
 } from "./freight.ts";
-import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
+import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
@@ -68,6 +68,7 @@ async function readCurrentUser(): Promise<{ user: { role: string } | null }> {
 
 export function PilotApp() {
   const [view, setView] = useState<View>(() => viewFromHash(window.location.hash));
+  const [composer, setComposer] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [flowKey, setFlowKey] = useState(0);
   const [reportKey, setReportKey] = useState(0);
@@ -108,8 +109,12 @@ export function PilotApp() {
     }]),
     ...history.filter((item) => item.orgId === org.id),
   ], [history, org, sampleReport]);
-  const activeTab = view === "report" ? "check" : view;
-  const activeLabel = view === "report" ? "Rapport" : NAV.find((tab) => tab.id === activeTab)?.label;
+  const inCheck = view === "check" || view === "report" || view === "inbox" || view === "agreements";
+  const activeTab = inCheck ? "check" : view;
+  const activeLabel = view === "report" ? "Rapport"
+    : view === "inbox" ? "Modtaget"
+    : view === "agreements" ? "Prisaftaler"
+    : NAV.find((tab) => tab.id === activeTab)?.label;
   const peers = peerCount(org.id);
 
   const refreshSession = useCallback(async () => {
@@ -201,9 +206,9 @@ export function PilotApp() {
   }
 
   function newAudit() {
-    setResult(null);
     setFlowKey((value) => value + 1);
-    navigate("check");
+    setComposer(true);
+    if (view !== "check" && view !== "history") navigate("check");
   }
 
   function receiveResult(next: Result) {
@@ -351,15 +356,26 @@ export function PilotApp() {
         <div className="workspace-label">ARBEJDSRUM</div>
         <nav aria-label="Hovedmenu">
           {NAV.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              className={activeTab === id ? "nav-item active" : "nav-item"}
-              aria-current={activeTab === id ? "page" : undefined}
-              onClick={() => id === "check" && view !== "check" ? newAudit() : navigate(id)}
-            >
-              <Icon size={19} /><span>{label}</span>
-            </button>
+            <Fragment key={id}>
+              <button
+                type="button"
+                className={view === id || (id === "check" && view === "report") ? "nav-item active" : activeTab === id ? "nav-item section" : "nav-item"}
+                aria-current={view === id || (id === "check" && view === "report") ? "page" : undefined}
+                onClick={() => navigate(id)}
+              >
+                <Icon size={19} /><span>{label}</span>
+              </button>
+              {id === "check" ? (
+                <div className="nav-sub">
+                  <button type="button" className={view === "inbox" ? "active" : ""} aria-current={view === "inbox" ? "page" : undefined} onClick={() => navigate("inbox")}>
+                    <Mail size={15} /><span>Modtaget</span>
+                  </button>
+                  <button type="button" className={view === "agreements" ? "active" : ""} aria-current={view === "agreements" ? "page" : undefined} onClick={() => navigate("agreements")}>
+                    <FileText size={15} /><span>Prisaftaler</span>
+                  </button>
+                </div>
+              ) : null}
+            </Fragment>
           ))}
         </nav>
         <div className="sidebar-bottom">
@@ -439,17 +455,16 @@ export function PilotApp() {
               onCoverage={() => navigate("coverage")}
             />
           ) : null}
-          {view === "check" || view === "report" ? (
-            <div hidden={view !== "check"}>
-              <AuditFlow
-                key={flowKey}
-                onExample={demo}
-                onReport={(input, report) => receiveResult({
-                  name: input.name, carrier: input.carrier, input, report, example: false, saved: null,
-                })}
-              />
-            </div>
+          {view === "check" || view === "history" ? (
+            <ChecksPage
+              title={view === "check" ? "Fakturakontrol" : "Historik"}
+              checks={checks}
+              onStart={newAudit}
+              onOpen={openReport}
+            />
           ) : null}
+          {view === "inbox" ? <InboxView key={org.id} admin={admin} orgId={org.id} orgs={orgs} /> : null}
+          {view === "agreements" ? <AgreementsView org={org} /> : null}
           {view === "report" && result ? (
             <ReportView
               key={reportKey}
@@ -460,25 +475,24 @@ export function PilotApp() {
               onRevoke={revokeContribution}
             />
           ) : null}
-          {view === "history" ? (
-            <div className="content-flow">
-              <div className="page-intro split">
-                <div>
-                  <span className="eyebrow"><i /> GEMTE RAPPORTER</span>
-                  <h1>Historik</h1>
-                  <p>Åbn tidligere kontroller og administrér dine databidrag.</p>
-                </div>
-                <button className="button primary" type="button" onClick={newAudit}><Plus size={18} /> Nyt fakturatjek</button>
-              </div>
-              <section className="panel history-panel">
-                <div className="section-heading"><h2>Seneste kontroller</h2><p>{checks.length} kontroller</p></div>
-                <HistoryRows items={checks} onOpen={openReport} onStart={newAudit} />
-              </section>
-            </div>
-          ) : null}
           {view === "coverage" ? <BenchmarkView report={sampleReport} orgId={org.id} peers={peers} /> : null}
           {view === "settings" ? <SettingsView key={org.id} admin={admin} orgId={org.id} orgs={orgs} /> : null}
         </main>
+        {composer ? (
+          <Modal title="Nyt fakturatjek" audit onClose={() => setComposer(false)}>
+            <AuditFlow
+              key={flowKey}
+              embedded
+              onExample={() => { setComposer(false); demo(); }}
+              onReport={(input, report) => {
+                setComposer(false);
+                receiveResult({
+                  name: input.name, carrier: input.carrier, input, report, example: false, saved: null,
+                });
+              }}
+            />
+          </Modal>
+        ) : null}
         <footer className="main-footer"><span>Freightlytics</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
       </div>
     </div>
@@ -488,16 +502,36 @@ export function PilotApp() {
 type MailFile = { id: string; filename: string; bytes: number };
 type MailRow = { id: string; sender: string; subject: string; receivedAt: string; files: MailFile[] };
 
+const CARRIER_RULES: { name: string; pattern: RegExp }[] = [
+  { name: "PostNord", pattern: /post[\s-]?nord/i },
+  { name: "Danske Fragtmænd", pattern: /fragtm[aæ]nd|fragtmaend/i },
+  { name: "Schenker", pattern: /schenker/i },
+  { name: "GLS", pattern: /\bgls\b/i },
+  { name: "DHL", pattern: /\bdhl\b/i },
+  { name: "DSV", pattern: /\bdsv\b/i },
+  { name: "Bring", pattern: /\bbring\b/i },
+  { name: "DAO", pattern: /\bdao\b/i },
+  { name: "UPS", pattern: /\bups\b/i },
+];
+
+function carrierFromMail(mail: MailRow): string {
+  const quoted = mail.sender.match(/<([^>]+)>/)?.[1] ?? mail.sender;
+  const address = quoted.trim().toLowerCase();
+  const at = address.lastIndexOf("@");
+  const domain = at >= 0 ? address.slice(at + 1) : "";
+  const files = mail.files.map((file) => file.filename).join(" ");
+  const haystack = `${domain} ${mail.subject} ${files}`;
+  return CARRIER_RULES.find((rule) => rule.pattern.test(haystack))?.name ?? "";
+}
+
 function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
   const key = mailKey(admin, orgId);
   const cached = readMail(key);
   const [address, setAddress] = useState(cached?.address ?? "");
   const [ready, setReady] = useState(cached?.ready ?? true);
-  const [mails, setMails] = useState<MailRow[]>(cached?.mails ?? []);
   const [loading, setLoading] = useState(!cached);
   const [copied, setCopied] = useState(false);
   const [problem, setProblem] = useState(cached?.error ?? "");
-  const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
   const field = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const hit = readMail(key);
@@ -506,7 +540,6 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     if (!hit) {
       setAddress("");
       setReady(true);
-      setMails([]);
       setProblem("");
       setLoading(true);
     }
@@ -525,7 +558,6 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
         if (gone) return;
         setAddress(next.address);
         setReady(next.ready);
-        setMails(next.mails);
         setProblem(next.error);
       })
       .catch(() => {
@@ -539,14 +571,10 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
       gone = true;
     };
   }, [admin, orgId, key]);
-  useEffect(() => {
-    setOpen(null);
-  }, [orgId]);
 
   const shownAddress = address || (orgId ? `${orgId}@freightlytics.io` : "");
   const mailboxId = shownAddress.split("@")[0] ?? "";
   const ownerName = orgs.find((item) => item.id === mailboxId)?.name ?? "";
-  const openFile = open?.files.find((file) => file.id === open.fileId) ?? null;
 
   async function copyAddress() {
     field.current?.select();
@@ -557,10 +585,109 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     }
     setCopied(true);
   }
+  return (
+    <div className="content-flow">
+      <div className="page-intro">
+        <span className="eyebrow"><i /> ORGANISATION</span>
+        <h1>Indstillinger</h1>
+        <p>Bed transportøren om at sætte adressen på som CC. Vedhæftningerne gemmes kun på {ownerName || "denne organisation"} og vises under Fakturakontrol.</p>
+      </div>
+      <section className="panel">
+        <div className="section-heading">
+          <h2>Fakturamail</h2>
+          <p>{loading || !problem ? (ready || loading ? "Mail til adressen lander under Modtaget." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op.") : "Indbakken kunne ikke læses."}</p>
+        </div>
+        <div className="mail-address" style={{ padding: "0 18px 18px" }}>
+          {loading && !shownAddress ? <span className="bone address" /> : (
+            <input ref={field} readOnly value={shownAddress} aria-label="Indbakke" spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
+          )}
+          <button className="button secondary" type="button" onClick={() => void copyAddress()} disabled={!shownAddress}>{copied ? "Kopieret" : "Kopiér"}</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
+  const key = mailKey(admin, orgId);
+  const cached = readMail(key);
+  const [mails, setMails] = useState<MailRow[]>(cached?.mails ?? []);
+  const [loading, setLoading] = useState(!cached);
+  const [refreshing, setRefreshing] = useState(false);
+  const [problem, setProblem] = useState(cached?.error ?? "");
+  const [filter, setFilter] = useState("");
+  const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
+  const reload = useRef<(manual: boolean) => void>(() => undefined);
+  const ownerName = orgs.find((item) => item.id === orgId)?.name ?? "";
+  useEffect(() => {
+    setOpen(null);
+    const epoch = cacheEpoch();
+    let gone = false;
+    async function load(manual: boolean) {
+      const hit = readMail(key);
+      if (!hit && !manual) setLoading(true);
+      if (manual) setRefreshing(true);
+      const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
+      try {
+        const body = await api<{ address: string; ready: boolean; error?: string; mails: MailRow[] }>(`/api/invoice-mail${query}`);
+        if (cacheEpoch() !== epoch) return;
+        const previous = readMail(key);
+        const next: CachedMailbox = {
+          address: body.address || previous?.address || "",
+          ready: body.ready,
+          error: body.error ?? "",
+          mails: body.mails,
+        };
+        rememberMail(key, next);
+        if (gone) return;
+        setMails(next.mails);
+        setProblem(next.error);
+      } catch {
+        if (gone || cacheEpoch() !== epoch || readMail(key)) return;
+        setProblem("Kunne ikke hente indbakken.");
+      } finally {
+        if (!gone && cacheEpoch() === epoch) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    }
+    const hit = readMail(key);
+    if (hit) {
+      setMails(hit.mails);
+      setProblem(hit.error);
+      setLoading(false);
+    }
+    reload.current = (manual) => { void load(manual); };
+    void load(false);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load(false);
+    }, 20000);
+    function onVisible() {
+      if (document.visibilityState === "visible") void load(false);
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      gone = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [admin, orgId, key]);
+
+  const carriers = [...new Set(mails.map(carrierFromMail).filter(Boolean))].sort((a, b) => a.localeCompare(b, "da"));
+  const unknown = mails.some((mail) => !carrierFromMail(mail));
+  const shown = mails.filter((mail) => {
+    const carrier = carrierFromMail(mail);
+    if (!filter) return true;
+    if (filter === "ukendt") return !carrier;
+    return carrier === filter;
+  });
+  const openFile = open?.files.find((file) => file.id === open.fileId) ?? null;
+
   async function downloadOpen() {
-    if (!openFile || !mailboxId) return;
+    if (!openFile) return;
     const response = await fetch(
-      `/api/invoice-mail/files/${encodeURIComponent(openFile.id)}?company=${encodeURIComponent(mailboxId)}`,
+      `/api/invoice-mail/files/${encodeURIComponent(openFile.id)}?company=${encodeURIComponent(orgId)}`,
       { credentials: "same-origin" },
     );
     if (!response.ok) return;
@@ -574,50 +701,57 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     link.remove();
     URL.revokeObjectURL(url);
   }
+
   return (
     <div className="content-flow">
       <div className="page-intro">
-        <span className="eyebrow"><i /> ORGANISATION</span>
-        <h1>Indstillinger</h1>
-        <p>Bed transportøren om at sætte adressen på som CC. Vedhæftningerne gemmes kun på {ownerName || "denne organisation"}.</p>
+        <span className="eyebrow"><i /> FAKTURAMAIL</span>
+        <h1>Modtaget</h1>
+        <p>Fakturaer sendt til {ownerName || "organisationen"}. Listen opdateres af sig selv, mens siden er åben.</p>
       </div>
-      <section className="panel">
-        <div className="section-heading">
-          <h2>Fakturamail</h2>
-          <p>{loading || !problem ? (ready || loading ? "Mail til adressen lander her." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op.") : "Indbakken kunne ikke læses."}</p>
-        </div>
-        <div className="mail-address" style={{ padding: "0 18px 18px" }}>
-          {loading && !shownAddress ? <span className="bone address" /> : (
-            <input ref={field} readOnly value={shownAddress} aria-label="Indbakke" spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
-          )}
-          <button className="button secondary" type="button" onClick={() => void copyAddress()} disabled={!shownAddress}>{copied ? "Kopieret" : "Kopiér"}</button>
-        </div>
-      </section>
       <section className="panel" aria-busy={loading}>
-        <div className="section-heading"><h2>Modtaget</h2></div>
-        {loading ? <MailSkeleton /> : problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : mails.length === 0 ? (
-          <p className="quiet" style={{ padding: "0 18px 16px" }}>Ingen fakturamail endnu.</p>
+        <div className="section-heading"><h2>Indbakke</h2><p>{loading ? "Henter" : `${shown.length} mails`}</p></div>
+        <div className="mail-tools">
+          <label>
+            Transportør
+            <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrér på transportør">
+              <option value="">Alle</option>
+              {carriers.map((name) => <option key={name} value={name}>{name}</option>)}
+              {unknown ? <option value="ukendt">Ukendt</option> : null}
+            </select>
+          </label>
+          <button className="button secondary" type="button" onClick={() => reload.current(true)} disabled={refreshing}>
+            <RefreshCw size={16} /> {refreshing ? "Opdaterer" : "Opdater"}
+          </button>
+        </div>
+        {loading ? <MailSkeleton /> : problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : shown.length === 0 ? (
+          <p className="quiet" style={{ padding: "0 18px 16px" }}>{mails.length === 0 ? "Ingen fakturamail endnu." : "Ingen mails for den transportør."}</p>
         ) : (
-          <ul className="mail-list">
-            {mails.map((mail) => {
-              const pdfs = mail.files.filter((file) => file.filename.toLowerCase().endsWith(".pdf"));
-              return (
-                <li key={mail.id}>
-                  <button
-                    type="button"
-                    className="mail-row"
-                    onClick={() => setOpen({ subject: mail.subject, files: pdfs, fileId: pdfs[0]?.id ?? "" })}
-                  >
-                    <span>
-                      <strong>{mail.subject}</strong>
-                      <small>{mail.sender} · {dateLabel(mail.receivedAt)}</small>
-                    </span>
-                    <span>{pdfs[0]?.filename ?? "Ingen PDF"}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <>
+            <div className="mail-head"><span>Emne</span><span>Transportør</span><span className="mail-file">Fil</span></div>
+            <ul className="mail-list">
+              {shown.map((mail) => {
+                const pdfs = mail.files.filter((file) => file.filename.toLowerCase().endsWith(".pdf"));
+                const carrier = carrierFromMail(mail);
+                return (
+                  <li key={mail.id}>
+                    <button
+                      type="button"
+                      className="mail-row"
+                      onClick={() => setOpen({ subject: mail.subject, files: pdfs, fileId: pdfs[0]?.id ?? "" })}
+                    >
+                      <span>
+                        <strong>{mail.subject}</strong>
+                        <small>{mail.sender} · {dateLabel(mail.receivedAt)}</small>
+                      </span>
+                      <span className="mail-carrier">{carrier || "—"}</span>
+                      <span className="mail-file">{pdfs[0]?.filename ?? "Ingen PDF"}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
         )}
       </section>
       {open ? (
@@ -634,7 +768,7 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
               <div className="invoice-toolbar">
                 <button className="button secondary" type="button" onClick={() => void downloadOpen()} disabled={!openFile}>Hent</button>
               </div>
-              <InvoicePages fileId={open.fileId} companyId={mailboxId} />
+              <InvoicePages fileId={open.fileId} companyId={orgId} />
             </>
           ) : <p>Denne mail har ingen PDF.</p>}
         </Modal>
@@ -653,6 +787,7 @@ function MailSkeleton() {
               <i className="bone title" />
               <i className="bone meta" />
             </span>
+            <i className="bone carrier" />
             <i className="bone file" />
           </div>
         </li>
@@ -1000,13 +1135,13 @@ function clearHash(hash: string) {
   }
 }
 
-function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+function Modal({ title, onClose, children, wide = false, audit = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; audit?: boolean }) {
   const close = useRef(onClose);
   close.current = onClose;
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    (card.current?.querySelector<HTMLElement>("input, select, textarea") ?? card.current?.querySelector<HTMLElement>("button"))?.focus();
+    (card.current?.querySelector<HTMLElement>("input:not([tabindex='-1']), select:not([tabindex='-1']), textarea") ?? card.current?.querySelector<HTMLElement>("button:not(.modal-close)"))?.focus();
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") close.current();
     }
@@ -1021,7 +1156,7 @@ function Modal({ title, onClose, children, wide = false }: { title: string; onCl
   }, []);
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close.current(); }}>
-      <div className={wide ? "modal-card invoice-modal" : "modal-card"} ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div className={["modal-card", wide ? "invoice-modal" : "", audit ? "audit-modal" : ""].filter(Boolean).join(" ")} ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div className="modal-head">
           <h2 id="modal-title">{title}</h2>
           <button type="button" className="modal-close" onClick={() => close.current()}>Luk</button>
@@ -1308,6 +1443,85 @@ function Overview({
           <button className="text-button" type="button" onClick={onCoverage}>Se datadækning <ArrowRight size={16} /></button>
         </section>
       </div>
+    </div>
+  );
+}
+
+function ChecksPage({ title, checks, onStart, onOpen }: {
+  title: string;
+  checks: StoredAudit[];
+  onStart: () => void;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div className="content-flow">
+      <div className="page-intro split">
+        <div>
+          <span className="eyebrow"><i /> GEMTE RAPPORTER</span>
+          <h1>{title}</h1>
+          <p>Åbn tidligere kontroller og administrér dine databidrag.</p>
+        </div>
+        <button className="button primary" type="button" onClick={onStart}><Plus size={18} /> Nyt fakturatjek</button>
+      </div>
+      <section className="panel history-panel">
+        <div className="section-heading"><h2>Seneste kontroller</h2><p>{checks.length} kontroller</p></div>
+        <HistoryRows items={checks} onOpen={onOpen} onStart={onStart} />
+      </section>
+    </div>
+  );
+}
+
+function AgreementsView({ org }: { org: Org }) {
+  const rows = useMemo(() => orgRateRows(org), [org]);
+  return (
+    <div className="content-flow">
+      <div className="page-intro">
+        <span className="eyebrow"><i /> PRISAFTALER</span>
+        <h1>Prisaftaler</h1>
+        <p>Aftaler for {org.name}. De seks prøvefirmaer har en prøveaftale. En ny organisation starter uden.</p>
+      </div>
+      {rows.length === 0 ? (
+        <section className="panel">
+          <div className="empty-state">
+            <div className="empty-icon"><FileText size={24} /></div>
+            <strong>Ingen prisaftaler endnu</strong>
+            <p>Når en prisaftale er lagt ind for {org.name}, vises den her.</p>
+          </div>
+        </section>
+      ) : (
+        <section className="panel">
+          <div className="section-heading">
+            <h2>{org.carrier || "Prisaftale"}</h2>
+            <p>Prøveaftale · oktober 2026</p>
+          </div>
+          <div className="rate-scroll">
+            <table className="rate-table">
+              <thead>
+                <tr>
+                  <th>Leveringsform</th>
+                  <th>Maks. kg</th>
+                  <th>Grundpris</th>
+                  <th>Brændstof</th>
+                  <th>Fast tillæg</th>
+                  <th>Gyldig</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr key={`${row.service}-${row.maxWeight}-${index}`}>
+                    <td>{row.service}</td>
+                    <td>{row.maxWeight.toLocaleString("da-DK")}</td>
+                    <td>{money(row.baseOre)}</td>
+                    <td>{row.fuelPct.toLocaleString("da-DK")} %</td>
+                    <td>{money(row.fixedOre)}</td>
+                    <td>{row.from ? dateLabel(row.from) : "—"}{row.to ? ` – ${dateLabel(row.to)}` : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

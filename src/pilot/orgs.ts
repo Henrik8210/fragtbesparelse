@@ -1,5 +1,5 @@
 import { importRows, parseCsv, suggestMapping } from "./csv.ts";
-import { runAudit, type AuditReport } from "./freight.ts";
+import { runAudit, type AuditReport, type RateRow } from "./freight.ts";
 
 const ORG_KEY = "fragtblik-pilot-org";
 
@@ -181,6 +181,12 @@ const emptyReport: AuditReport = {
 
 function hasDataLine(source: string) {
   return source.split(/\r?\n/).filter((line) => line.trim()).length > 1;
+}
+
+export function orgRateRows(org: Org): RateRow[] {
+  if (!hasDataLine(org.rates)) return [];
+  const sheet = parseCsv(org.rates);
+  return importRows("rates", sheet, suggestMapping("rates", sheet.headers));
 }
 
 export function orgAudit(org: Org): AuditReport {
