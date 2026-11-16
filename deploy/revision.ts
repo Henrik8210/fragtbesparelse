@@ -1,4 +1,4 @@
-export const REVISION = "pick-earlier";
+export const REVISION = "notice-bell";
 
 export function healthMatchesRevision(body: string): boolean {
   return body.split(/\s+/).includes(REVISION);

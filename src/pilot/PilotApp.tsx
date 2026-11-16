@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
-  ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
+  ArrowRight, ArrowUpRight, BarChart3, Bell, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Mail, Package, Plus, RefreshCw, Settings,
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
@@ -421,6 +421,14 @@ export function PilotApp() {
     setGate("open");
   }
 
+  async function refreshNotices() {
+    if (!admin) return;
+    const notes = await loadNotices();
+    if (!notes) return;
+    rememberNotices(notes);
+    setNotices(notes);
+  }
+
   async function dismissNotice(id: string) {
     setNotices((current) => {
       const next = current.filter((item) => item.id !== id);
@@ -511,6 +519,7 @@ export function PilotApp() {
               }}
               onSignedOut={signOut}
             />
+            <NoticeBell notices={notices} onDismiss={(id) => void dismissNotice(id)} onRefresh={() => void refreshNotices()} />
             <AccountMenu
               admin={admin}
               onCreated={(created) => {
@@ -526,20 +535,6 @@ export function PilotApp() {
           </div>
         </header>
 
-        {admin && notices.length ? (
-          <div className="notice-list" aria-live="polite">
-            {notices.map((item) => (
-              <article className="notice" key={item.id}>
-                <div>
-                  <strong>Demoønske</strong>
-                  <p>{item.name} · {item.company}</p>
-                  <p>{item.email}</p>
-                </div>
-                <button type="button" onClick={() => void dismissNotice(item.id)}>Luk</button>
-              </article>
-            ))}
-          </div>
-        ) : null}
         <main className="main-content">
           {view === "overview" ? (
             <Overview
@@ -951,6 +946,72 @@ function InvoicePages({ fileId, companyId }: { fileId: string; companyId: string
       {images.map((src, index) => (
         <img key={`${fileId}-${index}`} src={src} alt={`Side ${index + 1}`} />
       ))}
+    </div>
+  );
+}
+
+function NoticeBell({ notices, onDismiss, onRefresh }: {
+  notices: Notice[];
+  onDismiss: (id: string) => void;
+  onRefresh: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const unread = notices.length;
+  useEffect(() => {
+    if (!open) return;
+    function close(event: PointerEvent) {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="notice-bell" ref={root}>
+      <button
+        type="button"
+        className="bell-button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={unread ? `Beskeder, ${unread} ulæste` : "Beskeder"}
+        onClick={() => {
+          setOpen((value) => {
+            if (!value) onRefresh();
+            return !value;
+          });
+        }}
+      >
+        <Bell size={16} />
+        {unread ? <span className="bell-dot" /> : null}
+      </button>
+      {open ? (
+        <div className="notice-pop" role="dialog" aria-label="Beskeder">
+          <p className="notice-pop-title">Beskeder</p>
+          {unread === 0 ? <p className="notice-empty">Ingen beskeder.</p> : (
+            <ul>
+              {notices.map((item) => (
+                <li key={item.id}>
+                  <div>
+                    <strong>Demoønske</strong>
+                    <p>{item.name} · {item.company}</p>
+                    <p>{item.email}</p>
+                    <small>{dateLabel(item.createdAt)}</small>
+                  </div>
+                  <button type="button" onClick={() => onDismiss(item.id)}>Læst</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
