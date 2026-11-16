@@ -19,7 +19,6 @@ const memory: {
 } = { mail: new Map() };
 
 let epoch = 0;
-let sessionAt = 0;
 
 export function cacheEpoch(): number {
   return epoch;
@@ -67,11 +66,4 @@ export function clearWorkspaceCache() {
   memory.orgs = undefined;
   memory.notices = undefined;
   memory.mail.clear();
-}
-
-export function beginSessionRefresh(): boolean {
-  const now = Date.now();
-  if (now - sessionAt < 400) return false;
-  sessionAt = now;
-  return true;
 }

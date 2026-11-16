@@ -15,7 +15,7 @@ import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 import {
-  beginSessionRefresh, cacheEpoch, clearWorkspaceCache, mailKey, readMail, readMe, readNotices, readOrgs,
+  cacheEpoch, clearWorkspaceCache, mailKey, readMail, readMe, readNotices, readOrgs,
   rememberMail, rememberMe, rememberNotices, rememberOrgs, type CachedMailbox,
 } from "./workspaceCache.ts";
 
@@ -38,6 +38,33 @@ type Result = {
   example: boolean;
   saved: AuditIndexEntry | null;
 };
+
+let currentUserRequest: Promise<{ user: { role: string } | null }> | null = null;
+
+function loadCurrentUser(): Promise<{ user: { role: string } | null }> {
+  if (!currentUserRequest) {
+    currentUserRequest = readCurrentUser().finally(() => {
+      currentUserRequest = null;
+    });
+  }
+  return currentUserRequest;
+}
+
+async function readCurrentUser(): Promise<{ user: { role: string } | null }> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch("/api/me", { credentials: "same-origin", cache: "no-store" });
+      if (response.status === 401) return { user: null };
+      if (!response.ok) throw new Error("session");
+      const body = (await response.json()) as { user?: { role: string } | null };
+      return { user: body?.user ?? null };
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last instanceof Error ? last : new Error("session");
+}
 
 export function PilotApp() {
   const [view, setView] = useState<View>(() => viewFromHash(window.location.hash));
@@ -86,19 +113,10 @@ export function PilotApp() {
   const peers = peerCount(org.id);
 
   const refreshSession = useCallback(async () => {
-    if (!beginSessionRefresh()) return;
     const epoch = cacheEpoch();
-    const me = await api<{ user: { role: string } | null }>("/api/me");
-    if (cacheEpoch() !== epoch) return;
-    if (!me.user) {
-      clearWorkspaceCache();
-      setAdmin(false);
-      setExtraOrgs([]);
-      setNotices([]);
-      setOrgsReady(true);
-      setGate("closed");
-      return;
-    }
+    const me = await loadCurrentUser();
+    if (cacheEpoch() !== epoch) return "stale" as const;
+    if (!me.user) return "out" as const;
     rememberMe(me.user);
     const isAdmin = me.user.role === "admin";
     setAdmin(isAdmin);
@@ -107,7 +125,7 @@ export function PilotApp() {
         api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
         loadNotices(),
       ]);
-      if (cacheEpoch() !== epoch) return;
+      if (cacheEpoch() !== epoch) return "stale";
       if (body) {
         rememberOrgs(body.orgs);
         setExtraOrgs(body.orgs);
@@ -124,32 +142,36 @@ export function PilotApp() {
     }
     setGate("open");
     setOrgsReady(true);
+    return "in" as const;
   }, []);
 
   useEffect(() => {
-    const epoch = cacheEpoch();
-    let gone = false;
-    refreshSession().catch(() => {
-      if (gone || cacheEpoch() !== epoch) return;
-      if (readMe() === undefined) {
-        setGate("closed");
-        setOrgsReady(true);
-      }
-    });
+    let alive = true;
+    refreshSession()
+      .then((result) => {
+        if (alive && result === "out") signOut();
+      })
+      .catch(() => {
+        if (alive && readMe() === undefined) {
+          setGate("closed");
+          setOrgsReady(true);
+        }
+      });
     return () => {
-      gone = true;
+      alive = false;
     };
   }, [refreshSession]);
 
   useEffect(() => {
     if (view !== "settings" || gate !== "open") return;
-    const epoch = cacheEpoch();
-    let gone = false;
-    refreshSession().catch(() => {
-      if (!gone && cacheEpoch() === epoch && readMe() === undefined) setGate("closed");
-    });
+    let alive = true;
+    refreshSession()
+      .then((result) => {
+        if (alive && result === "out") signOut();
+      })
+      .catch(() => undefined);
     return () => {
-      gone = true;
+      alive = false;
     };
   }, [view, gate, refreshSession]);
 
@@ -304,6 +326,15 @@ export function PilotApp() {
       return next;
     });
     await api(`/api/notifications/${encodeURIComponent(id)}/seen`, { method: "POST" }).catch(() => undefined);
+  }
+
+  if (gate === "checking") {
+    return (
+      <div className="session-loading" role="status" aria-live="polite">
+        <BrandMark />
+        <p>Henter arbejdsrummet</p>
+      </div>
+    );
   }
 
   if (gate !== "open") {
