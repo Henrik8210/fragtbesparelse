@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Package, Plus, Settings,
@@ -14,6 +14,10 @@ import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, ORGS, peerCount, sav
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
+import {
+  beginSessionRefresh, cacheEpoch, clearWorkspaceCache, mailKey, readMail, readMe, readNotices, readOrgs,
+  rememberMail, rememberMe, rememberNotices, rememberOrgs, type CachedMailbox,
+} from "./workspaceCache.ts";
 
 const NAV = [
   { id: "overview", label: "Overblik", icon: LayoutGrid },
@@ -42,11 +46,20 @@ export function PilotApp() {
   const [reportKey, setReportKey] = useState(0);
   const [history, setHistory] = useState<StoredAudit[]>(() => loadAudits());
   const [orgId, setOrgId] = useState(loadOrgId);
-  const [extraOrgs, setExtraOrgs] = useState<Company[]>([]);
-  const [orgsReady, setOrgsReady] = useState(false);
-  const [admin, setAdmin] = useState(false);
-  const [notices, setNotices] = useState<Notice[]>([]);
-  const [gate, setGate] = useState<"checking" | "closed" | "open">("checking");
+  const [extraOrgs, setExtraOrgs] = useState<Company[]>(() => readOrgs() ?? []);
+  const [orgsReady, setOrgsReady] = useState(() => {
+    const me = readMe();
+    if (me === undefined) return false;
+    if (me === null || me.role !== "admin") return true;
+    return readOrgs() !== undefined;
+  });
+  const [admin, setAdmin] = useState(() => readMe()?.role === "admin");
+  const [notices, setNotices] = useState<Notice[]>(() => readNotices() ?? []);
+  const [gate, setGate] = useState<"checking" | "closed" | "open">(() => {
+    const me = readMe();
+    if (me === undefined) return "checking";
+    return me ? "open" : "closed";
+  });
   const orgs = useMemo(
     () => [...ORGS, ...extraOrgs.filter((item) => !ORGS.some((sample) => sample.id === item.id)).map(orgFromCompany)],
     [extraOrgs],
@@ -72,40 +85,73 @@ export function PilotApp() {
   const activeLabel = view === "report" ? "Rapport" : NAV.find((tab) => tab.id === activeTab)?.label;
   const peers = peerCount(org.id);
 
+  const refreshSession = useCallback(async () => {
+    if (!beginSessionRefresh()) return;
+    const epoch = cacheEpoch();
+    const me = await api<{ user: { role: string } | null }>("/api/me");
+    if (cacheEpoch() !== epoch) return;
+    if (!me.user) {
+      clearWorkspaceCache();
+      setAdmin(false);
+      setExtraOrgs([]);
+      setNotices([]);
+      setOrgsReady(true);
+      setGate("closed");
+      return;
+    }
+    rememberMe(me.user);
+    const isAdmin = me.user.role === "admin";
+    setAdmin(isAdmin);
+    if (isAdmin) {
+      const [body, notes] = await Promise.all([
+        api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
+        loadNotices(),
+      ]);
+      if (cacheEpoch() !== epoch) return;
+      if (body) {
+        rememberOrgs(body.orgs);
+        setExtraOrgs(body.orgs);
+      }
+      if (notes) {
+        rememberNotices(notes);
+        setNotices(notes);
+      }
+    } else {
+      rememberOrgs([]);
+      rememberNotices([]);
+      setExtraOrgs([]);
+      setNotices([]);
+    }
+    setGate("open");
+    setOrgsReady(true);
+  }, []);
+
   useEffect(() => {
+    const epoch = cacheEpoch();
     let gone = false;
-    api<{ user: { role: string } | null }>("/api/me")
-      .then(async (me) => {
-        if (gone) return;
-        if (!me.user) {
-          setAdmin(false);
-          setGate("closed");
-          setOrgsReady(true);
-          return;
-        }
-        const isAdmin = me.user.role === "admin";
-        setAdmin(isAdmin);
-        if (isAdmin) {
-          const [body, notes] = await Promise.all([
-            api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
-            loadNotices(),
-          ]);
-          if (!gone && body) setExtraOrgs(body.orgs);
-          if (!gone) setNotices(notes);
-        }
-        setGate("open");
+    refreshSession().catch(() => {
+      if (gone || cacheEpoch() !== epoch) return;
+      if (readMe() === undefined) {
+        setGate("closed");
         setOrgsReady(true);
-      })
-      .catch(() => {
-        if (!gone) {
-          setGate("closed");
-          setOrgsReady(true);
-        }
-      });
+      }
+    });
     return () => {
       gone = true;
     };
-  }, []);
+  }, [refreshSession]);
+
+  useEffect(() => {
+    if (view !== "settings" || gate !== "open") return;
+    const epoch = cacheEpoch();
+    let gone = false;
+    refreshSession().catch(() => {
+      if (!gone && cacheEpoch() === epoch && readMe() === undefined) setGate("closed");
+    });
+    return () => {
+      gone = true;
+    };
+  }, [view, gate, refreshSession]);
 
   useEffect(() => {
     if (orgsReady && !orgs.some((item) => item.id === orgId)) setOrgId(ORGS[0].id);
@@ -145,10 +191,28 @@ export function PilotApp() {
   }
 
   function chooseOrg(id: string) {
+    if (id !== orgId) {
+      const me = readMe();
+      const savedOrgs = readOrgs();
+      const savedNotices = readNotices();
+      clearWorkspaceCache();
+      if (me !== undefined) rememberMe(me);
+      if (savedOrgs) rememberOrgs(savedOrgs);
+      if (savedNotices) rememberNotices(savedNotices);
+    }
     setOrgId(id);
     saveOrgId(id);
     setResult(null);
     if (view === "report") navigate("overview");
+  }
+
+  function signOut() {
+    clearWorkspaceCache();
+    setAdmin(false);
+    setExtraOrgs([]);
+    setNotices([]);
+    setOrgsReady(true);
+    setGate("closed");
   }
 
   function demo() {
@@ -209,15 +273,24 @@ export function PilotApp() {
   async function enter(username: string, password: string) {
     const signed = await api<{ user: { role: string } }>("/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
     const isAdmin = signed.user.role === "admin";
+    rememberMe(signed.user);
     setAdmin(isAdmin);
     if (isAdmin) {
       const [body, notes] = await Promise.all([
         api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
         loadNotices(),
       ]);
-      if (body) setExtraOrgs(body.orgs);
-      setNotices(notes);
+      if (body) {
+        rememberOrgs(body.orgs);
+        setExtraOrgs(body.orgs);
+      }
+      if (notes) {
+        rememberNotices(notes);
+        setNotices(notes);
+      }
     } else {
+      rememberOrgs([]);
+      rememberNotices([]);
       setExtraOrgs([]);
       setNotices([]);
     }
@@ -225,7 +298,11 @@ export function PilotApp() {
   }
 
   async function dismissNotice(id: string) {
-    setNotices((current) => current.filter((item) => item.id !== id));
+    setNotices((current) => {
+      const next = current.filter((item) => item.id !== id);
+      rememberNotices(next);
+      return next;
+    });
     await api(`/api/notifications/${encodeURIComponent(id)}/seen`, { method: "POST" }).catch(() => undefined);
   }
 
@@ -274,21 +351,33 @@ export function PilotApp() {
               created={extraOrgs}
               onChange={chooseOrg}
               onUpdated={(updated) => {
-                setExtraOrgs((current) => current.map((item) => item.id === updated.id ? updated : item));
+                setExtraOrgs((current) => {
+                  const next = current.map((item) => item.id === updated.id ? updated : item);
+                  rememberOrgs(next);
+                  return next;
+                });
               }}
               onRemoved={(id) => {
-                setExtraOrgs((current) => current.filter((item) => item.id !== id));
+                setExtraOrgs((current) => {
+                  const next = current.filter((item) => item.id !== id);
+                  rememberOrgs(next);
+                  return next;
+                });
                 if (orgId === id) chooseOrg(ORGS[0].id);
               }}
-              onSignedOut={() => { setAdmin(false); setGate("closed"); }}
+              onSignedOut={signOut}
             />
             <AccountMenu
               admin={admin}
               onCreated={(created) => {
-                setExtraOrgs((current) => [...current.filter((item) => item.id !== created.id), created]);
+                setExtraOrgs((current) => {
+                  const next = [...current.filter((item) => item.id !== created.id), created];
+                  rememberOrgs(next);
+                  return next;
+                });
                 chooseOrg(created.id);
               }}
-              onSignedOut={() => { setAdmin(false); setGate("closed"); }}
+              onSignedOut={signOut}
             />
           </div>
         </header>
@@ -357,7 +446,7 @@ export function PilotApp() {
             </div>
           ) : null}
           {view === "coverage" ? <BenchmarkView report={sampleReport} orgId={org.id} peers={peers} /> : null}
-          {view === "settings" ? <SettingsView admin={admin} orgId={org.id} orgs={orgs} /> : null}
+          {view === "settings" ? <SettingsView key={org.id} admin={admin} orgId={org.id} orgs={orgs} /> : null}
         </main>
         <footer className="main-footer"><span>Freightlytics</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
       </div>
@@ -369,41 +458,59 @@ type MailFile = { id: string; filename: string; bytes: number };
 type MailRow = { id: string; sender: string; subject: string; receivedAt: string; files: MailFile[] };
 
 function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
-  const [address, setAddress] = useState("");
-  const [ready, setReady] = useState(true);
-  const [mails, setMails] = useState<MailRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const key = mailKey(admin, orgId);
+  const cached = readMail(key);
+  const [address, setAddress] = useState(cached?.address ?? "");
+  const [ready, setReady] = useState(cached?.ready ?? true);
+  const [mails, setMails] = useState<MailRow[]>(cached?.mails ?? []);
+  const [loading, setLoading] = useState(!cached);
   const [copied, setCopied] = useState(false);
-  const [problem, setProblem] = useState("");
+  const [problem, setProblem] = useState(cached?.error ?? "");
   const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
   const field = useRef<HTMLInputElement>(null);
   useEffect(() => {
+    const hit = readMail(key);
+    const epoch = cacheEpoch();
     let gone = false;
-    const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
+    if (!hit) {
+      setAddress("");
+      setReady(true);
+      setMails([]);
+      setProblem("");
+      setLoading(true);
+    }
     setCopied(false);
-    setLoading(true);
-    setProblem("");
+    const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
     api<{ address: string; ready: boolean; error?: string; mails: MailRow[] }>(`/api/invoice-mail${query}`)
       .then((body) => {
+        if (cacheEpoch() !== epoch) return;
+        const next: CachedMailbox = {
+          address: body.address,
+          ready: body.ready,
+          error: body.error ?? "",
+          mails: body.mails,
+        };
+        rememberMail(key, next);
         if (gone) return;
-        setAddress(body.address);
-        setReady(body.ready);
-        setMails(body.mails);
-        setProblem(body.error ?? "");
+        setAddress(next.address);
+        setReady(next.ready);
+        setMails(next.mails);
+        setProblem(next.error);
       })
       .catch(() => {
-        if (!gone) setProblem("Kunne ikke hente indbakken.");
+        if (gone || cacheEpoch() !== epoch || readMail(key)) return;
+        setProblem("Kunne ikke hente indbakken.");
       })
       .finally(() => {
-        if (!gone) setLoading(false);
+        if (!gone && cacheEpoch() === epoch) setLoading(false);
       });
     return () => {
       gone = true;
     };
-  }, [admin, orgId]);
+  }, [admin, orgId, key]);
   useEffect(() => {
     setOpen(null);
-  }, [address, orgId]);
+  }, [orgId]);
 
   const shownAddress = address || (orgId ? `${orgId}@freightlytics.io` : "");
   const mailboxId = shownAddress.split("@")[0] ?? "";
@@ -847,12 +954,12 @@ async function saveCompany(method: "POST" | "PATCH", path: string, fields: { nam
   return saved.org;
 }
 
-async function loadNotices(): Promise<Notice[]> {
+async function loadNotices(): Promise<Notice[] | null> {
   try {
     const body = await api<{ notifications: Notice[] }>("/api/notifications");
     return body.notifications;
   } catch {
-    return [];
+    return null;
   }
 }
 
