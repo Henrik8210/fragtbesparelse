@@ -68,15 +68,37 @@ function databaseHost(connectionString: string): string {
   return host.split(":")[0] ?? "";
 }
 
-function pgOptions(connectionString: string): pg.PoolConfig {
-  const options: pg.PoolConfig = { connectionString, max: 5, connectionTimeoutMillis: 5000 };
+// pg copies sslmode from the URL over an ssl option. sslmode=require then verifies the
+// certificate. Supabase's pooler fails that check, the process stays on the local database,
+// and the worker throws because the invoice rows were never written. no-verify keeps TLS.
+export function poolConfig(connectionString: string): pg.PoolConfig {
   const ssl = databaseSsl(connectionString);
+  const options: pg.PoolConfig = {
+    connectionString: ssl ? withSslMode(connectionString, "no-verify") : connectionString,
+    max: 5,
+    connectionTimeoutMillis: 15000,
+  };
   if (ssl) options.ssl = ssl;
   return options;
 }
 
+function withSslMode(connectionString: string, mode: string): string {
+  const hashAt = connectionString.indexOf("#");
+  const hash = hashAt >= 0 ? connectionString.slice(hashAt) : "";
+  const main = hashAt >= 0 ? connectionString.slice(0, hashAt) : connectionString;
+  const queryAt = main.indexOf("?");
+  const base = queryAt >= 0 ? main.slice(0, queryAt) : main;
+  const query = queryAt >= 0 ? main.slice(queryAt + 1) : "";
+  const parts = query.split("&").filter((part) => {
+    const key = (part.split("=")[0] ?? "").trim().toLowerCase();
+    return part.length > 0 && key !== "sslmode";
+  });
+  parts.push(`sslmode=${mode}`);
+  return `${base}?${parts.join("&")}${hash}`;
+}
+
 function getPool(): pg.Pool {
-  pool ??= new pg.Pool(pgOptions(databaseUrl));
+  pool ??= new pg.Pool(poolConfig(databaseUrl));
   return pool;
 }
 
