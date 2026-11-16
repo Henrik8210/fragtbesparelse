@@ -17,8 +17,8 @@ let seeded: Promise<void> | undefined;
 let localMode = false;
 
 function postgres(): boolean {
-  // A failed startup probe must not hide public.invoice_mail behind the local database.
-  return databaseUrl !== "";
+  // Login reads the existing users table. A failed probe must not turn that read into a 500.
+  return databaseUrl !== "" && !localMode;
 }
 
 export function storesInPostgres(): boolean {
@@ -335,11 +335,5 @@ async function renameAdminLabel(): Promise<void> {
 }
 
 async function poolQuery(text: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-  const client = await getPool().connect();
-  try {
-    await client.query("select set_config('search_path', 'public', false)");
-    return (await client.query(text, params)).rows as Record<string, unknown>[];
-  } finally {
-    client.release();
-  }
+  return (await getPool().query(text, params)).rows as Record<string, unknown>[];
 }

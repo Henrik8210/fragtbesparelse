@@ -100,7 +100,7 @@ After `npx wrangler deploy`, in the Cloudflare account that owns `freightlytics.
 
 Do not point the catch-all at a personal inbox. The worker stores the attachment on the organization in the address, and on no other.
 
-No further SQL is required for a mail that was rejected. After `npx wrangler deploy`, open https://freightlytics.io and wait until the page loads, so the container is on health `ok invoice-mail-shown`. Cloudflare retries a delivery that failed. A sample company that is missing from `companies` is inserted for that address only. Indstillinger stays open on refresh at `#/indstillinger`.
+No further SQL is required for a mail that was rejected. After `npx wrangler deploy`, open https://freightlytics.io and wait until the page loads, so the container is on health `ok login-restored`. Cloudflare retries a delivery that failed. A sample company that is missing from `companies` is inserted for that address only. Indstillinger stays open on refresh at `#/indstillinger`.
 
 ## What could not be done from here
 
