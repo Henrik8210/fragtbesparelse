@@ -22,7 +22,6 @@ import {
 const NAV = [
   { id: "overview", label: "Overblik", icon: LayoutGrid },
   { id: "check", label: "Fakturakontrol", icon: ClipboardCheck },
-  { id: "history", label: "Historik", icon: History },
   { id: "coverage", label: "Benchmark", icon: BarChart3 },
   { id: "settings", label: "Indstillinger", icon: Settings },
 ] as const;
@@ -66,8 +65,15 @@ async function readCurrentUser(): Promise<{ user: { role: string } | null }> {
   throw last instanceof Error ? last : new Error("session");
 }
 
+function readPlace(): WorkspaceView {
+  if (window.location.hash === "#/historik") {
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/fakturakontrol`);
+  }
+  return viewFromHash(window.location.hash);
+}
+
 export function PilotApp() {
-  const [view, setView] = useState<View>(() => viewFromHash(window.location.hash));
+  const [view, setView] = useState<View>(() => readPlace());
   const [composer, setComposer] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [flowKey, setFlowKey] = useState(0);
@@ -186,7 +192,7 @@ export function PilotApp() {
 
   useEffect(() => {
     function onPlace() {
-      setView(viewFromHash(window.location.hash));
+      setView(readPlace());
     }
     window.addEventListener("popstate", onPlace);
     window.addEventListener("hashchange", onPlace);
@@ -208,7 +214,7 @@ export function PilotApp() {
   function newAudit() {
     setFlowKey((value) => value + 1);
     setComposer(true);
-    if (view !== "check" && view !== "history") navigate("check");
+    if (view !== "check") navigate("check");
   }
 
   function receiveResult(next: Result) {
@@ -285,7 +291,7 @@ export function PilotApp() {
     if (!id) return;
     remember(history.filter((item) => item.id !== id));
     setResult(null);
-    navigate("history");
+    navigate("check");
   }
 
   async function revokeContribution() {
@@ -451,17 +457,12 @@ export function PilotApp() {
               onStart={newAudit}
               onExample={demo}
               onOpen={openReport}
-              onHistory={() => navigate("history")}
+              onChecks={() => navigate("check")}
               onCoverage={() => navigate("coverage")}
             />
           ) : null}
-          {view === "check" || view === "history" ? (
-            <ChecksPage
-              title={view === "check" ? "Fakturakontrol" : "Historik"}
-              checks={checks}
-              onStart={newAudit}
-              onOpen={openReport}
-            />
+          {view === "check" ? (
+            <ChecksPage checks={checks} onStart={newAudit} onOpen={openReport} />
           ) : null}
           {view === "inbox" ? <InboxView key={org.id} admin={admin} orgId={org.id} orgs={orgs} /> : null}
           {view === "agreements" ? <AgreementsView org={org} /> : null}
@@ -469,7 +470,7 @@ export function PilotApp() {
             <ReportView
               key={reportKey}
               {...result}
-              onBack={() => navigate(result.saved ? "history" : result.example ? "overview" : "check")}
+              onBack={() => navigate(result.example ? "overview" : "check")}
               onSave={saveReport}
               onRemove={removeReport}
               onRevoke={revokeContribution}
@@ -1379,14 +1380,14 @@ function HeroArt() {
 }
 
 function Overview({
-  history, peers, onStart, onExample, onOpen, onHistory, onCoverage,
+  history, peers, onStart, onExample, onOpen, onChecks, onCoverage,
 }: {
   history: StoredAudit[];
   peers: number;
   onStart: () => void;
   onExample: () => void;
   onOpen: (id: string) => void;
-  onHistory: () => void;
+  onChecks: () => void;
   onCoverage: () => void;
 }) {
   const over = history.reduce((total, audit) => total + audit.summary.overOre, 0);
@@ -1429,7 +1430,7 @@ function Overview({
         <section className="panel history-panel">
           <div className="section-heading split">
             <div><h2>Seneste kontroller</h2><p>Se og genåbn tidligere rapporter.</p></div>
-            <button className="text-button muted" type="button" onClick={onHistory}>Historik <ChevronRight size={16} /></button>
+            <button className="text-button muted" type="button" onClick={onChecks}>Fakturakontrol <ChevronRight size={16} /></button>
           </div>
           <HistoryRows items={history.slice(0, 4)} onOpen={onOpen} onStart={onStart} />
         </section>
@@ -1447,8 +1448,7 @@ function Overview({
   );
 }
 
-function ChecksPage({ title, checks, onStart, onOpen }: {
-  title: string;
+function ChecksPage({ checks, onStart, onOpen }: {
   checks: StoredAudit[];
   onStart: () => void;
   onOpen: (id: string) => void;
@@ -1458,7 +1458,7 @@ function ChecksPage({ title, checks, onStart, onOpen }: {
       <div className="page-intro split">
         <div>
           <span className="eyebrow"><i /> GEMTE RAPPORTER</span>
-          <h1>{title}</h1>
+          <h1>Fakturakontrol</h1>
           <p>Åbn tidligere kontroller og administrér dine databidrag.</p>
         </div>
         <button className="button primary" type="button" onClick={onStart}><Plus size={18} /> Nyt fakturatjek</button>
