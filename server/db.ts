@@ -24,6 +24,19 @@ export function storesInPostgres(): boolean {
   return postgres();
 }
 
+export async function reconnectDatabase(): Promise<boolean> {
+  await ready();
+  if (databaseUrl === "") return false;
+  if (!localMode) return true;
+  try {
+    await poolQuery("select 1 as ok");
+    localMode = false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function sslOptions(connectionString: string): { rejectUnauthorized: false } | undefined {
   const query = connectionString.split("?")[1] ?? "";
   let mode = "";

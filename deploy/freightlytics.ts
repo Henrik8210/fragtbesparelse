@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { headerField, limitMail, MailTooLarge, readMailBytes } from "./mailBytes.ts";
 import { confirmedMail } from "./mailResult.ts";
 import { REVISION, healthMatchesRevision } from "./revision.ts";
 
@@ -180,19 +181,29 @@ export class FreightlyticsContainer extends DurableObject<Env> {
       return new Response(JSON.stringify({ error: "later" }), { status: 503, headers: { "content-type": "application/json" } });
     }
     const kept = body.slice(0);
-    const posted = await this.postMail(headers, kept.slice(0));
-    const text = await posted.text();
+    let posted: Response;
+    let text = "";
+    try {
+      posted = await this.postMail(headers, kept.slice(0));
+      text = await posted.text();
+    } catch {
+      return new Response(JSON.stringify({ error: "later" }), { status: 503, headers: { "content-type": "application/json" } });
+    }
     if (posted.status === 200 && text.includes('"postgres":true')) {
       return new Response(text, { status: 200, headers: { "content-type": "application/json" } });
     }
     if (config.databaseUrl && (text.includes('"error":"database"') || text.includes('"postgres":false'))) {
-      const image = container.images.base;
-      const fingerprint = config.adminPassword ? await fingerprintOf(config.adminPassword) : "";
-      await this.forceRestart(container, image, fingerprint, config);
-      await this.waitForRevision(container);
-      const token = (await this.ctx.storage.get<string>(TOKEN_KEY)) ?? "";
-      if (token) headers.set("x-fragtblik-sync", token);
-      return await this.postMail(headers, kept.slice(0));
+      try {
+        const image = container.images.base;
+        const fingerprint = config.adminPassword ? await fingerprintOf(config.adminPassword) : "";
+        await this.forceRestart(container, image, fingerprint, config);
+        await this.waitForRevision(container);
+        const nextToken = (await this.ctx.storage.get<string>(TOKEN_KEY)) ?? "";
+        if (nextToken) headers.set("x-fragtblik-sync", nextToken);
+        return await this.postMail(headers, kept.slice(0));
+      } catch {
+        return new Response(JSON.stringify({ error: "database" }), { status: 503, headers: { "content-type": "application/json" } });
+      }
     }
     return new Response(text, { status: posted.status, headers: { "content-type": "application/json" } });
   }
@@ -345,31 +356,37 @@ async function acceptRoutedMail(message: InboundMail, env: Env): Promise<void> {
 }
 
 async function postInvoice(env: Env, to: string, from: string, companyId: string, raw: Uint8Array): Promise<"stored" | "unknown" | "large" | "miss"> {
-  const headers = new Headers();
-  headers.set("content-type", "message/rfc822");
-  headers.set("x-fragtblik-mail-ingress", "1");
-  if (to) headers.set("x-fragtblik-mail-to", to);
-  if (from) headers.set("x-fragtblik-mail-from", from);
-  const secret = typeof env?.FRAGTBLIK_ADMIN_PASSWORD === "string" ? env.FRAGTBLIK_ADMIN_PASSWORD.trim() : "";
-  if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
-  const databaseUrl = typeof env?.DATABASE_URL === "string" ? env.DATABASE_URL.trim() : "";
-  if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
-  const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
-    method: "POST",
-    headers,
-    body: raw.slice(),
-  }));
-  const text = await response.text();
-  let body: unknown = null;
   try {
-    body = JSON.parse(text);
+    const headers = new Headers();
+    headers.set("content-type", "message/rfc822");
+    headers.set("x-fragtblik-mail-ingress", "1");
+    const recipient = headerField(to);
+    const sender = headerField(from);
+    if (recipient) headers.set("x-fragtblik-mail-to", recipient);
+    if (sender) headers.set("x-fragtblik-mail-from", sender);
+    const secret = typeof env?.FRAGTBLIK_ADMIN_PASSWORD === "string" ? env.FRAGTBLIK_ADMIN_PASSWORD.trim() : "";
+    if (usablePassword(secret) && headerField(secret) === secret) headers.set("x-fragtblik-admin-secret", secret);
+    const databaseUrl = typeof env?.DATABASE_URL === "string" ? env.DATABASE_URL.trim() : "";
+    if (headerSafe(databaseUrl) && headerField(databaseUrl) === databaseUrl) headers.set("x-fragtblik-database-url", databaseUrl);
+    const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
+      method: "POST",
+      headers,
+      body: raw.slice(),
+    }));
+    const text = await response.text();
+    let body: unknown = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null;
+    }
+    if (response.status === 200 && confirmedMail(body, companyId)) return "stored";
+    if (response.status === 404) return "unknown";
+    if (response.status === 413) return "large";
+    return "miss";
   } catch {
-    body = null;
+    return "miss";
   }
-  if (response.status === 200 && confirmedMail(body, companyId)) return "stored";
-  if (response.status === 404) return "unknown";
-  if (response.status === 413) return "large";
-  return "miss";
 }
 
 function companyFromAddress(address: string): string {
@@ -392,58 +409,13 @@ function safeReject(message: InboundMail, reason: string): void {
   }
 }
 
-class MailTooLarge extends Error {}
-
 async function readRawMail(raw: unknown): Promise<Uint8Array | "large"> {
   try {
-    if (raw instanceof Uint8Array) return capMail(raw);
-    if (raw instanceof ArrayBuffer) return capMail(new Uint8Array(raw));
-    if (raw && typeof (raw as ReadableStream).getReader === "function") {
-      return capMail(await readStream(raw as ReadableStream));
-    }
-    return capMail(new Uint8Array(await new Response(raw as BodyInit).arrayBuffer()));
+    return limitMail(await readMailBytes(raw));
   } catch (error) {
     if (error instanceof MailTooLarge) return "large";
     throw error;
   }
-}
-
-async function readStream(raw: ReadableStream): Promise<Uint8Array> {
-  const reader = raw.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const step = await reader.read();
-    if (step.done) break;
-    const chunk = chunkBytes(step.value);
-    size += chunk.byteLength;
-    if (size > 8_000_000) {
-      await reader.cancel().catch(() => undefined);
-      throw new MailTooLarge();
-    }
-    chunks.push(chunk);
-  }
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  if (body.byteLength === 0) throw new Error("invoice mail was not read");
-  return body;
-}
-
-function capMail(bytes: Uint8Array): Uint8Array | "large" {
-  if (bytes.byteLength > 8_000_000) return "large";
-  if (bytes.byteLength === 0) throw new Error("invoice mail was not read");
-  return bytes;
-}
-
-function chunkBytes(value: unknown): Uint8Array {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  return new Uint8Array();
 }
 
 function usablePassword(value: string): boolean {
