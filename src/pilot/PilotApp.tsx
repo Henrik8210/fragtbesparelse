@@ -11,6 +11,7 @@ import {
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
 } from "./freight.ts";
 import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
+import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
@@ -65,6 +66,63 @@ async function readCurrentUser(): Promise<{ user: { role: string } | null }> {
   throw last instanceof Error ? last : new Error("session");
 }
 
+function csvHasRows(source: string) {
+  return source.split(/\r?\n/).filter((line) => line.trim()).length > 1;
+}
+
+function invoiceChoices(org: Org, checks: StoredAudit[], mails: MailRow[]): PastSource[] {
+  const fromChecks = checks.flatMap((check) => {
+    const stored = check.invoice ?? [];
+    const rows = stored.length ? stored : invoicesFromReport(check.report);
+    if (!rows.length) return [];
+    const sampleFile = check.id.startsWith("sample:") && csvHasRows(org.invoice);
+    return [{
+      id: `check:${check.id}`,
+      name: check.name,
+      date: check.createdAt,
+      carrier: check.carrier,
+      note: "Kontrol",
+      csv: sampleFile ? org.invoice : invoiceCsv(rows),
+    }];
+  });
+  const fromMail = mails.flatMap((mail) => mail.files.map((file) => ({
+    id: `mail:${file.id}`,
+    name: mail.subject || file.filename,
+    date: mail.receivedAt,
+    carrier: carrierFromMail(mail),
+    note: file.filename,
+    fileId: file.id,
+  })));
+  return [...fromChecks, ...fromMail];
+}
+
+function rateChoices(org: Org, checks: StoredAudit[]): PastSource[] {
+  const page = orgRateRows(org);
+  const agreement: PastSource[] = page.length ? [{
+    id: `agreement:${org.id}`,
+    name: org.carrier || "Prisaftale",
+    date: page[0]?.from || "",
+    carrier: org.carrier,
+    note: "Prisaftale",
+    csv: org.rates,
+  }] : [];
+  const fromChecks = checks.flatMap((check) => {
+    if (check.id.startsWith("sample:")) return [];
+    const stored = check.rates ?? [];
+    const rows = stored.length ? stored : ratesFromReport(check.report);
+    if (!rows.length) return [];
+    return [{
+      id: `rates:${check.id}`,
+      name: check.name,
+      date: check.createdAt,
+      carrier: check.carrier,
+      note: "Kontrol",
+      csv: rateCsv(rows),
+    }];
+  });
+  return [...agreement, ...fromChecks];
+}
+
 function readPlace(): WorkspaceView {
   if (window.location.hash === "#/historik") {
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/fakturakontrol`);
@@ -75,6 +133,7 @@ function readPlace(): WorkspaceView {
 export function PilotApp() {
   const [view, setView] = useState<View>(() => readPlace());
   const [composer, setComposer] = useState(false);
+  const [libraryMail, setLibraryMail] = useState<{ orgId: string; mails: MailRow[] }>({ orgId: "", mails: [] });
   const [result, setResult] = useState<Result | null>(null);
   const [flowKey, setFlowKey] = useState(0);
   const [reportKey, setReportKey] = useState(0);
@@ -115,6 +174,12 @@ export function PilotApp() {
     }]),
     ...history.filter((item) => item.orgId === org.id),
   ], [history, org, sampleReport]);
+  const pastInvoices = useMemo(() => {
+    const cached = readMail(mailKey(admin, org.id))?.mails;
+    const mails = cached ?? (libraryMail.orgId === org.id ? libraryMail.mails : []);
+    return invoiceChoices(org, checks, mails);
+  }, [admin, org, checks, libraryMail]);
+  const pastRates = useMemo(() => rateChoices(org, checks), [org, checks]);
   const inCheck = view === "check" || view === "report" || view === "inbox" || view === "agreements";
   const activeTab = inCheck ? "check" : view;
   const activeLabel = view === "report" ? "Rapport"
@@ -172,6 +237,32 @@ export function PilotApp() {
       alive = false;
     };
   }, [refreshSession]);
+
+  useEffect(() => {
+    if (!composer || gate !== "open") return;
+    const key = mailKey(admin, org.id);
+    const epoch = cacheEpoch();
+    const hit = readMail(key);
+    setLibraryMail({ orgId: org.id, mails: hit?.mails ?? [] });
+    let gone = false;
+    const query = admin ? `?company=${encodeURIComponent(org.id)}` : "";
+    api<{ address: string; ready: boolean; error?: string; mails: MailRow[] }>(`/api/invoice-mail${query}`)
+      .then((body) => {
+        if (cacheEpoch() !== epoch) return;
+        const previous = readMail(key);
+        rememberMail(key, {
+          address: body.address || previous?.address || "",
+          ready: body.ready,
+          error: body.error ?? "",
+          mails: body.mails,
+        });
+        if (!gone) setLibraryMail({ orgId: org.id, mails: body.mails });
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+  }, [composer, gate, admin, org.id]);
 
   useEffect(() => {
     if (view !== "settings" || gate !== "open") return;
@@ -484,6 +575,9 @@ export function PilotApp() {
             <AuditFlow
               key={flowKey}
               embedded
+              companyId={org.id}
+              invoices={pastInvoices}
+              rates={pastRates}
               onExample={() => { setComposer(false); demo(); }}
               onReport={(input, report) => {
                 setComposer(false);

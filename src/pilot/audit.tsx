@@ -9,8 +9,11 @@ import {
 } from "./csv.ts";
 import { DEMO_INVOICE, DEMO_RATES } from "./demo.ts";
 import { MAX_FILE_BYTES, runAudit, type AuditInput, type AuditReport } from "./freight.ts";
+import type { PastSource } from "./past.ts";
 
 type Uploaded = { name: string; sheet: CsvSheet; mapping: Mapping };
+
+export type { PastSource };
 
 export function downloadCsv(name: string, contents: string) {
   const url = URL.createObjectURL(new Blob(["\uFEFF", contents], { type: "text/csv;charset=utf-8" }));
@@ -24,11 +27,14 @@ export function downloadCsv(name: string, contents: string) {
 }
 
 export function AuditFlow({
-  onReport, onExample, embedded = false,
+  onReport, onExample, embedded = false, companyId = "", invoices = [], rates: pastRates = [],
 }: {
   onReport: (input: AuditInput, report: AuditReport) => void;
   onExample: () => void;
   embedded?: boolean;
+  companyId?: string;
+  invoices?: PastSource[];
+  rates?: PastSource[];
 }) {
   const [invoice, setInvoice] = useState<Uploaded | null>(null);
   const [rates, setRates] = useState<Uploaded | null>(null);
@@ -84,8 +90,18 @@ export function AuditFlow({
 
       <form onSubmit={submit}>
         <div className="upload-grid">
-          <UploadCard kind="invoice" value={invoice} onChange={(file) => { setInvoice(file); setError(""); }} />
-          <UploadCard kind="rates" value={rates} onChange={(file) => { setRates(file); setError(""); }} />
+          <UploadCard
+            kind="invoice"
+            value={invoice}
+            past={invoices}
+            companyId={companyId}
+            onChange={(file) => { setInvoice(file); setError(""); }}
+            onHint={(source) => {
+              if (!name.trim() && source.name) setName(source.name.replace(/\.[^.]+$/, "").slice(0, 100));
+              if (!carrier.trim() && source.carrier) setCarrier(source.carrier.slice(0, 70));
+            }}
+          />
+          <UploadCard kind="rates" value={rates} past={pastRates} companyId={companyId} onChange={(file) => { setRates(file); setError(""); }} />
         </div>
 
         <div className="panel report-info">
@@ -122,17 +138,82 @@ export function AuditFlow({
   );
 }
 
+function shortDate(value: string) {
+  if (!value) return "";
+  const date = new Date(value.length === 10 ? `${value}T12:00:00Z` : value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Copenhagen" }).format(date);
+}
+
+async function mailCsv(fileId: string, companyId: string) {
+  const response = await fetch(
+    `/api/invoice-mail/files/${encodeURIComponent(fileId)}?company=${encodeURIComponent(companyId)}`,
+    { credentials: "same-origin" },
+  );
+  if (!response.ok) throw new Error("Filen kunne ikke hentes.");
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength > MAX_FILE_BYTES) throw new Error("Filen må fylde højst 1 MB.");
+  const head = String.fromCharCode(...new Uint8Array(bytes.slice(0, 5)));
+  if (head === "%PDF-") throw new Error("PDF'en har ikke et linjeudtræk. Vælg en CSV eller en tidligere kontrol.");
+  return decodeCsv(bytes);
+}
+
 function UploadCard({
-  kind, value, onChange,
+  kind, value, onChange, past, companyId, onHint,
 }: {
-  kind: ImportKind; value: Uploaded | null; onChange: (value: Uploaded | null) => void;
+  kind: ImportKind;
+  value: Uploaded | null;
+  onChange: (value: Uploaded | null) => void;
+  past: PastSource[];
+  companyId: string;
+  onHint?: (source: PastSource) => void;
 }) {
   const invoice = kind === "invoice";
+  const [mode, setMode] = useState<"upload" | "library">("upload");
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState("");
+  const [busy, setBusy] = useState("");
   const [dragging, setDragging] = useState(false);
   const [showMapping, setShowMapping] = useState(false);
   const [error, setError] = useState("");
   const uploadId = useRef(0);
   const input = useRef<HTMLInputElement>(null);
+  const needle = query.trim().toLowerCase();
+  const library = past
+    .filter((source) => !needle || `${source.name} ${source.carrier} ${source.note} ${shortDate(source.date)}`.toLowerCase().includes(needle))
+    .slice()
+    .sort((left, right) => (right.date || "").localeCompare(left.date || ""));
+
+  function clear() {
+    uploadId.current += 1;
+    setPicked("");
+    setBusy("");
+    onChange(null);
+    setError("");
+  }
+
+  async function choose(source: PastSource) {
+    const id = ++uploadId.current;
+    setError("");
+    setBusy(source.id);
+    try {
+      const csv = source.csv ?? await mailCsv(source.fileId ?? "", companyId);
+      if (id !== uploadId.current) return;
+      const sheet = parseCsv(csv);
+      if (!sheet.rows.length) throw new Error("Filen har ingen datalinjer.");
+      const mapping = suggestMapping(kind, sheet.headers);
+      onChange({ name: source.name, sheet, mapping });
+      setPicked(source.id);
+      setShowMapping(Boolean(missingFields(kind, mapping).length));
+      onHint?.(source);
+    } catch (cause) {
+      if (id !== uploadId.current) return;
+      setPicked("");
+      setError((cause as Error).message);
+    } finally {
+      if (id === uploadId.current) setBusy("");
+    }
+  }
 
   async function load(file: File) {
     const id = ++uploadId.current;
@@ -144,6 +225,7 @@ function UploadCard({
       if (id !== uploadId.current) return;
       const mapping = suggestMapping(kind, sheet.headers);
       onChange({ name: file.name, sheet, mapping });
+      setPicked("");
       setShowMapping(Boolean(missingFields(kind, mapping).length));
     } catch (cause) {
       if (id !== uploadId.current) return;
@@ -160,6 +242,33 @@ function UploadCard({
           <p>{invoice ? "Én linje pr. forsendelse inklusive tillæg." : "Priser og tillæg pr. service og vægttrin."}</p>
         </div>
       </div>
+      <div className="source-switch" role="tablist" aria-label={invoice ? "Fakturaens kilde" : "Prisaftalens kilde"}>
+        <button type="button" role="tab" aria-selected={mode === "upload"} onClick={() => setMode("upload")}>Upload</button>
+        <button type="button" role="tab" aria-selected={mode === "library"} onClick={() => setMode("library")}>Vælg tidligere</button>
+      </div>
+      {mode === "library" ? (
+        <div className="past-panel">
+          <input className="past-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Søg navn, dato eller transportør" aria-label="Søg tidligere" />
+          {value ? (
+            <p className="past-chosen"><Check size={14} /> {value.name} · {value.sheet.rows.length.toLocaleString("da-DK")} linjer <button type="button" onClick={clear}>Fjern</button></p>
+          ) : null}
+          {library.length === 0 ? (
+            <p className="past-empty">{past.length === 0 ? (invoice ? "Ingen tidligere fakturaer." : "Ingen tidligere prisaftaler.") : "Ingen træffere."}</p>
+          ) : (
+            <ul className="past-list">
+              {library.map((source) => (
+                <li key={source.id}>
+                  <button type="button" className={picked === source.id ? "active" : ""} disabled={busy === source.id} onClick={() => void choose(source)}>
+                    <strong>{source.name}</strong>
+                    <small>{[shortDate(source.date), source.carrier, source.note].filter(Boolean).join(" · ")}{busy === source.id ? " · Henter" : ""}</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+      {mode === "upload" ? (
       <div
         className={`drop-zone ${dragging ? "dragging" : ""} ${value ? "filled" : ""}`}
         onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
@@ -191,7 +300,7 @@ function UploadCard({
             <span>{value.sheet.rows.length.toLocaleString("da-DK")} datalinjer</span>
             <div className="drop-links">
               <button type="button" className="text-button" onClick={() => input.current?.click()}>Skift fil</button>
-              <button type="button" className="icon-button" aria-label="Fjern fil" onClick={() => { uploadId.current += 1; onChange(null); setError(""); }}><X size={15} /></button>
+              <button type="button" className="icon-button" aria-label="Fjern fil" onClick={clear}><X size={15} /></button>
             </div>
           </>
         ) : (
@@ -202,6 +311,7 @@ function UploadCard({
           </>
         )}
       </div>
+      ) : null}
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
       <div className="upload-footer">
         <button
