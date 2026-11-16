@@ -1,10 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, Bell, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
-  FileText, History, LayoutGrid, LockKeyhole, Mail, Package, Plus, RefreshCw, Settings,
+  FileText, History, LayoutGrid, LockKeyhole, Mail, Menu, Package, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Settings, X,
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
+import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
 import { AuditFlow } from "./audit.tsx";
 import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
@@ -189,6 +190,13 @@ export function PilotApp() {
     : view === "agreements" ? "Prisaftaler"
     : NAV.find((tab) => tab.id === activeTab)?.label;
   const peers = peerCount(org.id);
+  const mobile = useMedia(MOBILE_NAV);
+  const [railed, toggleRail] = useRail();
+  const [navOpen, setNavOpen] = useState(false);
+  const drawer = useRef<HTMLElement>(null);
+  const burger = useRef<HTMLButtonElement>(null);
+  const closeNav = useCallback(() => setNavOpen(false), []);
+  useDrawer(mobile && navOpen, closeNav, drawer, burger);
 
   const refreshSession = useCallback(async () => {
     const epoch = cacheEpoch();
@@ -296,6 +304,7 @@ export function PilotApp() {
   }, []);
 
   function navigate(next: View) {
+    setNavOpen(false);
     setView(next);
     const hash = hashForView(next);
     const nextUrl = `${window.location.pathname}${window.location.search}${hash}`;
@@ -453,13 +462,58 @@ export function PilotApp() {
     return <SignedOut ready={gate === "closed"} onEnter={enter} />;
   }
 
+  const orgSwitch = (
+    <OrgSwitch
+      admin={admin}
+      org={org}
+      orgs={orgs}
+      created={extraOrgs}
+      onChange={(id) => { chooseOrg(id); setNavOpen(false); }}
+      onUpdated={(updated) => {
+        setExtraOrgs((current) => {
+          const next = current.map((item) => item.id === updated.id ? updated : item);
+          rememberOrgs(next);
+          return next;
+        });
+      }}
+      onRemoved={(id) => {
+        setExtraOrgs((current) => {
+          const next = current.filter((item) => item.id !== id);
+          rememberOrgs(next);
+          return next;
+        });
+        if (orgId === id) chooseOrg(ORGS[0].id);
+      }}
+      onSignedOut={signOut}
+    />
+  );
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <button className="brand" type="button" onClick={() => navigate("overview")} aria-label="Freightlytics overblik">
-          <BrandMark onDark />
-          <span>Freightlytics<span className="brand-sub">FRAGTØKONOMI</span></span>
-        </button>
+    <div className={["app-shell", railed ? "railed" : "", navOpen ? "nav-open" : ""].filter(Boolean).join(" ")}>
+      <aside
+        className="sidebar"
+        id="app-sidebar"
+        ref={drawer}
+        inert={mobile && !navOpen}
+        role={mobile ? "dialog" : undefined}
+        aria-modal={mobile && navOpen ? true : undefined}
+        aria-label={mobile ? "Menu" : undefined}
+      >
+        <div className="sidebar-head">
+          <button className="brand" type="button" onClick={() => navigate("overview")} aria-label="Freightlytics overblik" data-tip="Overblik">
+            <BrandMark onDark />
+            <span className="nav-label">Freightlytics<span className="brand-sub">FRAGTØKONOMI</span></span>
+          </button>
+          {mobile ? (
+            <button type="button" className="drawer-close" aria-label="Luk menu" onClick={closeNav}><X size={20} /></button>
+          ) : null}
+        </div>
+        {mobile ? (
+          <div className="drawer-org">
+            <div className="workspace-label">ORGANISATION</div>
+            {orgSwitch}
+          </div>
+        ) : null}
         <div className="workspace-label">ARBEJDSRUM</div>
         <nav aria-label="Hovedmenu">
           {NAV.map(({ id, label, icon: Icon }) => (
@@ -468,17 +522,18 @@ export function PilotApp() {
                 type="button"
                 className={view === id || (id === "check" && view === "report") ? "nav-item active" : activeTab === id ? "nav-item section" : "nav-item"}
                 aria-current={view === id || (id === "check" && view === "report") ? "page" : undefined}
+                data-tip={label}
                 onClick={() => navigate(id)}
               >
-                <Icon size={19} /><span>{label}</span>
+                <Icon size={19} /><span className="nav-label">{label}</span>
               </button>
               {id === "check" ? (
                 <div className="nav-sub">
-                  <button type="button" className={view === "inbox" ? "active" : ""} aria-current={view === "inbox" ? "page" : undefined} onClick={() => navigate("inbox")}>
-                    <Mail size={15} /><span>Modtaget</span>
+                  <button type="button" className={view === "inbox" ? "active" : ""} aria-current={view === "inbox" ? "page" : undefined} data-tip="Modtaget" onClick={() => navigate("inbox")}>
+                    <Mail size={15} /><span className="nav-label">Modtaget</span>
                   </button>
-                  <button type="button" className={view === "agreements" ? "active" : ""} aria-current={view === "agreements" ? "page" : undefined} onClick={() => navigate("agreements")}>
-                    <FileText size={15} /><span>Prisaftaler</span>
+                  <button type="button" className={view === "agreements" ? "active" : ""} aria-current={view === "agreements" ? "page" : undefined} data-tip="Prisaftaler" onClick={() => navigate("agreements")}>
+                    <FileText size={15} /><span className="nav-label">Prisaftaler</span>
                   </button>
                 </div>
               ) : null}
@@ -488,39 +543,47 @@ export function PilotApp() {
         <div className="sidebar-bottom">
           <div className="pilot-card">
             <div className="sidebar-icon"><Package size={17} /></div>
-            <div><strong>Dansk pakkefragt</strong><span>Pilot · Version 1</span></div>
+            <div className="nav-label"><strong>Dansk pakkefragt</strong><span>Pilot · Version 1</span></div>
           </div>
-          <div className="sidebar-private"><LockKeyhole size={13} /> Privat arbejdsrum</div>
+          <div className="sidebar-private"><LockKeyhole size={13} /><span className="nav-label">Privat arbejdsrum</span></div>
+          {mobile ? null : (
+            <button
+              type="button"
+              className="rail-toggle"
+              aria-controls="app-sidebar"
+              aria-expanded={!railed}
+              aria-label={railed ? "Udvid menu" : "Skjul menu"}
+              data-tip="Udvid menu"
+              onClick={toggleRail}
+            >
+              {railed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+              <span className="nav-label">Skjul menu</span>
+            </button>
+          )}
         </div>
       </aside>
+      {mobile ? <div className="nav-backdrop" aria-hidden="true" onClick={closeNav} /> : null}
 
-      <div className="workspace-main">
+      <div className="workspace-main" inert={mobile && navOpen}>
         <header className="topbar">
+          <button
+            ref={burger}
+            type="button"
+            className="burger"
+            aria-label="Åbn menu"
+            aria-controls="app-sidebar"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen(true)}
+          >
+            <Menu size={21} />
+          </button>
+          <button type="button" className="topbar-brand" aria-label="Freightlytics overblik" onClick={() => navigate("overview")}>
+            <BrandMark />
+            <span>Freightlytics</span>
+          </button>
           <div className="breadcrumb"><span>Arbejdsrum</span><ChevronRight size={14} /><strong>{activeLabel}</strong></div>
           <div className="topbar-right">
-            <OrgSwitch
-              admin={admin}
-              org={org}
-              orgs={orgs}
-              created={extraOrgs}
-              onChange={chooseOrg}
-              onUpdated={(updated) => {
-                setExtraOrgs((current) => {
-                  const next = current.map((item) => item.id === updated.id ? updated : item);
-                  rememberOrgs(next);
-                  return next;
-                });
-              }}
-              onRemoved={(id) => {
-                setExtraOrgs((current) => {
-                  const next = current.filter((item) => item.id !== id);
-                  rememberOrgs(next);
-                  return next;
-                });
-                if (orgId === id) chooseOrg(ORGS[0].id);
-              }}
-              onSignedOut={signOut}
-            />
+            {mobile ? null : orgSwitch}
             <NoticeBell notices={notices} onDismiss={(id) => void dismissNotice(id)} onRefresh={() => void refreshNotices()} />
             <AccountMenu
               admin={admin}
