@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
   FileText, History, LayoutGrid, LockKeyhole, Package, Plus,
@@ -22,6 +22,7 @@ const NAV = [
 ] as const;
 
 type Company = { id: string; name: string; industry: string; place: string };
+type Notice = { id: string; name: string; company: string; email: string; createdAt: string };
 type Tab = (typeof NAV)[number]["id"];
 type View = Tab | "report";
 type Result = {
@@ -43,6 +44,7 @@ export function PilotApp() {
   const [extraOrgs, setExtraOrgs] = useState<Company[]>([]);
   const [orgsReady, setOrgsReady] = useState(false);
   const [admin, setAdmin] = useState(false);
+  const [notices, setNotices] = useState<Notice[]>([]);
   const [gate, setGate] = useState<"checking" | "closed" | "open">("checking");
   const orgs = useMemo(
     () => [...ORGS, ...extraOrgs.filter((item) => !ORGS.some((sample) => sample.id === item.id)).map(orgFromCompany)],
@@ -89,6 +91,8 @@ export function PilotApp() {
           } catch {
             // The sample companies still show when the saved list cannot be read.
           }
+          const notes = await loadNotices();
+          if (!gone) setNotices(notes);
         }
         setGate("open");
         setOrgsReady(true);
@@ -198,14 +202,21 @@ export function PilotApp() {
       } catch {
         // The sample companies still show when the saved list cannot be read.
       }
+      setNotices(await loadNotices());
     } else {
       setExtraOrgs([]);
+      setNotices([]);
     }
     setGate("open");
   }
 
+  async function dismissNotice(id: string) {
+    setNotices((current) => current.filter((item) => item.id !== id));
+    await api(`/api/notifications/${encodeURIComponent(id)}/seen`, { method: "POST" }).catch(() => undefined);
+  }
+
   if (gate !== "open") {
-    return <LoginWall ready={gate === "closed"} onEnter={enter} />;
+    return <SignedOut ready={gate === "closed"} onEnter={enter} />;
   }
 
   return (
@@ -268,6 +279,20 @@ export function PilotApp() {
           </div>
         </header>
 
+        {admin && notices.length ? (
+          <div className="notice-list" aria-live="polite">
+            {notices.map((item) => (
+              <article className="notice" key={item.id}>
+                <div>
+                  <strong>Demoønske</strong>
+                  <p>{item.name} · {item.company}</p>
+                  <p>{item.email}</p>
+                </div>
+                <button type="button" onClick={() => void dismissNotice(item.id)}>Luk</button>
+              </article>
+            ))}
+          </div>
+        ) : null}
         <main className="main-content">
           {view === "overview" ? (
             <Overview
@@ -584,52 +609,150 @@ async function saveCompany(method: "POST" | "PATCH", path: string, fields: { nam
   return saved.org;
 }
 
-function LoginWall({ ready, onEnter }: { ready: boolean; onEnter: (username: string, password: string) => Promise<void> }) {
+async function loadNotices(): Promise<Notice[]> {
+  try {
+    const body = await api<{ notifications: Notice[] }>("/api/notifications");
+    return body.notifications;
+  } catch {
+    return [];
+  }
+}
+
+function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: string, password: string) => Promise<void> }) {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
+  const [demoName, setDemoName] = useState("");
+  const [demoCompany, setDemoCompany] = useState("");
+  const [demoEmail, setDemoEmail] = useState("");
+  const [demoProblem, setDemoProblem] = useState("");
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoDone, setDemoDone] = useState(false);
   useEffect(() => {
-    document.title = "Log ind · Freightlytics";
+    document.title = "Freightlytics";
   }, []);
+
+  async function askDemo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name") ?? demoName).trim();
+    const company = String(data.get("company") ?? demoCompany).trim();
+    const email = String(data.get("email") ?? demoEmail).trim();
+    setDemoName(name);
+    setDemoCompany(company);
+    setDemoEmail(email);
+    setDemoBusy(true);
+    setDemoProblem("");
+    try {
+      await api("/api/demo", { method: "POST", body: JSON.stringify({ name, company, email }) });
+      setDemoDone(true);
+    } catch (error) {
+      const code = error instanceof ApiError ? error.code : "";
+      setDemoProblem(code === "limit" ? "Prøv igen senere." : code === "email" ? "Skriv en e-mail." : "Vi kunne ikke gemme det. Prøv igen.");
+    } finally {
+      setDemoBusy(false);
+    }
+  }
+
   return (
-    <main className="login-wall">
-      <form
-        className="login-card"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const data = new FormData(event.currentTarget);
-          const typedUsername = String(data.get("username") ?? username).trim();
-          const typedPassword = String(data.get("password") ?? password);
-          setUsername(typedUsername);
-          setPassword(typedPassword);
-          setBusy(true);
-          setProblem("");
-          void onEnter(typedUsername, typedPassword)
-            .catch((error: unknown) => {
-              const code = error instanceof ApiError ? error.code : "";
-              setProblem(code === "login" || code === "sign-in"
-                ? "Brugernavn og adgangskode passer ikke sammen."
-                : "Kunne ikke logge ind. Prøv igen.");
-            })
-            .finally(() => setBusy(false));
-        }}
-      >
-        <BrandMark />
-        <h1>Freightlytics</h1>
-        <p>Log ind for at åbne arbejdsrummet.</p>
-        <label>
-          Brugernavn
-          <input name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
-        </label>
-        <label>
-          Adgangskode
-          <input name="password" value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
-        </label>
-        {problem ? <p className="org-note">{problem}</p> : null}
-        <button className="button primary" type="submit" disabled={!ready || busy}>Log ind</button>
-      </form>
-    </main>
+    <div className="marketing">
+      <header className="marketing-bar">
+        <a href="#top">Freightlytics</a>
+        <nav>
+          <a href="#demo">Prøv demo</a>
+          <a href="#login">Log ind</a>
+        </nav>
+      </header>
+      <main className="marketing-main" id="top">
+        <section className="marketing-hero">
+          <BrandMark />
+          <h1>Betaler I den aftalte fragtpris?</h1>
+          <p>Sammenhold fakturaen med prisaftalen. Se afvigelsen i kroner, og hvad I kan tage op med transportøren.</p>
+          <div className="actions">
+            <a className="button hero-primary" href="#demo">Prøv vores demo</a>
+            <a className="button hero-secondary" href="#login">Log ind</a>
+          </div>
+        </section>
+        <section className="marketing-points" aria-label="Det Freightlytics svarer på">
+          <article className="marketing-card">
+            <span>Fakturakontrol</span>
+            <h2>Betaler vi det, vi aftalte?</h2>
+            <p>Linjerne, der afviger fra prisaftalen, og beløbet I kan tage op med transportøren.</p>
+          </article>
+          <article className="marketing-card">
+            <span>Benchmark</span>
+            <h2>Er aftalen konkurrencedygtig?</h2>
+            <p>Lignende firmaer i prøven bag tallene. Ikke et live marked.</p>
+          </article>
+          <article className="marketing-card">
+            <span>Transportør</span>
+            <h2>Hvilke transportører passer?</h2>
+            <p>Et eksempel på, hvor godt en transportør passer til forsendelserne.</p>
+          </article>
+        </section>
+        <p className="marketing-note">Tallene i arbejdsrummet er prøvedata.</p>
+        <section className="marketing-demo" id="demo">
+          <h2>Prøv vores demo</h2>
+          <p>Skriv navn, firma og e-mail. Admin ser ønsket efter login. Der sendes ingen e-mail.</p>
+          {demoDone ? <p className="marketing-done">Tak. Vi har noteret det.</p> : (
+            <form onSubmit={(event) => void askDemo(event)}>
+              <label>
+                Navn
+                <input name="name" value={demoName} onChange={(event) => setDemoName(event.target.value)} maxLength={80} required />
+              </label>
+              <label>
+                Firma
+                <input name="company" value={demoCompany} onChange={(event) => setDemoCompany(event.target.value)} maxLength={80} required />
+              </label>
+              <label>
+                E-mail
+                <input name="email" type="email" value={demoEmail} onChange={(event) => setDemoEmail(event.target.value)} maxLength={120} required />
+              </label>
+              {demoProblem ? <p className="org-note">{demoProblem}</p> : null}
+              <button className="button primary" type="submit" disabled={demoBusy}>Prøv vores demo</button>
+            </form>
+          )}
+        </section>
+        <section id="login">
+          <form
+            className="login-card"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const data = new FormData(event.currentTarget);
+              const typedUsername = String(data.get("username") ?? username).trim();
+              const typedPassword = String(data.get("password") ?? password);
+              setUsername(typedUsername);
+              setPassword(typedPassword);
+              setBusy(true);
+              setProblem("");
+              void onEnter(typedUsername, typedPassword)
+                .catch((error: unknown) => {
+                  const code = error instanceof ApiError ? error.code : "";
+                  setProblem(code === "login" || code === "sign-in"
+                    ? "Brugernavn og adgangskode passer ikke sammen."
+                    : "Kunne ikke logge ind. Prøv igen.");
+                })
+                .finally(() => setBusy(false));
+            }}
+          >
+            <BrandMark />
+            <h1>Freightlytics</h1>
+            <p>Log ind for at åbne arbejdsrummet.</p>
+            <label>
+              Brugernavn
+              <input name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
+            </label>
+            <label>
+              Adgangskode
+              <input name="password" value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
+            </label>
+            {problem ? <p className="org-note">{problem}</p> : null}
+            <button className="button primary" type="submit" disabled={!ready || busy}>Log ind</button>
+          </form>
+        </section>
+      </main>
+    </div>
   );
 }
 
