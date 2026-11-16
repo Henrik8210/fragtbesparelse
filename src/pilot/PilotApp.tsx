@@ -658,21 +658,23 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
   return (
     <div className="marketing">
       <header className="marketing-bar">
-        <a href="#top">Freightlytics</a>
+        <a href="#top"><BrandMark />Freightlytics</a>
         <nav>
           <a href="#demo">Prøv demo</a>
-          <a href="#login">Log ind</a>
+          <a className="button primary" href="#login">Log ind</a>
         </nav>
       </header>
-      <main className="marketing-main" id="top">
+      <main id="top">
         <section className="marketing-hero">
-          <BrandMark />
-          <h1>Betaler I den aftalte fragtpris?</h1>
-          <p>Sammenhold fakturaen med prisaftalen. Se afvigelsen i kroner, og hvad I kan tage op med transportøren.</p>
-          <div className="actions">
-            <a className="button hero-primary" href="#demo">Prøv vores demo</a>
-            <a className="button hero-secondary" href="#login">Log ind</a>
+          <div>
+            <h1>Betaler I den aftalte fragtpris?</h1>
+            <p>Sammenhold fakturaen med prisaftalen. Se afvigelsen i kroner, og hvad I kan tage op med transportøren.</p>
+            <div className="actions">
+              <a className="button primary" href="#demo">Prøv vores demo</a>
+              <a className="button secondary" href="#login">Log ind</a>
+            </div>
           </div>
+          <CoverMotion />
         </section>
         <section className="marketing-points" aria-label="Det Freightlytics svarer på">
           <article className="marketing-card">
@@ -752,6 +754,17 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
           </form>
         </section>
       </main>
+    </div>
+  );
+}
+
+function CoverMotion() {
+  return (
+    <div className="cover" aria-hidden="true">
+      <div className="cover-sheet a"><span /><span /></div>
+      <div className="cover-sheet b"><span /><span /></div>
+      <div className="cover-sheet c"><span /><span /></div>
+      <div className="cover-card"><i /><span /></div>
     </div>
   );
 }
