@@ -13,6 +13,7 @@ import {
 import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
 import { loadMailFile, saveBlob } from "./mailFiles.ts";
+import { HeroMotion } from "./HeroMotion.tsx";
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
@@ -1417,7 +1418,7 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
               <button type="button" className="button secondary" onClick={() => setLoginOpen(true)}>Log ind</button>
             </div>
           </div>
-          <CoverMotion />
+          <HeroMotion />
         </section>
         <section className="marketing-points" aria-label="Det Freightlytics svarer på">
           <article className="marketing-card">
@@ -1500,17 +1501,6 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
           </form>
         </Modal>
       ) : null}
-    </div>
-  );
-}
-
-function CoverMotion() {
-  return (
-    <div className="cover" aria-hidden="true">
-      <div className="cover-sheet a"><span /><span /></div>
-      <div className="cover-sheet b"><span /><span /></div>
-      <div className="cover-sheet c"><span /><span /></div>
-      <div className="cover-card"><i /><span /></div>
     </div>
   );
 }
