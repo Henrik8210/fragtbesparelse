@@ -631,6 +631,9 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
   const [demoDone, setDemoDone] = useState(false);
   useEffect(() => {
     document.title = "Freightlytics";
+    if (window.location.hash === "#/login" || window.location.hash === "#login") {
+      document.getElementById("login")?.scrollIntoView();
+    }
   }, []);
 
   async function askDemo(event: FormEvent<HTMLFormElement>) {
