@@ -42,7 +42,9 @@ export function useDrawer(
   opener: RefObject<HTMLElement | null>,
 ) {
   const close = useRef(onClose);
-  close.current = onClose;
+  useEffect(() => {
+    close.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     const node = panel.current;
