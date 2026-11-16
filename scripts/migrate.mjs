@@ -9,11 +9,11 @@ if (url === "" || files.length === 0) {
   console.log("migrate: nothing to do");
   process.exit(0);
 }
-const client = new pg.Client({ connectionString: process.env.DATABASE_URL_UNPOOLED?.trim() || url });
-await client.connect();
+const connectionString = process.env.DATABASE_URL_UNPOOLED?.trim() || url;
+const ssl = sslOptions(connectionString);
+const client = new pg.Client({ connectionString, connectionTimeoutMillis: 5000, ...(ssl ? { ssl } : {}) });
 try {
-  await client.query("set lock_timeout = '60s'");
-  await client.query("select pg_advisory_lock(7272741)");
+  await client.connect();
   await client.query(
     "create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())",
   );
@@ -30,6 +30,21 @@ try {
       throw error;
     }
   }
+} catch {
+  process.exitCode = 1;
 } finally {
-  await client.end();
+  await client.end().catch(() => undefined);
+}
+
+function sslOptions(connectionString) {
+  const query = connectionString.split("?")[1] ?? "";
+  let mode = "";
+  for (const part of query.split("&")) {
+    const [key, value = ""] = part.split("=");
+    if (key === "sslmode") mode = decodeURIComponent(value);
+  }
+  if (mode === "require" || mode === "prefer" || mode === "verify-ca" || mode === "verify-full") {
+    return { rejectUnauthorized: false };
+  }
+  return undefined;
 }

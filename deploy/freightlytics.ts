@@ -45,7 +45,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     await this.starting;
     const container = this.ctx.container;
     if (!container) return new Response("container missing", { status: 503 });
-    return container.getTcpPort(PORT).fetch(forwardToContainer(request, config.adminPassword));
+    return container.getTcpPort(PORT).fetch(await forwardToContainer(request, config.adminPassword));
   }
 
   private async startAndWait(config: StartConfig): Promise<void> {
@@ -219,27 +219,44 @@ function isAdminSyncPath(pathname: string): boolean {
   return path === ADMIN_SYNC_PATH;
 }
 
-function forwardToContainer(request: Request, secret: string): Request {
+async function forwardToContainer(request: Request, secret: string): Promise<Request> {
   const url = new URL(request.url);
   const publicHost = url.host;
   const path = url.pathname.replace(/\/$/, "") || "/";
   url.protocol = "http:";
   url.host = "container";
-  const headers = new Headers();
-  for (const [name, value] of request.headers) {
-    if (name === "host" || name === "x-fragtblik-admin-secret" || name === "x-fragtblik-database-url" || name === "x-fragtblik-sync") continue;
-    headers.append(name, value);
+  const method = request.method;
+  const headers = new Headers(request.headers);
+  headers.delete("host");
+  headers.delete("content-length");
+  headers.delete("x-fragtblik-admin-secret");
+  headers.delete("x-fragtblik-database-url");
+  headers.delete("x-fragtblik-sync");
+  const carrySecret = (path === "/api/me" || path === "/api/login") && usablePassword(secret) && headerSafe(secret);
+  let body: ArrayBuffer | string | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    const raw = await request.arrayBuffer();
+    if (path === "/api/login" && carrySecret) {
+      let parsed: Record<string, unknown> = {};
+      try {
+        const value = JSON.parse(new TextDecoder().decode(raw)) as unknown;
+        if (value && typeof value === "object" && !Array.isArray(value)) parsed = value as Record<string, unknown>;
+      } catch {
+        parsed = {};
+      }
+      parsed.adminSecret = secret;
+      body = JSON.stringify(parsed);
+      headers.set("content-type", "application/json");
+    } else {
+      body = raw;
+    }
   }
-  if ((path === "/api/me" || path === "/api/login") && usablePassword(secret) && headerSafe(secret)) {
-    headers.set("x-fragtblik-admin-secret", secret);
-  }
+  if (carrySecret) headers.set("x-fragtblik-admin-secret", secret);
   headers.set("x-forwarded-proto", "https");
   headers.set("x-forwarded-host", publicHost);
   const client = request.headers.get("cf-connecting-ip");
   if (client) headers.set("x-forwarded-for", client);
-  const method = request.method;
-  const hasBody = method !== "GET" && method !== "HEAD";
-  return new Request(url, { method, headers, body: hasBody ? request.body : undefined, redirect: "manual" });
+  return new Request(url, { method, headers, body, redirect: "manual" });
 }
 
 export default {
@@ -247,12 +264,16 @@ export default {
     const url = new URL(request.url);
     if (isAdminSyncPath(url.pathname)) return new Response("not found", { status: 404 });
     const headers = new Headers(request.headers);
+    headers.delete("host");
+    headers.delete("content-length");
     headers.delete("x-fragtblik-admin-secret");
     headers.delete("x-fragtblik-database-url");
     const secret = (env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
     if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
     const databaseUrl = (env.DATABASE_URL ?? "").trim();
     if (headerSafe(databaseUrl)) headers.set("x-fragtblik-database-url", databaseUrl);
-    return env.APP.getByName("freightlytics").fetch(new Request(request, { headers }));
+    const method = request.method;
+    const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
+    return env.APP.getByName("freightlytics").fetch(new Request(request.url, { method, headers, body, redirect: "manual" }));
   },
 };
