@@ -4,6 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
+import { visibleDatabaseError } from "../deploy/mailResult.ts";
 import { accountAnswers } from "../src/data/questions.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { customers, latestFromLanes } from "../src/data/portfolio.ts";
@@ -15,6 +16,24 @@ let pool: pg.Pool | undefined;
 let local: Promise<PGlite> | undefined;
 let seeded: Promise<void> | undefined;
 let localMode = false;
+let lastDatabaseError = "";
+
+export class DatabaseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DatabaseError";
+  }
+}
+
+export function publicDbError(error: unknown): string {
+  return visibleDatabaseError(error);
+}
+
+function remember(error: unknown): DatabaseError {
+  const message = publicDbError(error);
+  lastDatabaseError = message;
+  return error instanceof DatabaseError ? error : new DatabaseError(message);
+}
 
 function postgres(): boolean {
   // Login reads the existing users table. A failed probe must not turn that read into a 500.
@@ -22,7 +41,7 @@ function postgres(): boolean {
 }
 
 export function storesInPostgres(): boolean {
-  return postgres();
+  return databaseUrl !== "";
 }
 
 export async function reconnectDatabase(): Promise<boolean> {
@@ -106,22 +125,60 @@ function getPool(): pg.Pool {
 export type SqlQuery = <T = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<T[]>;
 
 export async function withDatabase<T>(run: (query: SqlQuery) => Promise<T>): Promise<T> {
+  if (databaseUrl === "") throw remember(new Error("DATABASE_URL is not set"));
   await ready();
-  if (!postgres()) {
-    const query = (async (text, params = []) => (await (await localDb()).query(text, params)).rows) as SqlQuery;
-    return run(query);
-  }
   const client = await getPool().connect();
   let failed = false;
   const query = (async (text, params = []) => (await client.query(text, params)).rows) as SqlQuery;
   try {
-    await client.query("select set_config('search_path', 'public', false)");
-    return await run(query);
+    await client.query("begin");
+    const result = await run(query);
+    await client.query("commit");
+    return result;
   } catch (error) {
     failed = true;
-    throw error;
+    await client.query("rollback").catch(() => undefined);
+    throw remember(error);
   } finally {
     client.release(failed);
+  }
+}
+
+// Mail, the Modtaget list, and sessions use this. A set DATABASE_URL never falls
+// through to the local database. allowLocal is only for a process with no URL.
+export async function postgresSql<T = Record<string, unknown>>(text: string, params: unknown[] = [], allowLocal = false): Promise<T[]> {
+  if (databaseUrl === "") {
+    if (!allowLocal) throw remember(new Error("DATABASE_URL is not set"));
+    await ready();
+    return (await (await localDb()).query<T>(text, params)).rows;
+  }
+  await ready();
+  try {
+    return (await poolQuery(text, params)) as T[];
+  } catch (error) {
+    throw remember(error);
+  }
+}
+
+export async function databaseStatus(companyId: string): Promise<{
+  mode: "postgres" | "local";
+  host: string;
+  error: string;
+  invoiceMailCount: number | null;
+}> {
+  await ready();
+  const host = databaseHost(databaseUrl);
+  const mode = databaseUrl === "" ? "local" : "postgres";
+  if (databaseUrl === "") {
+    return { mode, host: "", error: lastDatabaseError || "DATABASE_URL is not set", invoiceMailCount: null };
+  }
+  if (!companyId) return { mode, host, error: lastDatabaseError, invoiceMailCount: null };
+  try {
+    const rows = await poolQuery("select count(*)::int as n from public.invoice_mail where company_id = $1", [companyId]);
+    const count = Number(rows[0]?.n ?? 0);
+    return { mode, host, error: "", invoiceMailCount: Number.isFinite(count) ? count : null };
+  } catch (error) {
+    return { mode: localMode ? "local" : "postgres", host, error: remember(error).message, invoiceMailCount: null };
   }
 }
 
@@ -141,8 +198,9 @@ async function ready(): Promise<void> {
       }
       try {
         await poolQuery("select 1 as ok");
-      } catch {
+      } catch (error) {
         localMode = true;
+        remember(error);
         console.error("database: local");
       }
     } else {
@@ -302,20 +360,23 @@ function missingTable(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "42P01";
 }
 
-export async function syncAdminPassword(explicit?: string): Promise<void> {
+export async function syncAdminPassword(explicit?: string, forcePostgres = false): Promise<void> {
   const password = (explicit ?? process.env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
   if (!passwordOk(password)) return;
-  const existing = await directQuery<{ password_hash: string | null }>(
+  const run = forcePostgres && databaseUrl !== ""
+    ? <T,>(text: string, params: unknown[] = []) => postgresSql<T>(text, params, false)
+    : directQuery;
+  const existing = await run<{ password_hash: string | null }>(
     "select password_hash from users where username = 'admin' order by created_at limit 1",
   );
   if (existing[0] && (await checkPassword(password, existing[0].password_hash))) return;
   const hash = await hashPassword(password);
-  const updated = await directQuery<{ id: string }>(
+  const updated = await run<{ id: string }>(
     "update users set password_hash = $1, role = 'admin' where username = 'admin' returning id",
     [hash],
   );
   if (updated.length > 0) return;
-  await directQuery(
+  await run(
     `insert into users (id, username, name, role, lang, sample, password_hash)
      values ($1, 'admin', 'Freightlytics-admin', 'admin', 'da', 1, $2)`,
     [crypto.randomUUID(), hash],

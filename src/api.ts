@@ -1,8 +1,8 @@
 export class ApiError extends Error {
   code: string;
 
-  constructor(code: string) {
-    super(code);
+  constructor(code: string, detail?: string) {
+    super(detail && detail !== code ? detail : code);
     this.code = code;
   }
 }
@@ -16,10 +16,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
     credentials: "same-origin",
   });
-  const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  const body = (await response.json().catch(() => null)) as { error?: unknown; message?: unknown } | null;
   if (!response.ok) {
     const code = body && typeof body.error === "string" ? body.error : "error";
-    throw new ApiError(code);
+    const detail = body && typeof body.message === "string" ? body.message : "";
+    throw new ApiError(code, detail);
   }
   return body as T;
 }

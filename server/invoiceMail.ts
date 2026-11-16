@@ -1,7 +1,7 @@
 import PostalMime from "postal-mime";
 import type { Attachment, Email } from "postal-mime";
 import { customers } from "../src/data/portfolio.ts";
-import { reconnectDatabase, sql, storesInPostgres, withDatabase, type SqlQuery } from "./db.ts";
+import { postgresSql, publicDbError, storesInPostgres, withDatabase, type SqlQuery } from "./db.ts";
 
 export const MAIL_DOMAIN = "freightlytics.io";
 export const MAX_MAIL_BYTES = 8_000_000;
@@ -46,72 +46,67 @@ export type MailFile = { id: string; filename: string; bytes: number };
 export type MailItem = { id: string; sender: string; subject: string; receivedAt: string; files: MailFile[] };
 
 export async function listInvoiceMail(companyId: string): Promise<{ ready: boolean; mails: MailItem[] }> {
-  try {
-    const mails = await sql<{ id: string; sender: string; subject: string; received_at: Date | string }>(
-      `select id, sender, subject, received_at
-       from public.invoice_mail
-       where company_id = $1
-       order by received_at desc
-       limit 40`,
-      [companyId],
+  const mails = await postgresSql<{ id: string; sender: string; subject: string; received_at: Date | string }>(
+    `select id, sender, subject, received_at
+     from public.invoice_mail
+     where company_id = $1
+     order by received_at desc
+     limit 40`,
+    [companyId],
+  );
+  const ids = mails.map((mail) => mail.id);
+  const marks = ids.map((_, index) => `$${index + 2}`).join(", ");
+  const files = ids.length === 0
+    ? []
+    : await postgresSql<{ id: string; mail_id: string; filename: string; byte_size: number }>(
+      `select id, mail_id, filename, byte_size
+       from public.invoice_mail_files
+       where company_id = $1 and mail_id in (${marks})
+       order by filename`,
+      [companyId, ...ids],
     );
-    const ids = mails.map((mail) => mail.id);
-    const marks = ids.map((_, index) => `$${index + 2}`).join(", ");
-    const files = ids.length === 0
-      ? []
-      : await sql<{ id: string; mail_id: string; filename: string; byte_size: number }>(
-        `select id, mail_id, filename, byte_size
-         from public.invoice_mail_files
-         where company_id = $1 and mail_id in (${marks})
-         order by filename`,
-        [companyId, ...ids],
-      );
-    return {
-      ready: true,
-      mails: mails.map((mail) => ({
-        id: mail.id,
-        sender: mail.sender,
-        subject: mail.subject,
-        receivedAt: receivedStamp(mail.received_at),
-        files: files.filter((file) => file.mail_id === mail.id).map((file) => ({
-          id: file.id,
-          filename: file.filename,
-          bytes: Number(file.byte_size),
-        })),
+  return {
+    ready: true,
+    mails: mails.map((mail) => ({
+      id: mail.id,
+      sender: mail.sender,
+      subject: mail.subject,
+      receivedAt: receivedStamp(mail.received_at),
+      files: files.filter((file) => file.mail_id === mail.id).map((file) => ({
+        id: file.id,
+        filename: file.filename,
+        bytes: Number(file.byte_size),
       })),
-    };
-  } catch (error) {
-    if (missingTable(error)) return { ready: false, mails: [] };
-    throw error;
-  }
+    })),
+  };
 }
 
 export async function readInvoiceFile(id: string): Promise<{ filename: string; companyId: string; content: Buffer } | null> {
-  try {
-    const rows = await sql<{ filename: string; company_id: string; content: unknown }>(
-      "select filename, company_id, content from public.invoice_mail_files where id = $1 and company_id is not null",
-      [id],
-    );
-    const row = rows[0];
-    if (!row) return null;
-    return { filename: row.filename, companyId: row.company_id, content: asBuffer(row.content) };
-  } catch (error) {
-    if (missingTable(error)) return null;
-    throw error;
-  }
+  const rows = await postgresSql<{ filename: string; company_id: string; content: unknown }>(
+    "select filename, company_id, content from public.invoice_mail_files where id = $1 and company_id is not null",
+    [id],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return { filename: row.filename, companyId: row.company_id, content: asBuffer(row.content) };
 }
 
 export type AcceptedMail =
   | { result: "stored"; id: string; companyId: string; postgres: boolean }
+  | { result: "database"; message: string }
   | { result: "unknown" | "later" | "large" | "bad" };
 
 export async function acceptInvoiceMail(recipient: string, sender: string, raw: Buffer): Promise<AcceptedMail> {
   if (!Buffer.isBuffer(raw)) return { result: "bad" };
   if (raw.length > MAX_MAIL_BYTES) return { result: "large" };
-  await reconnectDatabase();
   const companyId = companyIdFromRecipient(recipient);
   if (!companyId) return { result: "unknown" };
-  const mailbox = await ensureMailbox(companyId);
+  let mailbox: "ok" | "unknown";
+  try {
+    mailbox = await ensureMailbox(companyId);
+  } catch (error) {
+    return { result: "database", message: publicDbError(error) };
+  }
   if (mailbox !== "ok") return { result: mailbox };
 
   let parsed: Email | null = null;
@@ -147,20 +142,20 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
         await insertFile(query, mailId, companyId, file);
       }
     });
-  } catch {
+  } catch (error) {
     await dropMail(mailId, companyId);
-    return { result: "later" };
+    return { result: "database", message: publicDbError(error) };
   }
   try {
-    const seen = await sql<{ id: string }>("select id from public.invoice_mail where id = $1 and company_id = $2", [mailId, companyId]);
-    const saved = await sql<{ id: string }>("select id from public.invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]);
+    const seen = await postgresSql<{ id: string }>("select id from public.invoice_mail where id = $1 and company_id = $2", [mailId, companyId]);
+    const saved = await postgresSql<{ id: string }>("select id from public.invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]);
     if (!seen[0] || saved.length === 0) {
       await dropMail(mailId, companyId);
-      return { result: "later" };
+      return { result: "database", message: "invoice mail was not stored" };
     }
-  } catch {
+  } catch (error) {
     await dropMail(mailId, companyId);
-    return { result: "later" };
+    return { result: "database", message: publicDbError(error) };
   }
   return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
 }
@@ -169,11 +164,12 @@ export function invoiceMailReply(result: AcceptedMail, inPostgres = storesInPost
   if (result.result === "stored" && result.postgres && result.id) {
     return { status: 200, body: { ok: true, id: result.id, companyId: result.companyId, postgres: true } };
   }
+  if (result.result === "database") return { status: 503, body: { error: "database", message: result.message } };
   if (result.result === "large") return { status: 413, body: { error: "large" } };
   if (result.result === "bad") return { status: 400, body: { error: "mail" } };
   if (result.result === "unknown") return { status: 404, body: { error: "unknown" } };
-  if (!inPostgres || result.result === "stored") return { status: 503, body: { error: "database" } };
-  return { status: 503, body: { error: "later" } };
+  if (!inPostgres || result.result === "stored") return { status: 503, body: { error: "database", message: "DATABASE_URL is not set" } };
+  return { status: 503, body: { error: "later", message: "invoice mail was not stored" } };
 }
 
 function senderLine(parsed: Email | null): string {
@@ -185,38 +181,36 @@ function senderLine(parsed: Email | null): string {
 }
 
 async function dropMail(mailId: string, companyId: string): Promise<void> {
-  await sql("delete from public.invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
-  await sql("delete from public.invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
+  await postgresSql("delete from public.invoice_mail_files where mail_id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
+  await postgresSql("delete from public.invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
 }
 
-async function ensureMailbox(companyId: string): Promise<"ok" | "unknown" | "later"> {
-  try {
-    const found = await sql("select id from public.companies where id = $1", [companyId]);
-    if (found[0]) return "ok";
-    const sample = customers.find((company) => company.id === companyId);
-    if (!sample) return "unknown";
-    await sql(
-      `insert into public.companies (id, name, industry, place) values ($1, $2, $3, $4)
-       on conflict (id) do nothing`,
-      [sample.id, sample.name, sample.industry, sample.place],
-    );
-    return "ok";
-  } catch (error) {
-    if (missingTable(error)) return "later";
-    return "later";
-  }
+async function ensureMailbox(companyId: string): Promise<"ok" | "unknown"> {
+  const found = await postgresSql("select id from public.companies where id = $1", [companyId]);
+  if (found[0]) return "ok";
+  const sample = customers.find((company) => company.id === companyId);
+  if (!sample) return "unknown";
+  await postgresSql(
+    `insert into public.companies (id, name, industry, place) values ($1, $2, $3, $4)
+     on conflict (id) do nothing`,
+    [sample.id, sample.name, sample.industry, sample.place],
+  );
+  return "ok";
 }
 
 async function insertFile(query: SqlQuery, mailId: string, companyId: string, file: { name: string; mime: string; bytes: Buffer }): Promise<void> {
   const values = [crypto.randomUUID(), mailId, companyId, file.name, file.mime, file.bytes.length];
   const encoded = file.bytes.toString("base64");
+  await query("savepoint file_insert");
   try {
     await query(
       `insert into public.invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)
        values ($1, $2, $3, $4, $5, $6, decode($7, 'base64'))`,
       [...values, encoded],
     );
+    await query("release savepoint file_insert");
   } catch (error) {
+    await query("rollback to savepoint file_insert");
     if (missingTable(error)) throw error;
     await query(
       `insert into public.invoice_mail_files (id, mail_id, company_id, filename, mime, byte_size, content)

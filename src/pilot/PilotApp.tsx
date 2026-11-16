@@ -383,13 +383,13 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     let gone = false;
     const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
     setCopied(false);
-    api<{ address: string; ready: boolean; mails: MailRow[] }>(`/api/invoice-mail${query}`)
+    api<{ address: string; ready: boolean; error?: string; mails: MailRow[] }>(`/api/invoice-mail${query}`)
       .then((body) => {
         if (gone) return;
         setAddress(body.address);
         setReady(body.ready);
         setMails(body.mails);
-        setProblem("");
+        setProblem(body.error ?? "");
       })
       .catch(() => {
         if (!gone) setProblem("Kunne ikke hente indbakken.");
@@ -424,18 +424,17 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
       <section className="panel">
         <div className="section-heading">
           <h2>Fakturamail</h2>
-          <p>{ready ? "Mail til adressen lander her." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op."}</p>
+          <p>{problem ? "Indbakken kunne ikke læses." : ready ? "Mail til adressen lander her." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op."}</p>
         </div>
         <div className="mail-address" style={{ padding: "0 18px 18px" }}>
           <input ref={field} readOnly value={address} aria-label="Indbakke" spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
           <button className="button secondary" type="button" onClick={() => void copyAddress()} disabled={!address}>{copied ? "Kopieret" : "Kopiér"}</button>
         </div>
-        {problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : null}
       </section>
       <section className="panel">
         <div className="section-heading"><h2>Modtaget</h2></div>
-        {mails.length === 0 ? (
-          <p className="quiet" style={{ padding: "0 18px 16px" }}>{ready ? "Ingen fakturamail endnu." : "Ingen vedhæftninger endnu."}</p>
+        {problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : mails.length === 0 ? (
+          <p className="quiet" style={{ padding: "0 18px 16px" }}>Ingen fakturamail endnu.</p>
         ) : (
           <ul className="mail-list">
             {mails.map((mail) => {
@@ -979,9 +978,12 @@ function SignedOut({ ready, onEnter }: { ready: boolean; onEnter: (username: str
               void onEnter(typedUsername, typedPassword)
                 .catch((error: unknown) => {
                   const code = error instanceof ApiError ? error.code : "";
-                  setProblem(code === "login" || code === "sign-in"
-                    ? "Brugernavn og adgangskode passer ikke sammen."
-                    : "Kunne ikke logge ind. Prøv igen.");
+                  const detail = error instanceof Error ? error.message : "";
+                  setProblem(code === "database" && detail && detail !== "database"
+                    ? detail
+                    : code === "login" || code === "sign-in"
+                      ? "Brugernavn og adgangskode passer ikke sammen."
+                      : "Kunne ikke logge ind. Prøv igen.");
                 })
                 .finally(() => setBusy(false));
             }}
