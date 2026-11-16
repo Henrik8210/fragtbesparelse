@@ -11,6 +11,7 @@ import {
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
 } from "./freight.ts";
 import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
+import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 
@@ -24,8 +25,7 @@ const NAV = [
 
 type Company = { id: string; name: string; industry: string; place: string };
 type Notice = { id: string; name: string; company: string; email: string; createdAt: string };
-type Tab = (typeof NAV)[number]["id"];
-type View = Tab | "report";
+type View = WorkspaceView;
 type Result = {
   name: string;
   carrier: string;
@@ -36,7 +36,7 @@ type Result = {
 };
 
 export function PilotApp() {
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>(() => viewFromHash(window.location.hash));
   const [result, setResult] = useState<Result | null>(null);
   const [flowKey, setFlowKey] = useState(0);
   const [reportKey, setReportKey] = useState(0);
@@ -113,8 +113,24 @@ export function PilotApp() {
     if (orgsReady && !orgs.some((item) => item.id === orgId)) setOrgId(ORGS[0].id);
   }, [orgsReady, orgs, orgId]);
 
+  useEffect(() => {
+    function onPlace() {
+      setView(viewFromHash(window.location.hash));
+    }
+    window.addEventListener("popstate", onPlace);
+    window.addEventListener("hashchange", onPlace);
+    return () => {
+      window.removeEventListener("popstate", onPlace);
+      window.removeEventListener("hashchange", onPlace);
+    };
+  }, []);
+
   function navigate(next: View) {
     setView(next);
+    const hash = hashForView(next);
+    const nextUrl = `${window.location.pathname}${window.location.search}${hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentUrl !== nextUrl) window.history.pushState(null, "", nextUrl);
     window.scrollTo({ top: 0 });
   }
 
