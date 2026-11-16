@@ -368,10 +368,11 @@ async function postInvoice(env: Env, to: string, from: string, companyId: string
     if (usablePassword(secret) && headerField(secret) === secret) headers.set("x-fragtblik-admin-secret", secret);
     const databaseUrl = typeof env?.DATABASE_URL === "string" ? env.DATABASE_URL.trim() : "";
     if (headerSafe(databaseUrl) && headerField(databaseUrl) === databaseUrl) headers.set("x-fragtblik-database-url", databaseUrl);
+    const bytes = raw.slice();
     const response = await env.APP.getByName("freightlytics").fetch(new Request("https://freightlytics.io/api/internal/invoice-mail", {
       method: "POST",
       headers,
-      body: raw.slice(),
+      body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
     }));
     const text = await response.text();
     let body: unknown = null;

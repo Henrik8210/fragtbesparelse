@@ -4,7 +4,7 @@ import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, hashPassword, sql, syncAdminPassword, whenReady } from "./db.ts";
-import { acceptInvoiceMail, companyIdFromRecipient, invoiceAddress, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
+import { acceptInvoiceMail, companyIdFromRecipient, invoiceAddress, invoiceMailReply, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
@@ -253,14 +253,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const result = await acceptInvoiceMail(headerValue(req, "x-fragtblik-mail-to"), headerValue(req, "x-fragtblik-mail-from"), raw);
-      if (result.result === "stored" && result.postgres) {
-        send(res, 200, { ok: true, id: result.id, companyId: result.companyId, postgres: true });
-      } else if (result.result === "stored") {
-        send(res, 503, { error: "database" });
-      } else if (result.result === "later") send(res, 503, { error: "later" });
-      else if (result.result === "large") send(res, 413, { error: "large" });
-      else if (result.result === "bad") send(res, 400, { error: "mail" });
-      else send(res, 404, { error: "unknown" });
+      const reply = invoiceMailReply(result);
+      send(res, reply.status, reply.body);
       return;
     }
 
