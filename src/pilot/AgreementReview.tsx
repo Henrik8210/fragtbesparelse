@@ -38,9 +38,9 @@ const toRate = (rate: AgreementRate): RateDraft => ({
 const toGrid = (grid: ExtractGrid): GridDraft => ({
   ...grid,
   columns: grid.columns.map((column) => ({ ...column })),
-  rows: grid.rows.map((row) => ({ label: row.label, cells: row.cells.map(decimalText) })),
-  minimum: grid.minimum.map(decimalText),
-  maximum: grid.maximum.map(decimalText),
+  rows: grid.rows.map((row) => ({ label: row.label, cells: row.cells.map((value) => decimalText(value)) })),
+  minimum: grid.minimum.map((value) => decimalText(value)),
+  maximum: grid.maximum.map((value) => decimalText(value)),
 });
 
 function parsePct(value: string): number | null {
@@ -123,7 +123,7 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
   const [rates, setRates] = useState<RateDraft[]>(() => extract.rates.map(toRate));
   const [items, setItems] = useState<ItemDraft[]>(() => extract.items.map((item) => ({ ...item, price: decimalText(item.price) })));
   const [grids, setGrids] = useState<GridDraft[]>(() => extract.grids.map(toGrid));
-  const [surcharges, setSurcharges] = useState<SurchargeDraft[]>(() => extract.surcharges.map((item) => ({ ...item, value: decimalText(item.value) })));
+  const [surcharges, setSurcharges] = useState<SurchargeDraft[]>(() => extract.surcharges.map((item) => ({ ...item, value: decimalText(item.value, item.kind === "percent" ? "percent" : "money") })));
   const [conditions, setConditions] = useState<ConditionDraft[]>(() => extract.conditions.map((item) => ({ ...item })));
   const [name, setName] = useState(() => (extract.title || extract.filename.replace(/\.[^.]+$/, "")).slice(0, 100));
   const [carrier, setCarrier] = useState(extract.carrier);

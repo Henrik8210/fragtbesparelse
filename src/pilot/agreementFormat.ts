@@ -95,9 +95,11 @@ export const UNIT_SUGGESTIONS = [
   "pr. forsendelse", "pr. leverance", "pr. palleplads", "pr. måned", "pr. pakke",
 ];
 
-export function decimalText(value: number | null): string {
+/** Money keeps two decimals, as rate sheets print it. A percent is shown as written. */
+export function decimalText(value: number | null, kind: "money" | "percent" = "money"): string {
   if (value === null) return "";
-  return value.toLocaleString("da-DK", { minimumFractionDigits: Number.isInteger(value) ? 0 : 2, maximumFractionDigits: 4 });
+  const min = kind === "percent" && Number.isInteger(value) ? 0 : 2;
+  return value.toLocaleString("da-DK", { minimumFractionDigits: min, maximumFractionDigits: 4 });
 }
 
 /** Danish or English decimal text into a number. Empty is null; anything else unreadable is undefined. */

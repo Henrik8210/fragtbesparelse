@@ -4,7 +4,7 @@ const price = (value: number | null, currency: string) => value === null ? "Skal
 
 function surchargeValue(item: AgreementSurcharge): string {
   if (item.kind === "agreed" || item.value === null) return "Skal aftales";
-  return item.kind === "percent" ? `${decimalText(item.value)} %` : `${decimalText(item.value)} kr.${item.unit ? ` ${item.unit}` : ""}`;
+  return item.kind === "percent" ? `${decimalText(item.value, "percent")} %` : `${decimalText(item.value)} kr.${item.unit ? ` ${item.unit}` : ""}`;
 }
 
 /** Read-only view of a format 2 agreement's items, grids, surcharges and conditions. */
