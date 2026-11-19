@@ -1,15 +1,8 @@
+import type { Notice } from "./notices.ts";
+
 export type CachedUser = { role: string } | null;
 export type CachedCompany = { id: string; name: string; industry: string; place: string };
-export type CachedNotice = {
-  id: string;
-  kind: "demo" | "invoice";
-  name: string;
-  company: string;
-  email: string;
-  subject: string;
-  createdAt: string;
-  seenAt: string | null;
-};
+export type CachedNotice = Notice;
 export type CachedMailFile = { id: string; filename: string; bytes: number; carrier?: string };
 export type CachedMail = {
   id: string;

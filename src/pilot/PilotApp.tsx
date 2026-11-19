@@ -25,12 +25,13 @@ import { loadMailFile, saveBlob } from "./mailFiles.ts";
 import { CheckedNote, ExtractPanel } from "./ExtractPanel.tsx";
 import { rowsFromLines, type CheckSummary, type InvoiceCheck } from "./invoiceCheck.ts";
 import { HeroMotion } from "./HeroMotion.tsx";
+import { groupByDay, noticeTarget, noticeText, noticeTime, type Notice } from "./notices.ts";
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 import {
   cacheEpoch, clearWorkspaceCache, mailKey, readMail, readMe, readNotices, readOrgs,
-  rememberMail, rememberMe, rememberNotices, rememberOrgs, type CachedMailbox, type CachedNotice,
+  rememberMail, rememberMe, rememberNotices, rememberOrgs, type CachedMailbox,
 } from "./workspaceCache.ts";
 
 const NAV = [
@@ -43,7 +44,6 @@ const NAV = [
 const NOTICE_POLL_MS = 30000;
 
 type Company = { id: string; name: string; industry: string; place: string };
-type Notice = CachedNotice;
 type View = WorkspaceView;
 type Result = {
   name: string;
@@ -168,6 +168,7 @@ export function PilotApp() {
   });
   const [admin, setAdmin] = useState(() => readMe()?.role === "admin");
   const [notices, setNotices] = useState<Notice[]>(() => readNotices() ?? []);
+  const [focusMail, setFocusMail] = useState<string | null>(null);
   const [gate, setGate] = useState<"checking" | "closed" | "open">(() => {
     const me = readMe();
     if (me === undefined) return "checking";
@@ -207,6 +208,7 @@ export function PilotApp() {
   const activeLabel = view === "report" ? "Rapport"
     : view === "inbox" ? "Fakturaer"
     : view === "agreements" ? "Prisaftaler"
+    : view === "notifications" ? "Notifikationer"
     : NAV.find((tab) => tab.id === activeTab)?.label;
   const peers = peerCount(org.id);
   const mobile = useMedia(MOBILE_NAV);
@@ -467,6 +469,19 @@ export function PilotApp() {
     await api(`/api/notifications/${encodeURIComponent(id)}/seen`, { method: "POST" }).catch(() => undefined);
   }
 
+  function openNotice(item: Notice) {
+    if (!item.seenAt) void dismissNotice(item.id);
+    const target = noticeTarget(item);
+    if (!target) return;
+    if (target.kind === "mail") {
+      window.location.href = target.href;
+      return;
+    }
+    if (target.orgId !== orgId && orgs.some((candidate) => candidate.id === target.orgId)) chooseOrg(target.orgId);
+    setFocusMail(target.mailId);
+    navigate("inbox");
+  }
+
   if (gate === "checking") {
     return (
       <div className="session-loading" role="status" aria-live="polite">
@@ -602,7 +617,14 @@ export function PilotApp() {
           <div className="breadcrumb"><span>Arbejdsrum</span><ChevronRight size={14} /><strong>{activeLabel}</strong></div>
           <div className="topbar-right">
             {mobile ? null : orgSwitch}
-            <NoticeBell notices={notices} orgs={orgs} onDismiss={(id) => void dismissNotice(id)} onRefresh={() => void refreshNotices()} />
+            <NoticeBell
+              notices={notices}
+              orgs={orgs}
+              onDismiss={(id) => void dismissNotice(id)}
+              onRefresh={() => void refreshNotices()}
+              onOpen={openNotice}
+              onAll={() => navigate("notifications")}
+            />
             <AccountMenu
               admin={admin}
               onCreated={(created) => {
@@ -633,7 +655,10 @@ export function PilotApp() {
           {view === "check" ? (
             <ChecksPage checks={checks} onStart={newAudit} onOpen={openReport} />
           ) : null}
-          {view === "inbox" ? <InvoicesView key={org.id} admin={admin} orgId={org.id} orgs={orgs} /> : null}
+          {view === "inbox" ? (
+            <InvoicesView key={org.id} admin={admin} orgId={org.id} orgs={orgs} focus={focusMail} onFocused={() => setFocusMail(null)} />
+          ) : null}
+          {view === "notifications" ? <NotificationsView unread={notices} orgs={orgs} onOpen={openNotice} /> : null}
           {view === "agreements" ? (
             <AgreementsView
               org={org}
@@ -787,12 +812,19 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
   );
 }
 
-function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
+function InvoicesView({ admin, orgId, orgs, focus, onFocused }: {
+  admin: boolean;
+  orgId: string;
+  orgs: { id: string; name: string }[];
+  focus: string | null;
+  onFocused: () => void;
+}) {
   const key = mailKey(admin, orgId);
   const cached = readMail(key);
   const [mails, setMails] = useState<MailRow[]>(cached?.mails ?? []);
   const [address, setAddress] = useState(cached?.address ?? "");
   const [loading, setLoading] = useState(!cached);
+  const [fresh, setFresh] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [problem, setProblem] = useState(cached?.error ?? "");
   const [filter, setFilter] = useState("");
@@ -838,8 +870,11 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
         setMails(next.mails);
         setAddress(next.address);
         setProblem(next.error);
+        setFresh(true);
       } catch {
-        if (gone || cacheEpoch() !== epoch || readMail(key)) return;
+        if (gone || cacheEpoch() !== epoch) return;
+        setFresh(true);
+        if (readMail(key)) return;
         setProblem("Kunne ikke hente fakturaerne.");
       } finally {
         if (!gone && cacheEpoch() === epoch) {
@@ -885,6 +920,19 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
     const files = invoiceFiles(mail);
     setOpen({ subject: mail.subject, files, fileId: files[0]?.id ?? "" });
   }
+
+  useEffect(() => {
+    if (!focus) return;
+    const mail = mails.find((item) => item.id === focus);
+    if (mail) {
+      setFilter("");
+      const files = invoiceFiles(mail);
+      setOpen({ subject: mail.subject, files, fileId: files[0]?.id ?? "" });
+      onFocused();
+    } else if (fresh) {
+      onFocused();
+    }
+  }, [focus, mails, fresh, onFocused]);
 
   function added(mail: MailRow) {
     setAdding(false);
@@ -1359,22 +1407,13 @@ function InvoicePages({ fileId, companyId }: { fileId: string; companyId: string
   );
 }
 
-function noticeText(item: Notice, orgs: { id: string; name: string }[]): { title: string; lines: string[] } {
-  if (item.kind === "invoice") {
-    const orgName = orgs.find((org) => org.id === item.company)?.name ?? item.company;
-    return {
-      title: item.name ? `Faktura modtaget fra ${item.name}` : "Faktura modtaget",
-      lines: [[item.subject, orgName].filter(Boolean).join(" · ")],
-    };
-  }
-  return { title: "Demoønske", lines: [`${item.name} · ${item.company}`, item.email] };
-}
-
-function NoticeBell({ notices, orgs, onDismiss, onRefresh }: {
+function NoticeBell({ notices, orgs, onDismiss, onRefresh, onOpen, onAll }: {
   notices: Notice[];
   orgs: { id: string; name: string }[];
   onDismiss: (id: string) => void;
   onRefresh: () => void;
+  onOpen: (item: Notice) => void;
+  onAll: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -1419,22 +1458,120 @@ function NoticeBell({ notices, orgs, onDismiss, onRefresh }: {
           {unread === 0 ? <p className="notice-empty">Ingen beskeder.</p> : (
             <ul>
               {notices.map((item) => {
-                const { title, lines } = noticeText(item, orgs);
+                const { title, lines, action } = noticeText(item, orgs);
+                const target = noticeTarget(item);
                 return (
                   <li key={item.id}>
-                    <div>
-                      <strong>{title}</strong>
-                      {lines.map((line) => <p key={line}>{line}</p>)}
-                      <small>{dateLabel(item.createdAt)}</small>
-                    </div>
-                    <button type="button" onClick={() => onDismiss(item.id)}>Læst</button>
+                    <button
+                      type="button"
+                      className="notice-card"
+                      disabled={!target}
+                      aria-label={target ? `${title}. ${action}` : title}
+                      onClick={() => { setOpen(false); onOpen(item); }}
+                    >
+                      <NoticeIcon kind={item.kind} />
+                      <span>
+                        <strong>{title}</strong>
+                        {lines.map((line) => <span key={line} className="notice-line">{line}</span>)}
+                        <small>{dateLabel(item.createdAt)} · {noticeTime(item.createdAt)}</small>
+                      </span>
+                    </button>
+                    <button type="button" className="notice-seen" onClick={() => onDismiss(item.id)}>Læst</button>
                   </li>
                 );
               })}
             </ul>
           )}
+          <button type="button" className="notice-all" onClick={() => { setOpen(false); onAll(); }}>
+            Se alle notifikationer <ArrowRight size={14} />
+          </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function NoticeIcon({ kind }: { kind: Notice["kind"] }) {
+  return <span className={`notice-icon ${kind}`} aria-hidden="true">{kind === "invoice" ? <Receipt size={16} /> : <Mail size={16} />}</span>;
+}
+
+function NotificationsView({ unread, orgs, onOpen }: {
+  unread: Notice[];
+  orgs: { id: string; name: string }[];
+  onOpen: (item: Notice) => void;
+}) {
+  const [items, setItems] = useState<Notice[] | null>(null);
+  const [problem, setProblem] = useState("");
+  const unreadKey = unread.map((item) => item.id).join(",");
+  useEffect(() => {
+    let gone = false;
+    api<{ notifications: Notice[] }>("/api/notifications?all=1")
+      .then((body) => {
+        if (gone) return;
+        setItems(body.notifications);
+        setProblem("");
+      })
+      .catch(() => {
+        if (!gone) setProblem("Kunne ikke hente notifikationerne.");
+      });
+    return () => {
+      gone = true;
+    };
+  }, [unreadKey]);
+
+  const groups = groupByDay(items ?? []);
+  const unseen = (items ?? []).filter((item) => !item.seenAt).length;
+
+  function open(item: Notice) {
+    const seenAt = new Date().toISOString();
+    setItems((current) => current?.map((entry) => entry.id === item.id && !entry.seenAt ? { ...entry, seenAt } : entry) ?? current);
+    onOpen(item);
+  }
+
+  return (
+    <div className="content-flow">
+      <div className="page-intro">
+        <span className="eyebrow"><i /> ARBEJDSRUM</span>
+        <h1>Notifikationer</h1>
+        <p>Alt, der er sendt til dig, nyeste først. Klik på en notifikation for at gå videre til fakturaen eller beskeden.</p>
+      </div>
+      <section className="panel" aria-busy={items === null && !problem}>
+        <div className="section-heading">
+          <h2>Tidslinje</h2>
+          <p>{items === null ? "Henter" : `${items.length} ${items.length === 1 ? "notifikation" : "notifikationer"}${unseen ? ` · ${unseen} ulæste` : ""}`}</p>
+        </div>
+        {problem && items === null ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : items === null ? <MailSkeleton /> : items.length === 0 ? (
+          <p className="quiet" style={{ padding: "0 18px 18px" }}>Ingen notifikationer endnu. Når der kommer en faktura til fakturamailen, står den her.</p>
+        ) : (
+          <div className="timeline">
+            {groups.map((group) => (
+              <section key={group.key} className="timeline-day" aria-labelledby={`day-${group.key}`}>
+                <h3 id={`day-${group.key}`}>{group.label}</h3>
+                <ol>
+                  {group.items.map((item) => {
+                    const { title, lines, action } = noticeText(item, orgs);
+                    const target = noticeTarget(item);
+                    return (
+                      <li key={item.id} className={item.seenAt ? "" : "unread"}>
+                        <span className="timeline-dot" aria-hidden="true" />
+                        <button type="button" className="timeline-card" disabled={!target} onClick={() => open(item)}>
+                          <NoticeIcon kind={item.kind} />
+                          <span className="timeline-body">
+                            <strong>{title}{item.seenAt ? null : <span className="timeline-new">Ny</span>}</strong>
+                            {lines.map((line) => <span key={line} className="notice-line">{line}</span>)}
+                            <small>{noticeTime(item.createdAt)}{target ? <> · <em>{action}</em></> : null}</small>
+                          </span>
+                          {target ? <ChevronRight size={18} className="timeline-go" aria-hidden="true" /> : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </section>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
