@@ -10,14 +10,20 @@ const SECRET_KEY = "admin-secret-fingerprint";
 const TOKEN_KEY = "admin-sync-token";
 const ADMIN_SYNC_PATH = "/api/internal/admin-password";
 const INVOICE_MAIL_PATH = "/api/internal/invoice-mail";
+const EXTRACT_PATH = "/api/invoice-extract";
+const EXTRACT_DONE_PATH = "/api/internal/invoice-extract";
 
 type Env = {
   APP: {
     getByName(name: string): { fetch(request: Request): Promise<Response> };
   };
+  AI?: { run(model: string, inputs: unknown, options?: unknown): Promise<unknown> };
+  AI_GATEWAY_ID?: string;
   DATABASE_URL?: string;
   FRAGTBLIK_ADMIN_PASSWORD?: string;
 };
+
+type ExtractJob = { id?: unknown; model?: unknown; inputs?: unknown };
 
 type StartConfig = {
   adminPassword: string;
@@ -54,8 +60,55 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     await this.starting;
     const container = this.ctx.container;
     if (!container) return new Response("container missing", { status: 503 });
-    const response = await container.getTcpPort(PORT).fetch(await forwardToContainer(request, config.adminPassword));
+    const forwarded = await forwardToContainer(request, config.adminPassword);
+    if (path === EXTRACT_PATH && request.method === "POST") return passSession(await this.extractInvoice(forwarded));
+    const response = await container.getTcpPort(PORT).fetch(forwarded);
     return passSession(response);
+  }
+
+  // The container reads the PDF and builds the model request. This object holds the AI binding,
+  // runs it, and hands the raw output back to the container, which validates and caches it.
+  private async extractInvoice(forwarded: Request): Promise<Response> {
+    const container = this.ctx.container;
+    if (!container) return jsonReply(503, { error: "later" });
+    const port = container.getTcpPort(PORT);
+    const token = (await this.ctx.storage.get<string>(TOKEN_KEY)) ?? "";
+    const headers = new Headers(forwarded.headers);
+    if (token) headers.set("x-fragtblik-sync", token);
+    headers.set("x-fragtblik-ai-bridge", "1");
+    const first = await port.fetch(new Request(forwarded, { headers }));
+    if (first.status !== 202 || first.headers.get("x-fragtblik-ai-job") !== "1") return first;
+    let job: ExtractJob;
+    try {
+      job = (await first.json()) as ExtractJob;
+    } catch {
+      return jsonReply(502, { error: "ai", message: "Udtrækket kunne ikke startes." });
+    }
+    const model = typeof job.model === "string" ? job.model : "";
+    if (typeof job.id !== "string" || !model.startsWith("@cf/")) {
+      return jsonReply(502, { error: "ai", message: "Udtrækket kunne ikke startes." });
+    }
+    const ai = this.env.AI;
+    if (!ai || typeof ai.run !== "function") {
+      return jsonReply(503, { error: "ai-unavailable", message: "Workers AI er ikke slået til på Worker'en, så PDF'ens linjer kan ikke læses. Brug en CSV." });
+    }
+    const gateway = (this.env.AI_GATEWAY_ID ?? "").trim();
+    let output: unknown;
+    try {
+      output = await ai.run(model, job.inputs, /^[\w-]{1,64}$/.test(gateway) ? { gateway: { id: gateway } } : undefined);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Workers AI svarede ikke.";
+      return jsonReply(502, { error: "ai", message: `Workers AI: ${message}`.slice(0, 200) });
+    }
+    const done = await port.fetch(new Request(`http://container${EXTRACT_DONE_PATH}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-fragtblik-sync": token },
+      body: JSON.stringify({ job: job.id, output }),
+    }));
+    return new Response(done.body, {
+      status: done.status,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
   }
 
   private async startAndWait(config: StartConfig): Promise<void> {
@@ -444,7 +497,14 @@ async function fingerprintOf(secret: string): Promise<string> {
 
 function isClosedPath(pathname: string): boolean {
   const path = pathname.replace(/\/$/, "") || "/";
-  return path === ADMIN_SYNC_PATH || path === INVOICE_MAIL_PATH;
+  return path === ADMIN_SYNC_PATH || path === INVOICE_MAIL_PATH || path === EXTRACT_DONE_PATH;
+}
+
+function jsonReply(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
 }
 
 function cookieHeader(request: Request): string {
@@ -506,6 +566,7 @@ async function forwardToContainer(request: Request, secret: string): Promise<Req
   headers.delete("x-fragtblik-admin-secret");
   headers.delete("x-fragtblik-database-url");
   headers.delete("x-fragtblik-sync");
+  headers.delete("x-fragtblik-ai-bridge");
   const carrySecret = (path === "/api/me" || path === "/api/login") && usablePassword(secret) && headerSafe(secret);
   let body: ArrayBuffer | string | undefined;
   if (method !== "GET" && method !== "HEAD") {
@@ -557,6 +618,7 @@ export default {
     headers.delete("x-fragtblik-admin-secret");
     headers.delete("x-fragtblik-database-url");
     headers.delete("x-fragtblik-mail-ingress");
+    headers.delete("x-fragtblik-ai-bridge");
     const secret = (env.FRAGTBLIK_ADMIN_PASSWORD ?? "").trim();
     if (usablePassword(secret)) headers.set("x-fragtblik-admin-secret", secret);
     const databaseUrl = (env.DATABASE_URL ?? "").trim();

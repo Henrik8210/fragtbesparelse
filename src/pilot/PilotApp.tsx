@@ -14,6 +14,7 @@ import {
 import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
 import { loadMailFile, saveBlob } from "./mailFiles.ts";
+import { ExtractPanel } from "./ExtractPanel.tsx";
 import { HeroMotion } from "./HeroMotion.tsx";
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
@@ -936,6 +937,7 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
                   disabled={!openFile || (fetching?.fileId === open.fileId && fetching.percent !== -1 && fetching.percent !== 100)}
                 >Hent</button>
               </div>
+              <ExtractPanel fileId={open.fileId} companyId={orgId} />
               <InvoicePages fileId={open.fileId} companyId={orgId} />
             </>
           ) : <p>Denne mail har ingen PDF.</p>}

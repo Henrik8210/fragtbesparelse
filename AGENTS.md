@@ -52,7 +52,7 @@ npm test
 npm run build
 ```
 
-`npm run build` is `tsc -b && vite build`, then the migration script, which does nothing without `DATABASE_URL`. Oxlint warnings do not fail the lint script. `npm test` runs Vitest on the `*.test.ts` files next to the code they cover: the invoice check in `src/pilot/freight.ts`, CSV import in `src/pilot/csv.ts`, the sample orgs, bill parsing, the carrier index, session cookies and passwords in `server/`, invoice mail routing, and the `/health` revision. Add a test beside pure logic you change. Check the UI in a browser.
+`npm run build` is `tsc -b && vite build`, then the migration script, which does nothing without `DATABASE_URL`. Oxlint warnings do not fail the lint script. `npm test` runs Vitest on the `*.test.ts` files next to the code they cover: the invoice check in `src/pilot/freight.ts`, CSV import in `src/pilot/csv.ts`, the sample orgs, bill parsing, the carrier index, session cookies and passwords in `server/`, invoice mail routing, PDF invoice extraction with a mocked model call, and the `/health` revision. Add a test beside pure logic you change. Check the UI in a browser.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every PR and push to main: typecheck, lint, test, and build, plus `wrangler deploy --dry-run`, which builds the Docker image and bundles the Worker without uploading. On a push to main it then runs `wrangler deploy`, only when the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set, and waits until `/health` answers the new revision. Without them the deploy job is skipped and says so. Bump `REVISION` in `deploy/revision.ts` when a deploy must restart the running container.
 
@@ -136,6 +136,6 @@ Keep these unless the task changes them:
 
 Do not add a database, a server, or an auth library for data that only needs to stay in this browser. `localStorage` and `sessionStorage` are the store.
 
-Do not send bill files to a third party. Do not `eval` file contents. Render names as text so React escapes them.
+Do not send bill files to a third party. The one exception Henrik approved is a PDF invoice read by Cloudflare Workers AI, described in `DEPLOY.md` under PDF-linjer. The code is in `src/pilot/invoiceExtract.ts`, `server/invoiceExtract.ts`, and the Durable Object. Its lines are a model extract with a sum check and a confidence. They are not a carrier parser. Do not `eval` file contents. Render names as text so React escapes them.
 
 Do not invent companies, lanes, or kroner figures inside `portfolio.ts` to make a screen look fuller. The six companies are the whole sample set.

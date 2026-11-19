@@ -7,3 +7,4 @@ dist
 logs
 .github
 **/*.test.ts
+**/fixtures
