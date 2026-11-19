@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { companyIdFromRecipient, decodeMailBody, invoiceAddress, isMailFileId } from "./invoiceMail.ts";
+import { carrierFromFile, companyIdFromRecipient, decodeMailBody, invoiceAddress, isMailFileId, uploadType } from "./invoiceMail.ts";
 
 describe("invoice mail recipients", () => {
   it("builds the company address on freightlytics.io", () => {
@@ -34,6 +35,26 @@ describe("decodeMailBody", () => {
     expect(decodeMailBody(raw)).toBe(raw);
     expect(decodeMailBody(Buffer.from('{"v":1,"raw":""}'))).toBe("bad");
     expect(decodeMailBody(Buffer.from('{"v":1,"raw":'))).toBe("bad");
+  });
+});
+
+describe("uploadType", () => {
+  it("accepts invoice files and checks that a .pdf really is one", () => {
+    expect(uploadType("faktura.pdf", Buffer.from("%PDF-1.7 ..."))).toBe("application/pdf");
+    expect(uploadType("Faktura.CSV", Buffer.from("a;b\n1;2"))).toBe("text/csv");
+    expect(uploadType("faktura.pdf", Buffer.from("not a pdf"))).toBeNull();
+    expect(uploadType("faktura.csv", Buffer.from("%PDF-1.7"))).toBeNull();
+    expect(uploadType("faktura.exe", Buffer.from("MZ"))).toBeNull();
+    expect(uploadType("faktura", Buffer.from("a;b"))).toBeNull();
+  });
+});
+
+describe("carrierFromFile", () => {
+  it("reads PostNord from the Nordhavn test PDF and a CSV, and nothing from other files", async () => {
+    const pdf = readFileSync(new URL("./fixtures/nordhavn-living-testfaktura.pdf", import.meta.url));
+    expect(await carrierFromFile("nordhavn-living-testfaktura.pdf", pdf)).toBe("PostNord");
+    expect(await carrierFromFile("faktura.csv", Buffer.from("Transportør: GLS\nforsendelse;dato\n"))).toBe("GLS");
+    expect(await carrierFromFile("faktura.xlsx", Buffer.from("GLS"))).toBe("");
   });
 });
 

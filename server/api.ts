@@ -4,7 +4,7 @@ import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
-import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
+import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
 import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
@@ -85,21 +85,26 @@ function missingTable(error: unknown): boolean {
 }
 
 const demoHits = new Map<string, { n: number; reset: number }>();
+const uploadHits = new Map<string, { n: number; reset: number }>();
 
-function demoLimited(ip: string): boolean {
+function hourlyLimited(hits: Map<string, { n: number; reset: number }>, key: string, max: number): boolean {
   const now = Date.now();
-  const current = demoHits.get(ip);
+  const current = hits.get(key);
   if (!current || current.reset <= now) {
-    if (demoHits.size > 5000) {
-      for (const [key, item] of demoHits) {
-        if (item.reset <= now) demoHits.delete(key);
+    if (hits.size > 5000) {
+      for (const [name, item] of hits) {
+        if (item.reset <= now) hits.delete(name);
       }
     }
-    demoHits.set(ip, { n: 1, reset: now + 60 * 60 * 1000 });
+    hits.set(key, { n: 1, reset: now + 60 * 60 * 1000 });
     return false;
   }
   current.n += 1;
-  return current.n > 8;
+  return current.n > max;
+}
+
+function demoLimited(ip: string): boolean {
+  return hourlyLimited(demoHits, ip, 8);
 }
 
 function clientIp(req: IncomingMessage): string {
@@ -678,6 +683,39 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       } catch (error) {
         send(res, 200, { address: invoiceAddress(companyId), ready: false, error: publicDbError(error), mails: [] });
       }
+      return;
+    }
+
+    if (method === "POST" && path === "/api/invoice-mail/upload") {
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      if (!companyId || !canSee(user, companyId) || !companyIdFromRecipient(invoiceAddress(companyId))) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      if (hourlyLimited(uploadHits, user.id, 60)) {
+        send(res, 429, { error: "limit", message: "For mange uploads lige nu. Prøv igen senere." });
+        return;
+      }
+      const uploaded = await readLimited(req, MAX_MAIL_BYTES);
+      if (uploaded === "large") {
+        send(res, 413, { error: "large", message: "Filen må fylde højst 8 MB." });
+        return;
+      }
+      const filename = text(url.searchParams.get("name") ?? "", 120);
+      const stored = await storeUploadedInvoice(companyId, user.name || user.username, filename, uploaded);
+      if (stored.result === "stored") {
+        send(res, 201, { mail: stored.mail });
+        return;
+      }
+      const replies = {
+        type: [400, "Vælg en PDF, CSV, TSV, TXT, XML eller Excel-fil."],
+        empty: [400, "Filen er tom."],
+        large: [413, "Filen må fylde højst 8 MB."],
+        unknown: [404, "Organisationen findes ikke."],
+        database: [503, "Fakturaen blev ikke gemt. Fakturatabellerne svarer ikke."],
+      } as const;
+      const [status, message] = replies[stored.result];
+      send(res, status, { error: stored.result, message });
       return;
     }
 

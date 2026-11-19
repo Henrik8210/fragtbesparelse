@@ -146,7 +146,7 @@ export async function withDatabase<T>(run: (query: SqlQuery) => Promise<T>): Pro
   }
 }
 
-// Mail, the Modtaget list, and sessions use this. A set DATABASE_URL never falls
+// Mail, the Fakturaer list, and sessions use this. A set DATABASE_URL never falls
 // through to the local database. allowLocal is only for a process with no URL.
 export async function postgresSql<T = Record<string, unknown>>(text: string, params: unknown[] = [], allowLocal = false): Promise<T[]> {
   if (databaseUrl === "") {

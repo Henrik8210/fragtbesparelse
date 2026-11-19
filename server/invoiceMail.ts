@@ -1,7 +1,9 @@
 import PostalMime from "postal-mime";
 import type { Attachment, Email } from "postal-mime";
 import { customers } from "../src/data/portfolio.ts";
+import { carrierInDocument } from "../src/pilot/carrierName.ts";
 import { postgresSql, publicDbError, storesInPostgres, withDatabase, type SqlQuery } from "./db.ts";
+import { pdfText } from "./pdfText.ts";
 
 export const MAIL_DOMAIN = "freightlytics.io";
 export const MAX_MAIL_BYTES = 8_000_000;
@@ -42,8 +44,40 @@ export function companyIdFromRecipient(recipient: string): string | null {
   return local;
 }
 
-export type MailFile = { id: string; filename: string; bytes: number };
+export type MailFile = { id: string; filename: string; bytes: number; carrier: string };
 export type MailItem = { id: string; sender: string; subject: string; receivedAt: string; files: MailFile[] };
+
+const CARRIER_KEEP = 2000;
+const fileCarriers = new Map<string, string>();
+
+function rememberCarrier(fileId: string, carrier: string) {
+  fileCarriers.set(fileId, carrier);
+  while (fileCarriers.size > CARRIER_KEEP) {
+    const oldest = fileCarriers.keys().next().value;
+    if (oldest === undefined) break;
+    fileCarriers.delete(oldest);
+  }
+}
+
+/** Carrier printed in a PDF's text layer. Empty for other files and for PDFs that name none. */
+export async function carrierFromFile(filename: string, bytes: Uint8Array): Promise<string> {
+  const pdf = bytes.length > 5 && Buffer.from(bytes.subarray(0, 5)).toString("latin1") === "%PDF-";
+  if (!pdf && !/\.(csv|tsv|txt)$/i.test(filename)) return "";
+  try {
+    const text = pdf ? await pdfText(bytes) : Buffer.from(bytes.subarray(0, 200_000)).toString("utf8");
+    return carrierInDocument(text);
+  } catch {
+    return "";
+  }
+}
+
+async function carriersFor(files: { id: string; filename: string }[]): Promise<void> {
+  for (const file of files) {
+    if (fileCarriers.has(file.id)) continue;
+    const stored = await readInvoiceFile(file.id).catch(() => null);
+    rememberCarrier(file.id, stored ? await carrierFromFile(stored.filename, stored.content) : "");
+  }
+}
 
 export async function listInvoiceMail(companyId: string): Promise<{ ready: boolean; mails: MailItem[] }> {
   const [mails, files] = await Promise.all([
@@ -63,6 +97,8 @@ export async function listInvoiceMail(companyId: string): Promise<{ ready: boole
       [companyId],
     ),
   ]);
+  const listed = new Set(mails.map((mail) => mail.id));
+  await carriersFor(files.filter((file) => listed.has(file.mail_id)));
   return {
     ready: true,
     mails: mails.map((mail) => ({
@@ -74,6 +110,7 @@ export async function listInvoiceMail(companyId: string): Promise<{ ready: boole
         id: file.id,
         filename: file.filename,
         bytes: Number(file.byte_size),
+        carrier: fileCarriers.get(file.id) ?? "",
       })),
     })),
   };
@@ -158,6 +195,82 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
   return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
 }
 
+const UPLOAD_TYPES: Record<string, string> = {
+  pdf: "application/pdf",
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  txt: "text/plain",
+  xml: "application/xml",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+
+export function uploadType(filename: string, bytes: Uint8Array): string | null {
+  const extension = filename.toLowerCase().match(/\.([a-z]+)$/)?.[1] ?? "";
+  const mime = UPLOAD_TYPES[extension];
+  if (!mime) return null;
+  const pdf = bytes.length > 5 && Buffer.from(bytes.subarray(0, 5)).toString("latin1") === "%PDF-";
+  if ((extension === "pdf") !== pdf) return null;
+  return mime;
+}
+
+export type UploadedInvoice =
+  | { result: "stored"; mail: MailItem }
+  | { result: "type" | "empty" | "large" | "unknown" }
+  | { result: "database"; message: string };
+
+/** A file added by hand on Fakturaer. It is stored as a mail row so the list, the viewer and the PDF read treat it like received mail. */
+export async function storeUploadedInvoice(companyId: string, uploader: string, filename: string, bytes: Buffer): Promise<UploadedInvoice> {
+  if (bytes.length === 0) return { result: "empty" };
+  if (bytes.length > MAX_MAIL_BYTES) return { result: "large" };
+  const name = fileName(filename, "");
+  const mime = uploadType(name, bytes);
+  if (!mime || name === "vedhaeftning") return { result: "type" };
+  try {
+    if ((await ensureMailbox(companyId)) !== "ok") return { result: "unknown" };
+  } catch (error) {
+    return { result: "database", message: publicDbError(error) };
+  }
+  const mailId = crypto.randomUUID();
+  const subject = clean(name.replace(/\.[^.]+$/, ""), 200) || name;
+  const sender = clean(`Uploadet af ${uploader}`, 200);
+  let fileId = "";
+  try {
+    await withDatabase(async (query) => {
+      await query(
+        "insert into public.invoice_mail (id, company_id, sender, subject) values ($1, $2, $3, $4)",
+        [mailId, companyId, sender, subject],
+      );
+      fileId = await insertFile(query, mailId, companyId, { name, mime, bytes });
+    });
+    const rows = await postgresSql<{ received_at: Date | string }>(
+      `select m.received_at from public.invoice_mail m
+       join public.invoice_mail_files f on f.mail_id = m.id and f.company_id = m.company_id
+       where m.id = $1 and m.company_id = $2 and f.id = $3`,
+      [mailId, companyId, fileId],
+    );
+    if (!rows[0]) {
+      await dropMail(mailId, companyId);
+      return { result: "database", message: "invoice file was not stored" };
+    }
+    const carrier = await carrierFromFile(name, bytes);
+    rememberCarrier(fileId, carrier);
+    return {
+      result: "stored",
+      mail: {
+        id: mailId,
+        sender,
+        subject,
+        receivedAt: receivedStamp(rows[0].received_at),
+        files: [{ id: fileId, filename: name, bytes: bytes.length, carrier }],
+      },
+    };
+  } catch (error) {
+    await dropMail(mailId, companyId);
+    return { result: "database", message: publicDbError(error) };
+  }
+}
+
 export function invoiceMailReply(result: AcceptedMail, inPostgres = storesInPostgres()): { status: number; body: Record<string, unknown> } {
   if (result.result === "stored" && result.postgres && result.id) {
     return { status: 200, body: { ok: true, id: result.id, companyId: result.companyId, postgres: true } };
@@ -196,8 +309,9 @@ async function ensureMailbox(companyId: string): Promise<"ok" | "unknown"> {
   return "ok";
 }
 
-async function insertFile(query: SqlQuery, mailId: string, companyId: string, file: { name: string; mime: string; bytes: Buffer }): Promise<void> {
-  const values = [crypto.randomUUID(), mailId, companyId, file.name, file.mime, file.bytes.length];
+async function insertFile(query: SqlQuery, mailId: string, companyId: string, file: { name: string; mime: string; bytes: Buffer }): Promise<string> {
+  const id = crypto.randomUUID();
+  const values = [id, mailId, companyId, file.name, file.mime, file.bytes.length];
   const encoded = file.bytes.toString("base64");
   await query("savepoint file_insert");
   try {
@@ -216,6 +330,7 @@ async function insertFile(query: SqlQuery, mailId: string, companyId: string, fi
       [...values, file.bytes],
     );
   }
+  return id;
 }
 
 function filesFrom(parsed: Email): { name: string; mime: string; bytes: Buffer }[] | "large" {

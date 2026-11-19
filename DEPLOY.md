@@ -119,7 +119,7 @@ No further SQL is required for a mail that was rejected. After `npx wrangler dep
 
 ## PDF-linjer med Workers AI
 
-A PDF from Modtaget or a PDF uploaded in Nyt fakturatjek is read into invoice lines. The container reads the PDF's text layer with pdfjs and builds a JSON-schema request. The Durable Object runs it on the `AI` binding (`"ai": { "binding": "AI" }` in `wrangler.jsonc`) with `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, then posts the model output back to the container on `/api/internal/invoice-extract` with the sync token. The container validates the lines, checks their sum against the invoice total, sets a confidence, and caches the result per company and file hash. A scanned PDF with no text layer is not read.
+A PDF on Fakturaer (received by mail or added there with Tilføj faktura) or a PDF uploaded in Nyt fakturatjek is read into invoice lines. The container reads the PDF's text layer with pdfjs and builds a JSON-schema request. The Durable Object runs it on the `AI` binding (`"ai": { "binding": "AI" }` in `wrangler.jsonc`) with `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, then posts the model output back to the container on `/api/internal/invoice-extract` with the sync token. The container validates the lines, checks their sum against the invoice total, sets a confidence, and caches the result per company and file hash. A scanned PDF with no text layer is not read.
 
 The binding needs no secret. Workers AI must be available on the Cloudflare account. Usage above the free 10,000 neurons a day needs the Workers Paid plan. One small invoice costs about $0.001 to $0.005. Each user can start at most 60 new reads an hour.
 
