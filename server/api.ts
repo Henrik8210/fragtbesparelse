@@ -9,7 +9,7 @@ import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts"
 import { agreementStore, createAgreement, deleteAgreement, listAgreements, readAgreement, updateAgreement } from "./priceAgreements.ts";
 import { agreementCreateSchema, agreementPatchSchema } from "../src/pilot/agreementRecord.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
-import { observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
+import { observeAgreementEdits, observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, runBatches, takeRun } from "./invoiceExtract.ts";
 import { AGREEMENT_NO_TEXT } from "../src/pilot/agreementExtract.ts";
@@ -778,6 +778,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       try {
         const saved = await createAgreement(companyId, parsed.data, by);
+        void observeAgreementEdits(saved.agreement);
         send(res, 201, { agreement: saved.agreement, store: saved.store });
       } catch (error) {
         if ((error as Error).message !== "conflict") throw error;

@@ -244,3 +244,23 @@ export function browserAgreementInput(agreement: Agreement): AgreementCreate | n
   });
   return parsed.success ? parsed.data : null;
 }
+
+/** How many prices a person changed in review: rate rows, items, grid cells and surcharges, counting added or removed ones. */
+export function editedPriceCount(record: Pick<AgreementRecord, "original" | "rows" | "terms">): number {
+  const differ = (left: unknown[], right: unknown[]) => {
+    let count = 0;
+    for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+      if (canonical(left[index] ?? null) !== canonical(right[index] ?? null)) count += 1;
+    }
+    return count;
+  };
+  const pick = (row: Partial<RateRow>) => RATE_KEYS.map((key) => row[key] ?? null);
+  const rates = differ(record.original.rates.map(pick), record.rows.map(pick));
+  const grids = record.terms.grids.reduce((sum, grid, index) => {
+    const before = record.original.grids[index] as typeof grid | undefined;
+    if (!before) return sum + grid.rows.reduce((cells, row) => cells + row.cells.length, 0);
+    const cells = (rows: typeof grid.rows) => rows.flatMap((row) => row.cells);
+    return sum + differ(cells(before.rows ?? []), cells(grid.rows)) + differ(before.minimum ?? [], grid.minimum) + differ(before.maximum ?? [], grid.maximum);
+  }, 0);
+  return rates + differ(record.original.items, record.terms.items) + grids + differ(record.original.surcharges, record.terms.surcharges);
+}

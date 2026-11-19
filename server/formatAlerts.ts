@@ -7,6 +7,7 @@ import {
 import { lineChanges, type InvoiceCheck } from "../src/pilot/invoiceCheck.ts";
 import { EXTRACT_VERSION, type InvoiceExtract } from "../src/pilot/invoiceExtract.ts";
 import { AGREEMENT_CACHE_PREFIX, AGREEMENT_EXTRACT_VERSION, type AgreementExtract } from "../src/pilot/agreementExtract.ts";
+import { editedPriceCount, type AgreementRecord } from "../src/pilot/agreementRecord.ts";
 import { postgresSql, storesInPostgres, type SqlQuery } from "./db.ts";
 import { cachedExtract, sha256Of } from "./invoiceExtract.ts";
 import { readInvoiceFile } from "./invoiceMail.ts";
@@ -297,4 +298,22 @@ export function observeExtract(companyId: string, extract: InvoiceExtract | Agre
   return "kind" in extract && extract.kind === "agreement"
     ? observeAgreementExtract(companyId, extract)
     : observeInvoiceExtract(companyId, extract as InvoiceExtract, fileId);
+}
+
+/** After a PDF agreement is saved: heavy edits in the review are a signal, like edits in Check faktura. */
+export async function observeAgreementEdits(record: AgreementRecord): Promise<FormatFinding | null> {
+  const extract = record.extract;
+  if (record.source !== "pdf" || !extract || !record.changed) return null;
+  const edited = editedPriceCount(record);
+  if (edited === 0) return null;
+  await loadLayouts("agreement", `${AGREEMENT_CACHE_PREFIX}${extract.sha256}`);
+  return observeDocument({
+    kind: "agreement",
+    companyId: record.companyId,
+    documentId: `${record.companyId}:${AGREEMENT_CACHE_PREFIX}${extract.sha256}`,
+    carrier: carrierKey(extract.carrier),
+    filename: extract.filename,
+    fingerprint: extract.layout ?? null,
+    signals: { ...agreementSignals(extract, edited), unanchored: 0, unmapped: [], lowConfidence: false },
+  });
 }

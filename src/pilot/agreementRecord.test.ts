@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  agreementCreateSchema, browserAgreementInput, extractOriginalRows, newRecord, patchRecord, recordToAgreement,
+  agreementCreateSchema, browserAgreementInput, editedPriceCount, extractOriginalRows, newRecord, patchRecord, recordToAgreement,
 } from "./agreementRecord.ts";
 import type { AgreementExtract } from "./agreementExtract.ts";
 import { loadAgreements, saveAgreements, type Agreement } from "./agreements.ts";
@@ -73,5 +73,20 @@ describe("browser agreements", () => {
     expect(loadAgreements()).toHaveLength(1);
     saveAgreements([]);
     expect(store.has("freightlytics-agreements")).toBe(false);
+  });
+});
+
+describe("edited prices", () => {
+  it("counts changed rates, items, grid cells and surcharges against what was read", () => {
+    const grid = {
+      name: "G", category: "", unit: "", currency: "DKK", rowLabel: "", note: "",
+      columns: [{ label: "A", detail: "" }, { label: "B", detail: "" }],
+      rows: [{ label: "1", cells: [1, 2] }, { label: "2", cells: [3, 4] }], minimum: [1, 2], maximum: [],
+    };
+    const terms = { items: [], grids: [grid], surcharges: [], conditions: [] };
+    const base = newRecord(agreementCreateSchema.parse({ name: "A", rows: [row], terms }), "x", by, null);
+    expect(editedPriceCount(base)).toBe(0);
+    const edited = { ...grid, rows: [{ label: "1", cells: [1, 5] }, { label: "2", cells: [3, 6] }], minimum: [1, 9] };
+    expect(editedPriceCount({ ...base, rows: [{ ...row, baseOre: 1 }, row], terms: { ...terms, grids: [edited] } })).toBe(2 + 3);
   });
 });

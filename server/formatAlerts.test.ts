@@ -5,7 +5,8 @@ import { linesFromExtract } from "../src/pilot/invoiceCheck.ts";
 import { validateExtract } from "../src/pilot/invoiceExtract.ts";
 import type { SqlQuery } from "./db.ts";
 import { validateAgreementExtract } from "../src/pilot/agreementExtract.ts";
-import { agreementSignals, formatNoticeId, observeCheckEdits, observeDocument, observeExtract, observeInvoiceExtract, setFormatDatabase } from "./formatAlerts.ts";
+import { agreementCreateSchema, newRecord } from "../src/pilot/agreementRecord.ts";
+import { agreementSignals, formatNoticeId, observeAgreementEdits, observeCheckEdits, observeDocument, observeExtract, observeInvoiceExtract, setFormatDatabase } from "./formatAlerts.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
 
 const admin = { role: "admin" as const, company_id: null };
@@ -223,5 +224,21 @@ describe("format change notices", () => {
         rows: [{ label: "1", cells: ["100,50", "207,75"] }], minimum: ["90,00", "180,00"], maximum: [] }],
     }, text, { sha256: "d".repeat(64), filename: "d.pdf" });
     expect(agreementSignals(extract, 2)).toEqual({ lines: 4, unanchored: 1, unmapped: ["extraField"], mismatchOre: null, lowConfidence: extract.confidence === "low", edited: 2 });
+  });
+
+  it("raises heavy edits in the agreement review once the agreement is saved", async () => {
+    const text = "Lagerleje\nPallelagerplads pr. uge  9,40  DKK\nOrdregebyr pr. ordre  6,85  DKK\nPluk pr. linje  1,92  DKK";
+    const item = (description: string, price: string) => ({ category: "Lagerleje", description, unit: "pr. uge", price, currency: "DKK", note: "" });
+    const extract = validateAgreementExtract({
+      carrier: "Nordlager", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], grids: [], surcharges: [], conditions: [],
+      items: [item("Pallelagerplads", "9,40"), item("Ordregebyr", "6,85"), item("Pluk", "1,92")],
+    }, text, { sha256: "e".repeat(64), filename: "nordlager.pdf" });
+    const terms = { items: [{ ...extract.items[0], price: 9.9 }, { ...extract.items[1], price: 7.5 }, extract.items[2]].map(({ issues: _issues, ...rest }) => rest), grids: [], surcharges: [], conditions: [] };
+    const record = newRecord(agreementCreateSchema.parse({ rows: [], terms, source: "pdf", extractSha256: extract.sha256 }), "kolding-table-co", { id: "u1", name: "Henrik" }, extract);
+    expect(record.changed).toBe(true);
+    const finding = await observeAgreementEdits(record);
+    expect(finding?.reasons).toEqual(["2 af 3 priser rettet i gennemsynet af prisaftalen"]);
+    expect((await listNotices(query, admin))[0].detail?.docKind).toBe("agreement");
+    expect(await observeAgreementEdits({ ...record, source: "csv" })).toBeNull();
   });
 });
