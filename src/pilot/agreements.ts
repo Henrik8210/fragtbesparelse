@@ -1,4 +1,5 @@
 import { importRows, missingFields, parseCsv, suggestMapping } from "./csv.ts";
+import { agreementTermsSchema, hasTerms, type AgreementTerms } from "./agreementFormat.ts";
 import type { RateRow } from "./freight.ts";
 
 const KEY = "freightlytics-agreements";
@@ -10,7 +11,10 @@ export type Agreement = {
   carrier: string;
   from: string;
   to: string;
+  /** Parcel rate rows the invoice check prices against. Empty for an agreement with only other terms. */
   rows: RateRow[];
+  /** Price items, grids, surcharges and conditions (agreement format 2). */
+  terms?: AgreementTerms;
   createdAt: string;
   sample: boolean;
   ended?: string;
@@ -101,8 +105,12 @@ export function agreementFromRows(
   rows: RateRow[],
   fields: { orgId: string; name: string; carrier: string; from: string; to: string },
   now = new Date(),
+  terms?: AgreementTerms,
 ): Agreement {
-  if (!rows.length) throw new Error("Tilføj mindst én pris.");
+  const checked = terms ? agreementTermsSchema.safeParse(terms) : null;
+  if (checked && !checked.success) throw new Error(checked.error.issues[0]?.message ?? "Aftalens priser kunne ikke gemmes.");
+  const kept = checked?.success && hasTerms(checked.data) ? checked.data : undefined;
+  if (!rows.length && !kept) throw new Error("Tilføj mindst én pris.");
   const span = rowSpan(rows);
   const from = fields.from || span.from;
   const to = fields.to || span.to;
@@ -115,6 +123,7 @@ export function agreementFromRows(
     from,
     to,
     rows: rows.map((row) => ({ ...row, from: row.from || from, to: row.to || to })),
+    ...(kept ? { terms: kept } : {}),
     createdAt: now.toISOString(),
     sample: false,
   };

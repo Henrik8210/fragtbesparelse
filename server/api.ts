@@ -9,8 +9,7 @@ import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts"
 import { listNotices, markNoticeSeen } from "./notifications.ts";
 import { observeCheckEdits, observeInvoiceExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
-import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
-import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
+import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, runBatches, takeRun } from "./invoiceExtract.ts";
 import { AGREEMENT_NO_TEXT } from "../src/pilot/agreementExtract.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
@@ -275,11 +274,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 404, { error: "missing" });
         return;
       }
-      const body = (await readJson(req)) as { job?: unknown; output?: unknown };
+      const body = (await readJson(req)) as { job?: unknown; output?: unknown; outputs?: unknown };
       const job = typeof body.job === "string" ? body.job : "";
       try {
         const origin = takeJobFile(job);
-        const extract = await closeJob(job, body.output);
+        const extract = await closeJob(job, Array.isArray(body.outputs) ? body.outputs : body.output);
         if (extract === "missing") {
           send(res, 410, { error: "job", message: "Udtrækket udløb. Prøv igen." });
           return;
@@ -822,7 +821,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       try {
-        const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
+        const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
         void observeInvoiceExtract(companyId, extract, fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {

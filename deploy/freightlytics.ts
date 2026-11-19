@@ -23,7 +23,10 @@ type Env = {
   FRAGTBLIK_ADMIN_PASSWORD?: string;
 };
 
-type ExtractJob = { id?: unknown; model?: unknown; inputs?: unknown };
+type ExtractJob = { id?: unknown; model?: unknown; inputs?: unknown; batches?: unknown };
+
+const AI_CONCURRENCY = 4;
+const MAX_BATCHES = 16;
 
 type StartConfig = {
   adminPassword: string;
@@ -93,9 +96,19 @@ export class FreightlyticsContainer extends DurableObject<Env> {
       return jsonReply(503, { error: "ai-unavailable", message: "Workers AI er ikke slået til på Worker'en, så PDF'ens linjer kan ikke læses. Brug en CSV." });
     }
     const gateway = (this.env.AI_GATEWAY_ID ?? "").trim();
-    let output: unknown;
+    const options = /^[\w-]{1,64}$/.test(gateway) ? { gateway: { id: gateway } } : undefined;
+    // A long price agreement comes as several page groups; an invoice, or an older container, as one `inputs`.
+    const batches = Array.isArray(job.batches) && job.batches.length ? job.batches.slice(0, MAX_BATCHES) : [job.inputs];
+    const outputs: unknown[] = new Array(batches.length);
     try {
-      output = await ai.run(model, job.inputs, /^[\w-]{1,64}$/.test(gateway) ? { gateway: { id: gateway } } : undefined);
+      let next = 0;
+      const worker = async () => {
+        while (next < batches.length) {
+          const index = next++;
+          outputs[index] = await ai.run(model, batches[index], options);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(AI_CONCURRENCY, batches.length) }, worker));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Workers AI svarede ikke.";
       return jsonReply(502, { error: "ai", message: `Workers AI: ${message}`.slice(0, 200) });
@@ -103,7 +116,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     const done = await port.fetch(new Request(`http://container${EXTRACT_DONE_PATH}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-fragtblik-sync": token },
-      body: JSON.stringify({ job: job.id, output }),
+      body: JSON.stringify({ job: job.id, output: outputs[0], outputs }),
     }));
     return new Response(done.body, {
       status: done.status,

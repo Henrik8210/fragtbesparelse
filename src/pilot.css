@@ -274,6 +274,45 @@ small { font-size: .8rem; }
 .agreement-review .check-table input.num { min-width: 84px; }
 .agreement-review .review-flag { color: #b78105; vertical-align: middle; }
 @media (max-width: 720px) { .review-fields { grid-template-columns: 1fr 1fr; } }
+.review-sections { display: grid; gap: 4px; max-height: min(58dvh, 620px); border: 0; border-radius: 0; }
+.review-section { display: grid; gap: 6px; padding: 10px 0 14px; border-top: 1px solid var(--line); }
+.review-section:first-child { border-top: 0; padding-top: 0; }
+.review-section h3 { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: .92rem; }
+.review-section h3 small { color: var(--muted); font-size: .76rem; font-weight: 600; }
+.review-section > .check-table { border: 1px solid var(--line); border-radius: 10px; }
+.review-section > .text-button { justify-self: start; }
+.agreement-review .check-table input.short { min-width: 52px; width: 60px; }
+.review-grid { border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.review-grid + .review-grid { margin-top: 6px; }
+.review-grid > summary { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; font-size: .84rem; }
+.review-grid > summary small { color: var(--muted); }
+.review-grid[open] > summary { border-bottom: 1px solid var(--line); }
+.review-grid .grid-fields { grid-template-columns: 1.6fr 1fr 1fr .5fr 1.2fr; padding: 10px 12px 0; }
+.review-grid .grid-fields label { font-size: .74rem; }
+.review-grid .grid-fields input { height: 32px; }
+.review-grid .check-problem { margin: 8px 12px 0; }
+.grid-scroll { overflow-x: auto; padding: 8px 6px 0; }
+.price-grid th { position: static; vertical-align: bottom; }
+.price-grid th input { display: block; height: 26px; font-weight: 700; }
+.price-grid th input + input { margin-top: 2px; }
+.price-grid td input.num { min-width: 92px; }
+.agreement-review .review-section > .check-table td:nth-child(3) input { min-width: 220px; }
+.price-grid th input.detail { font-weight: 500; color: var(--muted); font-size: .72rem; }
+.price-grid td:first-child input, .price-grid th:first-child input { min-width: 130px; }
+.price-grid .grid-limit td:first-child { padding-left: 13px; color: var(--muted); font-size: .76rem; font-weight: 700; }
+.grid-actions { display: flex; justify-content: space-between; padding: 4px 12px 8px; }
+.review-conditions { display: grid; gap: 6px; margin: 0; padding-left: 22px; font-size: .82rem; }
+.review-conditions li { display: flex; gap: 6px; align-items: flex-start; }
+.review-conditions textarea { flex: 1; min-height: 32px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: .82rem; resize: vertical; }
+.review-conditions li.edited textarea { background: #fff7e6; border-color: #f1d49b; }
+.agreement-terms { display: grid; gap: 8px; margin-top: 8px; }
+.terms-grid > summary { padding: 8px 12px; cursor: pointer; font-size: .86rem; }
+.terms-grid > summary small, .terms-note { color: var(--muted); }
+.terms-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.terms-table th, .terms-table td { text-align: left; padding: 8px 12px; border-top: 1px solid var(--line); }
+.terms-table th { color: var(--muted); font-size: .74rem; font-weight: 700; }
+.terms-table td { font-variant-numeric: tabular-nums; }
+.terms-list { margin: 0; padding: 4px 12px 4px 30px; display: grid; gap: 4px; font-size: .84rem; }
 .mail-row { width: 100%; padding: 12px 18px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .mail-carrier { font-weight: 650; }
 .mail-file { overflow-wrap: anywhere; color: var(--muted); }

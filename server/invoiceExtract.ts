@@ -4,7 +4,7 @@ import {
   type AiInputs, type InvoiceExtract,
 } from "../src/pilot/invoiceExtract.ts";
 import {
-  AGREEMENT_CACHE_PREFIX, AGREEMENT_EXTRACT_VERSION, buildAgreementRequest, validateAgreementExtract,
+  AGREEMENT_CACHE_PREFIX, AGREEMENT_EXTRACT_VERSION, buildAgreementBatches, validateAgreementExtract,
   type AgreementExtract,
 } from "../src/pilot/agreementExtract.ts";
 import { postgresSql, storesInPostgres } from "./db.ts";
@@ -18,22 +18,44 @@ type AnyExtract = InvoiceExtract | AgreementExtract;
 
 export type Prepared<K extends ExtractKind = "invoice"> =
   | { result: "cached"; extract: ExtractOf<K> }
-  | { result: "ready"; kind: K; sha256: string; filename: string; text: string; inputs: AiInputs; truncated: boolean }
+  | { result: "ready"; kind: K; sha256: string; filename: string; text: string; batches: AiInputs[]; truncated: boolean }
   | { result: "no-text" | "not-pdf" | "pdf" };
 
-export type ExtractJob = { id: string; model: string; inputs: AiInputs };
+/** `inputs` is the first batch, for a Durable Object that predates `batches`. */
+export type ExtractJob = { id: string; model: string; inputs: AiInputs; batches: AiInputs[] };
 
 type Spec = {
   version: number;
   /** Agreement extracts share invoice_extracts; the prefix keeps their rows apart from an invoice with the same bytes. */
   prefix: string;
-  build: (text: string) => { inputs: AiInputs; truncated: boolean };
-  validate: (raw: unknown, text: string, meta: { sha256: string; filename: string; truncated: boolean; usage: InvoiceExtract["usage"] }) => AnyExtract;
+  /** One model call per batch. An invoice is one; a long agreement is read in page groups. */
+  build: (text: string) => { batches: AiInputs[]; truncated: boolean };
+  validate: (raw: unknown[], text: string, meta: { sha256: string; filename: string; truncated: boolean; usage: InvoiceExtract["usage"] }) => AnyExtract;
 };
 
 const SPECS: Record<ExtractKind, Spec> = {
-  invoice: { version: EXTRACT_VERSION, prefix: "", build: buildExtractRequest, validate: validateExtract },
-  agreement: { version: AGREEMENT_EXTRACT_VERSION, prefix: AGREEMENT_CACHE_PREFIX, build: buildAgreementRequest, validate: validateAgreementExtract },
+  invoice: {
+    version: EXTRACT_VERSION,
+    prefix: "",
+    build: (text) => {
+      const { inputs, truncated } = buildExtractRequest(text);
+      return { batches: [inputs], truncated };
+    },
+    validate: (raw, text, meta) => validateExtract(parseModelOutput(raw[0]), text, meta),
+  },
+  agreement: {
+    version: AGREEMENT_EXTRACT_VERSION,
+    prefix: AGREEMENT_CACHE_PREFIX,
+    build: buildAgreementBatches,
+    // A part the model answered badly is counted as unread instead of failing the whole agreement.
+    validate: (raw, text, meta) => validateAgreementExtract(raw.map((output) => {
+      try {
+        return parseModelOutput(output);
+      } catch {
+        return null;
+      }
+    }), text, meta),
+  },
 };
 
 const JOB_TTL_MS = 5 * 60 * 1000;
@@ -69,8 +91,8 @@ export async function prepareExtract<K extends ExtractKind = "invoice">(
     return { result: "pdf" };
   }
   if (text.replace(/\s/g, "").length < 20) return { result: "no-text" };
-  const { inputs, truncated } = SPECS[kind].build(text);
-  return { result: "ready", kind, sha256, filename, text, inputs, truncated };
+  const { batches, truncated } = SPECS[kind].build(text);
+  return { result: "ready", kind, sha256, filename, text, batches, truncated };
 }
 
 export async function finishExtract<K extends ExtractKind>(
@@ -78,28 +100,53 @@ export async function finishExtract<K extends ExtractKind>(
   prepared: Extract<Prepared<K>, { result: "ready" }>,
   output: unknown,
 ): Promise<ExtractOf<K>> {
-  const extract = SPECS[prepared.kind].validate(parseModelOutput(output), prepared.text, {
+  const outputs = Array.isArray(output) ? output : [output];
+  const extract = SPECS[prepared.kind].validate(outputs, prepared.text, {
     sha256: prepared.sha256,
     filename: prepared.filename,
     truncated: prepared.truncated,
-    usage: modelUsage(output),
+    usage: totalUsage(outputs),
   }) as ExtractOf<K>;
   await storeExtract(companyId, prepared.kind, extract);
   return extract;
+}
+
+function totalUsage(outputs: unknown[]): InvoiceExtract["usage"] {
+  const parts = outputs.map(modelUsage).filter((usage) => usage !== null);
+  if (!parts.length) return null;
+  return parts.reduce((sum, usage) => ({
+    inputTokens: sum.inputTokens + usage.inputTokens,
+    outputTokens: sum.outputTokens + usage.outputTokens,
+    usd: Math.round((sum.usd + usage.usd) * 1e8) / 1e8,
+  }));
+}
+
+/** Runs every batch, a few at a time, in order. */
+export async function runBatches(run: AiRun, batches: AiInputs[], concurrency = 4): Promise<unknown[]> {
+  const outputs: unknown[] = new Array(batches.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < batches.length) {
+      const index = next++;
+      outputs[index] = await run(EXTRACT_MODEL, batches[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
+  return outputs;
 }
 
 /** Full run with an injected model call, used by the REST fallback and by tests. */
 export async function extractInvoice(companyId: string, filename: string, bytes: Uint8Array, run: AiRun, refresh = false) {
   const prepared = await prepareExtract(companyId, filename, bytes, refresh);
   if (prepared.result !== "ready") return prepared;
-  const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
+  const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
   return { result: "extracted" as const, extract };
 }
 
 export async function extractAgreement(companyId: string, filename: string, bytes: Uint8Array, run: AiRun, refresh = false) {
   const prepared = await prepareExtract(companyId, filename, bytes, refresh, "agreement");
   if (prepared.result !== "ready") return prepared;
-  const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
+  const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
   return { result: "extracted" as const, extract };
 }
 
@@ -131,14 +178,15 @@ export function openJob<K extends ExtractKind>(companyId: string, prepared: Extr
     truncated: prepared.truncated,
     expires: now + JOB_TTL_MS,
   });
-  return { id, model: EXTRACT_MODEL, inputs: prepared.inputs };
+  return { id, model: EXTRACT_MODEL, inputs: prepared.batches[0], batches: prepared.batches };
 }
 
+/** `output` is one reply per batch, or a single reply from a Durable Object that predates `batches`. */
 export async function closeJob(id: string, output: unknown): Promise<AnyExtract | "missing"> {
   const job = jobs.get(id);
   jobs.delete(id);
   if (!job || job.expires < Date.now()) return "missing";
-  return finishExtract<ExtractKind>(job.companyId, { result: "ready", ...job, inputs: SPECS[job.kind].build(job.text).inputs }, output);
+  return finishExtract<ExtractKind>(job.companyId, { result: "ready", ...job, batches: [] }, output);
 }
 
 export function restRunner(): AiRun | null {

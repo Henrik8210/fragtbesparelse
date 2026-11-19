@@ -11,6 +11,7 @@ import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
 import { AuditFlow, downloadCsv } from "./audit.tsx";
 import { carrierFromMail } from "./carrierName.ts";
 import { AgreementReview } from "./AgreementReview.tsx";
+import { AgreementTermsView } from "./AgreementTerms.tsx";
 import type { AgreementExtract } from "./agreementExtract.ts";
 import { CheckEditor } from "./CheckEditor.tsx";
 import { isCheckable, isSheetName } from "./checkSource.ts";
@@ -121,7 +122,7 @@ function orgAgreements(org: Org, saved: Agreement[]): Agreement[] {
 
 function rateChoices(org: Org, checks: StoredAudit[], agreements: Agreement[]): PastSource[] {
   const { active, historic } = splitAgreements(agreements, todayIso());
-  const agreement: PastSource[] = [...active, ...historic].map((item) => ({
+  const agreement: PastSource[] = [...active, ...historic].filter((item) => item.sample || item.rows.length).map((item) => ({
     id: `agreement:${item.id}`,
     name: item.sample ? org.carrier || "Prisaftale" : item.name,
     date: item.from || item.createdAt,
@@ -2252,7 +2253,9 @@ function AgreementRow({ agreement, state, open, onToggle, onEnd, onRestore, onRe
   const period = agreement.from || agreement.to
     ? `${agreement.from ? dateLabel(agreement.from) : "—"} – ${agreement.to ? dateLabel(agreement.to) : "løbende"}`
     : "Ingen gyldighed angivet";
-  const meta = [agreement.carrier, period, `${agreement.rows.length} ${agreement.rows.length === 1 ? "pris" : "priser"}`, agreement.sample ? "Prøvedata" : ""].filter(Boolean).join(" · ");
+  const terms = agreement.terms;
+  const size = agreement.rows.length + (terms ? terms.items.length + terms.grids.length + terms.surcharges.length : 0);
+  const meta = [agreement.carrier, period, `${size} ${size === 1 ? "pris" : "priser"}`, agreement.sample ? "Prøvedata" : ""].filter(Boolean).join(" · ");
   return (
     <li className="agreement-item">
       <button type="button" className="agreement-row" aria-expanded={open} onClick={onToggle}>
@@ -2262,7 +2265,8 @@ function AgreementRow({ agreement, state, open, onToggle, onEnd, onRestore, onRe
       </button>
       {open ? (
         <div className="agreement-detail">
-          <RateTable rows={agreement.rows} />
+          {agreement.rows.length ? <RateTable rows={agreement.rows} /> : null}
+          {terms ? <AgreementTermsView terms={terms} /> : null}
           {agreement.sample ? null : (
             <div className="agreement-actions">
               {agreement.ended ? (
@@ -2333,7 +2337,7 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
     try {
       const extract = await extractAgreementUpload(chosen, org.id);
       if (turn !== picked.current) return;
-      if (!extract.rates.length) {
+      if (!extract.rates.length && !extract.items.length && !extract.grids.length && !extract.surcharges.length) {
         setProblem("Der blev ikke fundet priser i PDF'en. Brug skabelonen som CSV.");
         return;
       }
@@ -2394,7 +2398,7 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
 
   return (
     <Modal title="Tilføj prisaftale" onClose={onClose}>
-      <p>Prisaftalen gemmes i denne browser for {org.name} og kan vælges i Nyt fakturatjek. Én række pr. leveringsform og vægttrin. En PDF læses af Workers AI, og du gennemser priserne, før de gemmes.</p>
+      <p>Prisaftalen gemmes i denne browser for {org.name} og kan vælges i Nyt fakturatjek. En CSV har én række pr. leveringsform og vægttrin. En PDF læses af Workers AI: pakkepriser, lager- og ordrepriser, prisgitre, tillæg og betingelser. Du gennemser dem, før de gemmes.</p>
       <form onSubmit={submit}>
         <div className="file-pick">
           <input
