@@ -7,6 +7,7 @@ import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
+import { observeCheckEdits, observeInvoiceExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
 import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
@@ -276,11 +277,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const body = (await readJson(req)) as { job?: unknown; output?: unknown };
       const job = typeof body.job === "string" ? body.job : "";
       try {
+        const origin = takeJobFile(job);
         const extract = await closeJob(job, body.output);
         if (extract === "missing") {
           send(res, 410, { error: "job", message: "Udtrækket udløb. Prøv igen." });
           return;
         }
+        if (origin) void observeInvoiceExtract(origin.companyId, extract, origin.fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {
         send(res, 502, { error: "ai-output", message: (error as Error).message.slice(0, 200) });
@@ -718,6 +721,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       const saved = await saveCheck({ companyId, fileId, original: original.data, lines: lines.data, by: user.id, name: user.name || user.username });
+      void observeCheckEdits(companyId, saved.check);
       send(res, 200, saved);
       return;
     }
@@ -802,6 +806,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       if (bridged) {
         const job = openJob(companyId, prepared);
+        rememberJobFile(job.id, companyId, fileId);
         res.writeHead(202, { "content-type": "application/json", "x-fragtblik-ai-job": "1", "cache-control": "no-store" });
         res.end(JSON.stringify(job));
         return;
@@ -816,6 +821,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       try {
         const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
+        void observeInvoiceExtract(companyId, extract, fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {
         send(res, 502, { error: "ai", message: (error as Error).message.slice(0, 200) });

@@ -181,6 +181,7 @@ small { font-size: .8rem; }
 .notice-seen { flex: none; margin: 8px 8px 0 0; border: 0; background: transparent; color: var(--green); font: inherit; font-size: .78rem; font-weight: 700; cursor: pointer; padding: 2px 0; }
 .notice-icon { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--green-light); color: var(--green); }
 .notice-icon.demo { background: var(--amber-light); color: var(--amber); }
+.notice-icon.format_change { background: #eef1f8; color: #34406b; }
 .notice-all { display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px; margin-top: 4px; padding: 9px 10px; border: 0; border-top: 1px solid #e4f2ec; border-radius: 0 0 8px 8px; background: transparent; color: var(--green); font: inherit; font-size: .82rem; font-weight: 700; cursor: pointer; }
 .notice-all:hover { background: #f4faf7; }
 .timeline { padding: 0 18px 18px; display: grid; gap: 18px; }

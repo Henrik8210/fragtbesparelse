@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { invoiceRowSchema, type InvoiceRow } from "./freight.ts";
+import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
 
 export const EXTRACT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-export const EXTRACT_VERSION = 2;
+export const EXTRACT_VERSION = 3;
 export const MAX_PROMPT_CHARS = 36_000;
 export const MAX_EXTRACT_LINES = 400;
 const SUM_TOLERANCE_ORE = 100;
@@ -42,6 +43,8 @@ export type SumCheck = {
   status: "match" | "mismatch" | "no-total";
 };
 
+export type UnmappedField = { label: string; value: string };
+
 export type InvoiceExtract = {
   version: number;
   model: string;
@@ -58,6 +61,10 @@ export type InvoiceExtract = {
   /** Whether the invoice mentions VAT at all. Older cached extracts lack it. */
   vatStated?: boolean;
   lines: ExtractLine[];
+  /** Printed fields and lines the schema has no place for. Older cached extracts lack it. */
+  unmapped?: UnmappedField[];
+  /** Labels from the text layer, compared per carrier to notice a format change. Older cached extracts lack it. */
+  layout?: LayoutFingerprint;
   check: SumCheck;
   confidence: Confidence;
   issues: string[];
@@ -112,8 +119,17 @@ export const EXTRACT_JSON_SCHEMA: Record<string, unknown> = {
         required: ["kind", "shipment", "date", "reference", "service", "weightKg", "zone", "origin", "destination", "amount", "surcharges"],
       },
     },
+    unmapped: {
+      type: "array",
+      description: "Invoice columns, line fields or charge lines that fit none of the fields above, with their printed label and value. Empty if everything fits",
+      items: {
+        type: "object",
+        properties: { label: text, value: text },
+        required: ["label", "value"],
+      },
+    },
   },
-  required: ["carrier", "invoiceNumber", "invoiceDate", "currency", "subtotal", "vat", "total", "lines"],
+  required: ["carrier", "invoiceNumber", "invoiceDate", "currency", "subtotal", "vat", "total", "lines", "unmapped"],
 };
 
 const SYSTEM_PROMPT = `You read Danish and Nordic freight invoices and return their lines as JSON matching the schema.
@@ -126,7 +142,8 @@ Rules:
 - A route such as "Taastrup til Aarhus" goes in zone. For a surcharge or fee line, put its description in service.
 - Do not add VAT (moms), subtotal or total lines as lines. Put them in subtotal, vat and total. subtotal and vat are 0 unless the invoice prints them; never compute them.
 - amount excludes VAT.
-- Dates are YYYY-MM-DD.`;
+- Dates are YYYY-MM-DD.
+- A column, line field or charge that fits none of the fields goes in unmapped with its printed label and value. Never drop it silently. Addresses, payment details and legal text are not unmapped.`;
 
 export function buildExtractRequest(pdfText: string): { inputs: AiInputs; truncated: boolean } {
   const cleaned = pdfText.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -208,7 +225,33 @@ const outputSchema = z.object({
     amount,
     surcharges: z.array(z.object({ label: label(60), amount })).max(20).catch([]),
   }).passthrough()).max(MAX_EXTRACT_LINES * 2),
+  unmapped: z.array(z.object({ label: label(60), value: label(80) }).passthrough()).max(80).catch([]),
 }).passthrough();
+
+const TOP_KEYS = new Set(["carrier", "invoiceNumber", "invoiceDate", "currency", "subtotal", "vat", "total", "lines", "unmapped"]);
+const LINE_KEYS = new Set(["kind", "shipment", "date", "reference", "service", "weightKg", "zone", "origin", "destination", "amount", "surcharges"]);
+const MAX_UNMAPPED = 40;
+
+function printable(value: unknown): string {
+  const raw = typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? String(value) : JSON.stringify(value) ?? "";
+  return raw.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+/** The model's own unmapped list plus any key it returned that the schema does not have. */
+function unmappedFields(data: z.infer<typeof outputSchema>): UnmappedField[] {
+  const found: UnmappedField[] = data.unmapped.filter((item) => item.label).map((item) => ({ label: item.label, value: item.value }));
+  for (const [key, value] of Object.entries(data)) if (!TOP_KEYS.has(key)) found.push({ label: key.slice(0, 60), value: printable(value) });
+  for (const line of data.lines) {
+    for (const [key, value] of Object.entries(line)) if (!LINE_KEYS.has(key)) found.push({ label: key.slice(0, 60), value: printable(value) });
+  }
+  const seen = new Set<string>();
+  return found.filter((item) => {
+    const key = item.label.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, MAX_UNMAPPED);
+}
 
 const MONTHS: Record<string, number> = {
   jan: 1, feb: 2, mar: 3, apr: 4, maj: 5, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, oct: 10, nov: 11, dec: 12,
@@ -398,6 +441,8 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
     totalOre,
     vatStated,
     lines,
+    unmapped: unmappedFields(data),
+    layout: layoutFingerprint(pdfText, lines.flatMap((line) => [line.service, ...line.surcharges.map((item) => item.label)])),
     check,
     confidence,
     issues,
