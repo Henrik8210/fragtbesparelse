@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp, ClipboardList,
   FileSpreadsheet, FileText, ShieldCheck, UploadCloud, X,
@@ -15,8 +15,12 @@ import { CONFIDENCE_LABELS, extractToInvoiceRows, sharedSurchargeOre, type Invoi
 import { fetchInvoiceCheck } from "./checkClient.ts";
 import { checkedExtract, rowsFromLines, type InvoiceCheck } from "./invoiceCheck.ts";
 import { invoiceCsv, type PastSource } from "./past.ts";
+import { datedAudit, matchInvoice } from "./agreementDating.ts";
+import { AgreementMatch } from "./AgreementMatch.tsx";
+import type { Agreement } from "./agreements.ts";
+import { useAgreementChoice } from "./useAgreementChoice.ts";
 
-type Uploaded = { name: string; sheet: CsvSheet; mapping: Mapping; extract?: InvoiceExtract; checked?: InvoiceCheck };
+type Uploaded = { name: string; sheet: CsvSheet; mapping: Mapping; extract?: InvoiceExtract; checked?: InvoiceCheck; fileId?: string };
 
 export type { PastSource };
 
@@ -32,8 +36,10 @@ export function downloadCsv(name: string, contents: string) {
 }
 
 export function AuditFlow({
-  onReport, onExample, embedded = false, companyId = "", invoices = [], rates: pastRates = [],
+  onReport, onExample, embedded = false, companyId = "", invoices = [], rates: pastRates = [], agreements = [], onAddAgreement,
 }: {
+  agreements?: Agreement[];
+  onAddAgreement?: (carrier: string) => void;
   onReport: (input: AuditInput, report: AuditReport) => void;
   onExample: () => void;
   embedded?: boolean;
@@ -46,17 +52,39 @@ export function AuditFlow({
   const [name, setName] = useState("");
   const [carrier, setCarrier] = useState("");
   const [error, setError] = useState("");
+  const [localChoice, setLocalChoice] = useState("");
+  const saved = useAgreementChoice(companyId, invoice?.fileId ?? "");
+  const choice = invoice?.fileId ? saved.choice?.agreementId ?? "" : localChoice;
+  const dated = !rates && agreements.some((item) => item.sample || item.rows.length);
+  const invoiceRows = useMemo(() => {
+    if (!invoice) return null;
+    try { return importRows("invoice", invoice.sheet, invoice.mapping); } catch { return null; }
+  }, [invoice]);
+  const matchCarrier = carrier.trim() || invoice?.extract?.carrier || "";
+  const match = useMemo(
+    () => dated && invoiceRows ? matchInvoice(invoiceRows, { invoiceDate: invoice?.extract?.invoiceDate, carrier: matchCarrier, agreements, override: choice || null }) : null,
+    [dated, invoiceRows, invoice, matchCarrier, agreements, choice],
+  );
+
+  function choose(agreementId: string) {
+    if (invoice?.fileId) void saved.choose(agreementId);
+    else setLocalChoice(agreementId);
+  }
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!invoice || !rates) return;
+    if (!invoice || (!rates && !match)) return;
     try {
       const parse = <T,>(label: string, action: () => T): T => {
         try { return action(); }
         catch (cause) { throw new Error(`${label}. ${(cause as Error).message}`); }
       };
       const invoiceRows = parse("Fragtfaktura", () => importRows("invoice", invoice.sheet, invoice.mapping));
-      const rateRows = parse("Prisaftale", () => importRows("rates", rates.sheet, rates.mapping));
+      if (!rates && match?.held) throw new Error("Fakturaen venter på en ny prisaftale. Tilføj prisaftalen først.");
+      const used = new Set(match?.used.map((item) => item.agreementId) ?? []);
+      const rateRows = rates
+        ? parse("Prisaftale", () => importRows("rates", rates.sheet, rates.mapping))
+        : agreements.filter((item) => used.has(item.id)).flatMap((item) => item.rows);
       const input: AuditInput = {
         name: name.trim() || invoice.name.replace(/\.[^.]+$/, "").slice(0, 100) || "Fakturatjek",
         carrier: carrier.trim(),
@@ -65,7 +93,7 @@ export function AuditFlow({
         contribution: null,
       };
       setError("");
-      onReport(input, runAudit(invoiceRows, rateRows));
+      onReport(input, rates || !match ? runAudit(invoiceRows, rateRows) : datedAudit(invoiceRows, match, agreements));
     } catch (cause) {
       setError((cause as Error).message);
     }
@@ -100,14 +128,33 @@ export function AuditFlow({
             value={invoice}
             past={invoices}
             companyId={companyId}
-            onChange={(file) => { setInvoice(file); setError(""); }}
+            onChange={(file) => { setInvoice(file); setLocalChoice(""); setError(""); }}
             onHint={(source) => {
               if (!name.trim() && source.name) setName(source.name.replace(/\.[^.]+$/, "").slice(0, 100));
               if (!carrier.trim() && source.carrier) setCarrier(source.carrier.slice(0, 70));
             }}
           />
-          <UploadCard kind="rates" value={rates} past={pastRates} companyId={companyId} onChange={(file) => { setRates(file); setError(""); }} />
+          <UploadCard
+            kind="rates"
+            value={rates}
+            past={pastRates}
+            companyId={companyId}
+            optional={agreements.some((item) => item.sample || item.rows.length)}
+            onChange={(file) => { setRates(file); setError(""); }}
+          />
         </div>
+        {match ? (
+          <AgreementMatch
+            match={match}
+            agreements={agreements}
+            carrier={matchCarrier}
+            choice={invoice?.fileId ? saved.choice : null}
+            saving={saved.saving}
+            problem={saved.problem}
+            onChoose={choose}
+            onAdd={(name) => onAddAgreement?.(name)}
+          />
+        ) : null}
 
         <div className="panel report-info">
           <div className="icon-box"><ClipboardList size={19} /></div>
@@ -125,7 +172,7 @@ export function AuditFlow({
           <p className="quiet"><ShieldCheck size={17} /> CSV læses i browseren. En PDF læses af Workers AI hos Freightlytics. Du vælger, om resultatet skal gemmes.</p>
           <div className="actions">
             {embedded ? <button type="button" className="button secondary" onClick={onExample}><FileText size={17} /> Prøv med eksempel</button> : null}
-            <button type="submit" className="button primary" disabled={!invoice || !rates}>
+            <button type="submit" className="button primary" disabled={!invoice || (!rates && (!match || match.held))}>
               Beregn afvigelser <ArrowRight size={17} />
             </button>
           </div>
@@ -195,8 +242,10 @@ function ExtractSummary({ extract, checked }: { extract: InvoiceExtract; checked
 }
 
 function UploadCard({
-  kind, value, onChange, past, companyId, onHint,
+  kind, value, onChange, past, companyId, onHint, optional = false,
 }: {
+  /** The rate card is optional when saved agreements are matched on the invoice dates. */
+  optional?: boolean;
   kind: ImportKind;
   value: Uploaded | null;
   onChange: (value: Uploaded | null) => void;
@@ -240,7 +289,7 @@ function UploadCard({
       const sheet = "extract" in loaded ? extractSheet(loaded.extract) : parseCsv(loaded.csv);
       if (!sheet.rows.length) throw new Error("Filen har ingen datalinjer.");
       const mapping = suggestMapping(kind, sheet.headers);
-      onChange({ name: source.name, sheet, mapping, extract, checked });
+      onChange({ name: source.name, sheet, mapping, extract, checked, fileId: source.fileId });
       setPicked(source.id);
       setShowMapping(Boolean(missingFields(kind, mapping).length));
       onHint?.(extract?.carrier && !source.carrier ? { ...source, carrier: extract.carrier } : source);
@@ -292,8 +341,10 @@ function UploadCard({
       <div className="upload-heading">
         <div className="icon-box">{invoice ? <FileText size={21} /> : <FileSpreadsheet size={21} />}</div>
         <div>
-          <h2>{invoice ? "Fragtfaktura" : "Prisaftale"}</h2>
-          <p>{invoice ? "Én linje pr. forsendelse inklusive tillæg." : "Priser og tillæg pr. service og vægttrin."}</p>
+          <h2>{invoice ? "Fragtfaktura" : optional ? "Anden prisfil" : "Prisaftale"}</h2>
+          <p>{invoice ? "Én linje pr. forsendelse inklusive tillæg." : optional
+            ? "Valgfri. Uden fil bruges prisaftalen, der gjaldt på fakturaens datoer."
+            : "Priser og tillæg pr. service og vægttrin."}</p>
         </div>
       </div>
       <div className="source-switch" role="tablist" aria-label={invoice ? "Fakturaens kilde" : "Prisaftalens kilde"}>
@@ -307,7 +358,7 @@ function UploadCard({
             <p className="past-chosen"><Check size={14} /> {value.name} · {value.sheet.rows.length.toLocaleString("da-DK")} linjer <button type="button" onClick={clear}>Fjern</button></p>
           ) : null}
           {library.length === 0 ? (
-            <p className="past-empty">{past.length === 0 ? (invoice ? "Ingen tidligere fakturaer." : "Ingen tidligere prisaftaler.") : "Ingen træffere."}</p>
+            <p className="past-empty">{past.length === 0 ? (invoice ? "Ingen tidligere fakturaer." : "Ingen prisfiler fra tidligere tjek.") : "Ingen træffere."}</p>
           ) : (
             <ul className="past-list">
               {library.map((source) => (
