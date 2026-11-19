@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   invoiceRowSchema, MAX_LINES, MAX_RATES, normalizedText, rateRowSchema, STATUS_LABELS,
   type AuditReport, type InvoiceRow, type RateRow,
-} from "./freight";
+} from "./freight.ts";
 
 type Field = {
   id: string;

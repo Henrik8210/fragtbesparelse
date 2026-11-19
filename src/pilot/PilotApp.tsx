@@ -6,7 +6,9 @@ import {
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
-import { agreementFromCsv, saveAgreements, loadAgreements, sampleAgreement, splitAgreements, todayIso, type Agreement } from "./agreements.ts";
+import { agreementFromCsv, sampleAgreement, splitAgreements, todayIso, type Agreement } from "./agreements.ts";
+import { createPriceAgreement, deletePriceAgreement, listPriceAgreements, migrateBrowserAgreements, updatePriceAgreement, type AgreementStore } from "./agreementClient.ts";
+import { extractOriginalRows, recordToAgreement, type AgreementCreate, type AgreementPatch } from "./agreementRecord.ts";
 import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
 import { AuditFlow, downloadCsv } from "./audit.tsx";
 import { carrierFromMail } from "./carrierName.ts";
@@ -204,8 +206,8 @@ export function PilotApp() {
     const mails = cached ?? (libraryMail.orgId === org.id ? libraryMail.mails : []);
     return invoiceChoices(org, checks, mails);
   }, [admin, org, checks, libraryMail]);
-  const [savedAgreements, setSavedAgreements] = useState<Agreement[]>(() => loadAgreements());
-  const agreements = useMemo(() => orgAgreements(org, savedAgreements), [org, savedAgreements]);
+  const [savedAgreements, setSavedAgreements] = useState<{ orgId: string; items: Agreement[]; store: AgreementStore | ""; error: string }>({ orgId: "", items: [], store: "", error: "" });
+  const agreements = useMemo(() => orgAgreements(org, savedAgreements.orgId === org.id ? savedAgreements.items : []), [org, savedAgreements]);
   const pastRates = useMemo(() => rateChoices(org, checks, agreements), [org, checks, agreements]);
   const inCheck = view === "check" || view === "report" || view === "inbox" || view === "agreements";
   const activeTab = inCheck ? "check" : view;
@@ -265,6 +267,50 @@ export function PilotApp() {
       alive = false;
     };
   }, [refreshSession]);
+
+  useEffect(() => {
+    if (gate !== "open") return;
+    const id = org.id;
+    let gone = false;
+    migrateBrowserAgreements(id)
+      .catch(() => 0)
+      .then(() => listPriceAgreements(id))
+      .then((body) => {
+        if (!gone) setSavedAgreements({ orgId: id, items: body.agreements.map(recordToAgreement), store: body.store, error: "" });
+      })
+      .catch((error: unknown) => {
+        if (gone) return;
+        const hidden = error instanceof ApiError && (error.code === "missing" || error.code === "sign-in");
+        setSavedAgreements({ orgId: id, items: [], store: "", error: hidden ? "" : "Prisaftalerne kunne ikke hentes. Prøv igen." });
+      });
+    return () => {
+      gone = true;
+    };
+  }, [gate, org.id]);
+
+  const putAgreement = useCallback((agreement: Agreement) => {
+    setSavedAgreements((current) => current.orgId !== agreement.orgId ? current : {
+      ...current,
+      items: [...current.items.filter((item) => item.id !== agreement.id), agreement],
+    });
+  }, []);
+
+  const createAgreement = useCallback(async (input: AgreementCreate) => {
+    const saved = await createPriceAgreement(org.id, input);
+    const agreement = recordToAgreement(saved.agreement);
+    putAgreement(agreement);
+    setSavedAgreements((current) => ({ ...current, store: saved.store }));
+    return agreement;
+  }, [org.id, putAgreement]);
+
+  const patchAgreement = useCallback(async (id: string, patch: AgreementPatch) => {
+    putAgreement(recordToAgreement((await updatePriceAgreement(org.id, id, patch)).agreement));
+  }, [org.id, putAgreement]);
+
+  const removeAgreement = useCallback(async (id: string) => {
+    await deletePriceAgreement(org.id, id);
+    setSavedAgreements((current) => ({ ...current, items: current.items.filter((item) => item.id !== id) }));
+  }, [org.id]);
 
   useEffect(() => {
     if (!composer || gate !== "open") return;
@@ -665,16 +711,14 @@ export function PilotApp() {
           {view === "notifications" ? <NotificationsView unread={notices} orgs={orgs} onOpen={openNotice} /> : null}
           {view === "agreements" ? (
             <AgreementsView
+              key={org.id}
               org={org}
               agreements={agreements}
-              onChange={(next) => {
-                setSavedAgreements((current) => {
-                  const others = current.filter((item) => item.orgId !== org.id);
-                  const merged = [...others, ...next.filter((item) => !item.sample)];
-                  saveAgreements(merged);
-                  return merged;
-                });
-              }}
+              store={savedAgreements.orgId === org.id ? savedAgreements.store : ""}
+              loadError={savedAgreements.orgId === org.id ? savedAgreements.error : ""}
+              onCreate={createAgreement}
+              onPatch={patchAgreement}
+              onRemove={removeAgreement}
             />
           ) : null}
           {view === "report" && result ? (
@@ -2175,18 +2219,33 @@ function ChecksPage({ checks, onStart, onOpen }: {
   );
 }
 
-function AgreementsView({ org, agreements, onChange }: { org: Org; agreements: Agreement[]; onChange: (next: Agreement[]) => void }) {
+function AgreementsView({ org, agreements, store, loadError, onCreate, onPatch, onRemove }: {
+  org: Org;
+  agreements: Agreement[];
+  store: AgreementStore | "";
+  loadError: string;
+  onCreate: (input: AgreementCreate) => Promise<Agreement>;
+  onPatch: (id: string, patch: AgreementPatch) => Promise<void>;
+  onRemove: (id: string) => Promise<void>;
+}) {
   const [adding, setAdding] = useState(false);
+  const [problem, setProblem] = useState("");
   const today = todayIso();
   const { active, historic } = splitAgreements(agreements, today);
   const [expanded, setExpanded] = useState<string>(() => active[0]?.id ?? "");
 
+  function fail(error: unknown) {
+    setProblem(error instanceof ApiError && error.message !== error.code ? error.message : "Ændringen blev ikke gemt. Prøv igen.");
+  }
+
   function setEnded(id: string, ended: boolean) {
-    onChange(agreements.map((item) => item.id === id ? { ...item, ended: ended ? new Date().toISOString() : undefined } : item));
+    setProblem("");
+    onPatch(id, { ended: ended ? new Date().toISOString() : null }).catch(fail);
   }
 
   function remove(id: string) {
-    onChange(agreements.filter((item) => item.id !== id));
+    setProblem("");
+    onRemove(id).catch(fail);
   }
 
   const list = (items: Agreement[], state: "active" | "historic") => items.length === 0 ? (
@@ -2218,6 +2277,8 @@ function AgreementsView({ org, agreements, onChange }: { org: Org; agreements: A
         </div>
         <button className="button primary" type="button" onClick={() => setAdding(true)}><Plus size={18} /> Tilføj prisaftale</button>
       </div>
+      {loadError || problem ? <p className="org-note" role="alert">{problem || loadError}</p> : null}
+      {store === "memory" ? <p className="quiet">Tabellen price_agreements findes ikke endnu, så nye prisaftaler gemmes kun, indtil serveren genstarter.</p> : null}
       <section className="panel">
         <div className="section-heading"><h2><span className="state-dot active" aria-hidden="true" /> Aktive prisaftaler</h2><p>{active.length} {active.length === 1 ? "aftale" : "aftaler"} · bruges i nye fakturatjek</p></div>
         {list(active, "active")}
@@ -2230,8 +2291,8 @@ function AgreementsView({ org, agreements, onChange }: { org: Org; agreements: A
         <AddAgreementModal
           org={org}
           onClose={() => setAdding(false)}
-          onAdded={(agreement) => {
-            onChange([...agreements, agreement]);
+          onAdded={async (input) => {
+            const agreement = await onCreate(input);
             setExpanded(agreement.id);
             setAdding(false);
           }}
@@ -2255,7 +2316,7 @@ function AgreementRow({ agreement, state, open, onToggle, onEnd, onRestore, onRe
     : "Ingen gyldighed angivet";
   const terms = agreement.terms;
   const size = agreement.rows.length + (terms ? terms.items.length + terms.grids.length + terms.surcharges.length : 0);
-  const meta = [agreement.carrier, period, `${size} ${size === 1 ? "pris" : "priser"}`, agreement.sample ? "Prøvedata" : ""].filter(Boolean).join(" · ");
+  const meta = [agreement.carrier, period, `${size} ${size === 1 ? "pris" : "priser"}`, agreement.source === "pdf" ? "Læst fra PDF" : "", agreement.changed ? "Rettet efter indlæsning" : "", agreement.createdByName ? `Tilføjet af ${agreement.createdByName}` : "", agreement.sample ? "Prøvedata" : ""].filter(Boolean).join(" · ");
   return (
     <li className="agreement-item">
       <button type="button" className="agreement-row" aria-expanded={open} onClick={onToggle}>
@@ -2314,7 +2375,7 @@ function RateTable({ rows }: { rows: RateRow[] }) {
   );
 }
 
-function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () => void; onAdded: (agreement: Agreement) => void }) {
+function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () => void; onAdded: (input: AgreementCreate) => Promise<void> }) {
   const [name, setName] = useState("");
   const [carrier, setCarrier] = useState("");
   const [from, setFrom] = useState("");
@@ -2323,6 +2384,7 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
   const [reading, setReading] = useState("");
   const [review, setReview] = useState<AgreementExtract | null>(null);
   const [problem, setProblem] = useState("");
+  const [saving, setSaving] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const picked = useRef(0);
 
@@ -2369,16 +2431,29 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
     if (!name.trim()) setName(chosen.name.replace(/\.[^.]+$/, "").slice(0, 100));
   }
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     if (!file) {
       setProblem("Vælg prisaftalens fil.");
       return;
     }
+    let made: Agreement;
     try {
-      onAdded(agreementFromCsv(file.csv, { orgId: org.id, name, carrier, from, to }));
+      made = agreementFromCsv(file.csv, { orgId: org.id, name, carrier, from, to });
     } catch (error) {
       setProblem((error as Error).message);
+      return;
+    }
+    setSaving(true);
+    setProblem("");
+    try {
+      await onAdded({
+        name: made.name, carrier: made.carrier, from: made.from, to: made.to, ended: null,
+        rows: made.rows, source: "csv", sourceFilename: file.name, extractSha256: null,
+      });
+    } catch (error) {
+      setProblem(error instanceof ApiError && error.message !== error.code ? error.message : "Prisaftalen blev ikke gemt. Prøv igen.");
+      setSaving(false);
     }
   }
 
@@ -2390,7 +2465,11 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
           orgId={org.id}
           carriers={carrierProfiles.map((profile) => profile.name)}
           onBack={() => setReview(null)}
-          onSave={onAdded}
+          onSave={(agreement) => onAdded({
+            name: agreement.name, carrier: agreement.carrier, from: agreement.from, to: agreement.to, ended: null,
+            rows: agreement.rows, terms: agreement.terms, original: extractOriginalRows(review), source: "pdf",
+            sourceFilename: review.filename, extractSha256: /^[a-f0-9]{64}$/.test(review.sha256) ? review.sha256 : null,
+          })}
         />
       </Modal>
     );
@@ -2398,8 +2477,8 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
 
   return (
     <Modal title="Tilføj prisaftale" onClose={onClose}>
-      <p>Prisaftalen gemmes i denne browser for {org.name} og kan vælges i Nyt fakturatjek. En CSV har én række pr. leveringsform og vægttrin. En PDF læses af Workers AI: pakkepriser, lager- og ordrepriser, prisgitre, tillæg og betingelser. Du gennemser dem, før de gemmes.</p>
-      <form onSubmit={submit}>
+      <p>Prisaftalen gemmes for {org.name}, så kolleger ser den samme aftale. En CSV har én række pr. leveringsform og vægttrin. En PDF læses af Workers AI: pakkepriser, lager- og ordrepriser, prisgitre, tillæg og betingelser. Du gennemser dem, før de gemmes.</p>
+      <form onSubmit={(event) => void submit(event)}>
         <div className="file-pick">
           <input
             ref={input}
@@ -2427,7 +2506,7 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
         </div>
         <p className="quiet">Tomme datoer hentes fra filens kolonner gyldig_fra og gyldig_til.</p>
         {problem ? <p className="org-note" role="alert">{problem}</p> : null}
-        <button className="button primary" type="submit" disabled={!file}>Gem prisaftale</button>
+        <button className="button primary" type="submit" disabled={!file || saving}>{saving ? "Gemmer…" : "Gem prisaftale"}</button>
       </form>
     </Modal>
   );

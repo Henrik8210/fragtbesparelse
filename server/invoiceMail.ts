@@ -318,7 +318,7 @@ async function dropMail(mailId: string, companyId: string): Promise<void> {
   await postgresSql("delete from public.invoice_mail where id = $1 and company_id = $2", [mailId, companyId]).catch(() => undefined);
 }
 
-async function ensureMailbox(companyId: string): Promise<"ok" | "unknown"> {
+export async function ensureMailbox(companyId: string): Promise<"ok" | "unknown"> {
   const found = await postgresSql("select id from public.companies where id = $1", [companyId]);
   if (found[0]) return "ok";
   const sample = customers.find((company) => company.id === companyId);
