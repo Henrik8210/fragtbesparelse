@@ -1,3 +1,4 @@
+import type { AgreementExtract } from "./agreementExtract.ts";
 import type { InvoiceExtract } from "./invoiceExtract.ts";
 
 const KEEP = 20;
@@ -21,7 +22,7 @@ const FALLBACK: Record<string, string> = {
   missing: "Filen blev ikke fundet.",
 };
 
-async function request(url: string, body?: Blob): Promise<InvoiceExtract> {
+async function request<T = InvoiceExtract>(url: string, body?: Blob): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, {
@@ -33,7 +34,7 @@ async function request(url: string, body?: Blob): Promise<InvoiceExtract> {
   } catch {
     throw new ExtractError("network", "Forbindelsen til serveren svigtede. Prøv igen.");
   }
-  const payload = (await response.json().catch(() => null)) as { extract?: InvoiceExtract; error?: string; message?: string } | null;
+  const payload = (await response.json().catch(() => null)) as { extract?: T; error?: string; message?: string } | null;
   if (response.ok && payload?.extract) return payload.extract;
   const code = payload?.error ?? `http-${response.status}`;
   throw new ExtractError(code, payload?.message || FALLBACK[code] || "PDF'ens linjer kunne ikke læses.");
@@ -63,4 +64,11 @@ export function extractMailFile(fileId: string, companyId: string): Promise<Invo
 export function extractUpload(file: File, companyId: string): Promise<InvoiceExtract> {
   return remember(`upload\n${companyId}\n${file.name}\n${file.size}\n${file.lastModified}`, () =>
     request(`/api/invoice-extract?company=${encodeURIComponent(companyId)}&name=${encodeURIComponent(file.name.slice(0, 120))}`, file));
+}
+
+export function extractAgreementUpload(file: File, companyId: string): Promise<AgreementExtract> {
+  return request<AgreementExtract>(
+    `/api/invoice-extract?kind=agreement&company=${encodeURIComponent(companyId)}&name=${encodeURIComponent(file.name.slice(0, 120))}`,
+    file,
+  );
 }

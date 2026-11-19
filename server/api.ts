@@ -7,10 +7,10 @@ import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
-import { observeCheckEdits, observeInvoiceExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
+import { observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
-import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
-import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
+import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, runBatches, takeRun } from "./invoiceExtract.ts";
+import { AGREEMENT_NO_TEXT } from "../src/pilot/agreementExtract.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
@@ -274,16 +274,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 404, { error: "missing" });
         return;
       }
-      const body = (await readJson(req)) as { job?: unknown; output?: unknown };
+      const body = (await readJson(req)) as { job?: unknown; output?: unknown; outputs?: unknown };
       const job = typeof body.job === "string" ? body.job : "";
       try {
         const origin = takeJobFile(job);
-        const extract = await closeJob(job, body.output);
+        const extract = await closeJob(job, Array.isArray(body.outputs) ? body.outputs : body.output);
         if (extract === "missing") {
           send(res, 410, { error: "job", message: "Udtrækket udløb. Prøv igen." });
           return;
         }
-        if (origin) void observeInvoiceExtract(origin.companyId, extract, origin.fileId);
+        if (origin) void observeExtract(origin.companyId, extract, origin.fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {
         send(res, 502, { error: "ai-output", message: (error as Error).message.slice(0, 200) });
@@ -761,12 +761,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (method === "POST" && path === "/api/invoice-extract") {
       const companyId = text(url.searchParams.get("company") ?? "", 80);
       const fileId = text(url.searchParams.get("file") ?? "", 80);
+      const agreement = url.searchParams.get("kind") === "agreement";
       const refresh = url.searchParams.get("refresh") === "1" && user.role === "admin";
-      if (!companyId || !canSee(user, companyId)) {
+      if (!companyId || !canSee(user, companyId) || (agreement && fileId)) {
         send(res, 404, { error: "missing" });
         return;
       }
-      let filename = "faktura.pdf";
+      let filename = agreement ? "prisaftale.pdf" : "faktura.pdf";
       let bytes: Buffer;
       if (fileId) {
         const file = isMailFileId(fileId) ? await readInvoiceFile(fileId).catch(() => null) : null;
@@ -785,7 +786,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         bytes = uploaded;
         filename = text(url.searchParams.get("name") ?? "", 120) || filename;
       }
-      const prepared = await prepareExtract(companyId, filename, bytes, refresh);
+      const prepared = await prepareExtract<"invoice" | "agreement">(companyId, filename, bytes, refresh, agreement ? "agreement" : "invoice");
       if (prepared.result === "cached") {
         send(res, 200, { extract: prepared.extract, cached: true, cache: extractCacheMode() });
         return;
@@ -794,7 +795,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const messages = {
           "not-pdf": "Filen er ikke en PDF.",
           pdf: "PDF'en kunne ikke åbnes.",
-          "no-text": "PDF'en har intet tekstlag (fx en scannet side), så linjerne kan ikke læses.",
+          "no-text": agreement ? AGREEMENT_NO_TEXT : "PDF'en har intet tekstlag (fx en scannet side), så linjerne kan ikke læses.",
         } as const;
         send(res, 422, { error: prepared.result, message: messages[prepared.result] });
         return;
@@ -820,8 +821,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       try {
-        const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
-        void observeInvoiceExtract(companyId, extract, fileId);
+        const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
+        void observeExtract(companyId, extract, fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {
         send(res, 502, { error: "ai", message: (error as Error).message.slice(0, 200) });

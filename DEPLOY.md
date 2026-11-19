@@ -142,6 +142,8 @@ create table if not exists public.invoice_extracts (
 
 The same SQL is in `server/invoice-extract.sql`. Running the server outside Cloudflare has no binding, so a PDF answers "Workers AI er ikke tilgængelig her". Setting `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AI_TOKEN` (a Workers AI token) on that server uses the REST API instead.
 
+A PDF added on Prisaftaler with Tilføj prisaftale goes through the same route with `kind=agreement`: the same model, binding, job bridge and hourly cap, with the agreement prompt and schema in `src/pilot/agreementExtract.ts`. The format (`src/pilot/agreementFormat.ts`, format 2) has parcel rate rows (format 1, what the invoice check prices against), price items (description, unit, price, currency), price grids (row tiers against regions, receiver types or destinations, with minimum and maximum per delivery), surcharges (percent, amount, or to be agreed with no value) and conditions as text. A long agreement is split into page groups of at most 5,000 characters, up to 12 groups. The job carries them as `batches` (and the first as `inputs`, for an older Worker), the Durable Object runs up to 4 at a time and posts `outputs` back, and the container merges the replies. Every number the model returns is looked up in the PDF text, and what is not printed is flagged on that row or grid cell. Conditions are matched as text. The extract also counts how many of the decimal numbers printed in the PDF it holds; below 90 % the review says so. Dimensions and weights such as 0,4 ldm count as printed numbers too, so a complete read of a 3PL contract lands a little under 100 %. The person reviews and edits everything before the agreement is saved in the browser. Agreement extracts are cached in the same `invoice_extracts` table with `content_sha256` prefixed `agreement:` and their own version (2), so no new table or column is needed. A PDF that is only an image is refused before the model is called.
+
 The validation only keeps a subtotal or VAT amount the PDF prints. Each line is matched to the PDF text line that carries its amount, and a reference, route, service, weight, or surcharge description the model left empty is taken from that line. `EXTRACT_VERSION` 3 reads an older cache row again once. Version 3 adds `unmapped` (printed fields the schema has no place for, plus any key the model returned outside the schema) and `layout` (normalized labels from the text layer) to each extract.
 
 ## Formatændringer
@@ -153,6 +155,8 @@ alter table public.notifications add column if not exists detail jsonb;
 ```
 
 Without it the notice still appears and opens the document, without the reasons.
+
+A price agreement PDF goes through the same hook with kind `agreement` (`observeExtract` in `server/formatAlerts.ts`). Its layout comes from the agreement's text layer plus its service, category, grid and surcharge labels, and is learned per carrier from the `agreement:` rows in `invoice_extracts`, apart from invoice layouts. Its signals are numbers not printed verbatim (rates, items, every grid cell, surcharges) and keys the model returned outside the schema.
 
 ## Check faktura
 
