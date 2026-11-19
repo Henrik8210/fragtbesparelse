@@ -33,6 +33,21 @@ npx wrangler deploy
 
 The first deploy builds the image and can take several minutes. Wait a few minutes more before the first request. `npx wrangler containers list` shows whether the container exists.
 
+## Deploy from GitHub Actions
+
+`.github/workflows/ci.yml` deploys on every push to `main` after the checks pass, but only once these two repository secrets exist. Until then the deploy job is skipped and nothing is uploaded. The Worker secrets `DATABASE_URL` and `FRAGTBLIK_ADMIN_PASSWORD` stay in Cloudflare; the workflow does not touch them.
+
+1. Cloudflare dashboard → Manage account → Account API Tokens → Create Token → template "Edit Cloudflare Workers" → Use template. Then:
+   - Add a permission: Account → Containers → Edit. The template does not include it, and without it the image push fails with 403.
+   - Keep Account → Workers Scripts → Edit, Account → Account Settings → Read, and Zone → Workers Routes → Edit from the template. Workers Routes is what lets the deploy keep the `freightlytics.io` and `www.freightlytics.io` custom domains in `wrangler.jsonc`.
+   - Account Resources: include only the account that owns `freightlytics.io`. Zone Resources: Specific zone → `freightlytics.io`.
+   - Set an expiry if you want one, then Create Token and copy it once.
+2. Copy the Account ID from the right-hand column of the account's Workers & Pages overview.
+3. GitHub → this repository → Settings → Secrets and variables → Actions → New repository secret. Add `CLOUDFLARE_API_TOKEN` with the token and `CLOUDFLARE_ACCOUNT_ID` with the account id.
+4. Optional: under Variables, set `HEALTH_URL` if the app is not reachable at `https://freightlytics.io/health` yet.
+
+After a deploy the job polls `/health` for up to five minutes until it answers `ok` plus the revision in `deploy/revision.ts`.
+
 ## Cloudflare clicks
 
 You need to be logged into the Cloudflare account that owns the zone `freightlytics.io`.
@@ -100,7 +115,7 @@ After `npx wrangler deploy`, in the Cloudflare account that owns `freightlytics.
 
 Do not point the catch-all at a personal inbox. The worker stores the attachment on the organization in the address, and on no other.
 
-No further SQL is required for a mail that was rejected. After `npx wrangler deploy`, open https://freightlytics.io and wait until the page loads, so the container is on health `ok notice-bell`. Signed in as admin, open https://freightlytics.io/api/admin/db-status?company=nordhavn-living for the database host, the last connection error, and the invoice_mail count. The response has no password and no full URL. Cloudflare retries a delivery that failed. A sample company that is missing from `companies` is inserted for that address only. Indstillinger stays open on refresh at `#/indstillinger`.
+No further SQL is required for a mail that was rejected. After `npx wrangler deploy`, open https://freightlytics.io and wait until the page loads, so the container is on health `ok ci`. Signed in as admin, open https://freightlytics.io/api/admin/db-status?company=nordhavn-living for the database host, the last connection error, and the invoice_mail count. The response has no password and no full URL. Cloudflare retries a delivery that failed. A sample company that is missing from `companies` is inserted for that address only. Indstillinger stays open on refresh at `#/indstillinger`.
 
 ## What could not be done from here
 
