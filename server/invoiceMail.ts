@@ -1,8 +1,9 @@
 import PostalMime from "postal-mime";
 import type { Attachment, Email } from "postal-mime";
 import { customers } from "../src/data/portfolio.ts";
-import { carrierInDocument } from "../src/pilot/carrierName.ts";
+import { carrierFromMail, carrierInDocument } from "../src/pilot/carrierName.ts";
 import { postgresSql, publicDbError, storesInPostgres, withDatabase, type SqlQuery } from "./db.ts";
+import { recordInvoiceNotice } from "./notifications.ts";
 import { pdfText } from "./pdfText.ts";
 
 export const MAIL_DOMAIN = "freightlytics.io";
@@ -197,7 +198,23 @@ export async function acceptInvoiceMail(recipient: string, sender: string, raw: 
     await dropMail(mailId, companyId);
     return { result: "database", message: publicDbError(error) };
   }
+  await notifyReceived({ id: mailId, companyId, sender: from, subject, files });
   return { result: "stored", id: mailId, companyId, postgres: storesInPostgres() };
+}
+
+// The mail is already stored, so a failed notice must not make Cloudflare retry or bounce it.
+async function notifyReceived(mail: { id: string; companyId: string; sender: string; subject: string; files: { name: string; bytes: Buffer }[] }) {
+  const named = mail.files.map((file) => ({ filename: file.name }));
+  let files: { filename: string; carrier?: string }[] = named;
+  if (!carrierFromMail({ sender: mail.sender, subject: mail.subject, files: named })) {
+    files = [];
+    for (const file of mail.files) files.push({ filename: file.name, carrier: await carrierFromFile(file.name, file.bytes) });
+  }
+  try {
+    await recordInvoiceNotice((text, params) => postgresSql(text, params), { ...mail, files });
+  } catch (error) {
+    console.error(`invoice mail: notice not stored (${publicDbError(error)})`);
+  }
 }
 
 const UPLOAD_TYPES: Record<string, string> = {

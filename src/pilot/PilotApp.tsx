@@ -30,7 +30,7 @@ import { dateLabel, money, ReportView } from "./report.tsx";
 import { loadAudits, recordAudit, saveAudits, type StoredAudit } from "./store.ts";
 import {
   cacheEpoch, clearWorkspaceCache, mailKey, readMail, readMe, readNotices, readOrgs,
-  rememberMail, rememberMe, rememberNotices, rememberOrgs, type CachedMailbox,
+  rememberMail, rememberMe, rememberNotices, rememberOrgs, type CachedMailbox, type CachedNotice,
 } from "./workspaceCache.ts";
 
 const NAV = [
@@ -40,8 +40,10 @@ const NAV = [
   { id: "settings", label: "Indstillinger", icon: Settings },
 ] as const;
 
+const NOTICE_POLL_MS = 30000;
+
 type Company = { id: string; name: string; industry: string; place: string };
-type Notice = { id: string; name: string; company: string; email: string; createdAt: string };
+type Notice = CachedNotice;
 type View = WorkspaceView;
 type Result = {
   name: string;
@@ -223,25 +225,18 @@ export function PilotApp() {
     rememberMe(me.user);
     const isAdmin = me.user.role === "admin";
     setAdmin(isAdmin);
-    if (isAdmin) {
-      const [body, notes] = await Promise.all([
-        api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
-        loadNotices(),
-      ]);
-      if (cacheEpoch() !== epoch) return "stale";
-      if (body) {
-        rememberOrgs(body.orgs);
-        setExtraOrgs(body.orgs);
-      }
-      if (notes) {
-        rememberNotices(notes);
-        setNotices(notes);
-      }
-    } else {
-      rememberOrgs([]);
-      rememberNotices([]);
-      setExtraOrgs([]);
-      setNotices([]);
+    const [body, notes] = await Promise.all([
+      isAdmin ? api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null) : Promise.resolve({ orgs: [] }),
+      loadNotices(),
+    ]);
+    if (cacheEpoch() !== epoch) return "stale";
+    if (body) {
+      rememberOrgs(body.orgs);
+      setExtraOrgs(body.orgs);
+    }
+    if (notes) {
+      rememberNotices(notes);
+      setNotices(notes);
     }
     setGate("open");
     setOrgsReady(true);
@@ -427,35 +422,41 @@ export function PilotApp() {
     const isAdmin = signed.user.role === "admin";
     rememberMe(signed.user);
     setAdmin(isAdmin);
-    if (isAdmin) {
-      const [body, notes] = await Promise.all([
-        api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null),
-        loadNotices(),
-      ]);
-      if (body) {
-        rememberOrgs(body.orgs);
-        setExtraOrgs(body.orgs);
-      }
-      if (notes) {
-        rememberNotices(notes);
-        setNotices(notes);
-      }
-    } else {
-      rememberOrgs([]);
-      rememberNotices([]);
-      setExtraOrgs([]);
-      setNotices([]);
+    const [body, notes] = await Promise.all([
+      isAdmin ? api<{ orgs: Company[] }>("/api/pilot-orgs").catch(() => null) : Promise.resolve({ orgs: [] }),
+      loadNotices(),
+    ]);
+    if (body) {
+      rememberOrgs(body.orgs);
+      setExtraOrgs(body.orgs);
     }
+    rememberNotices(notes ?? []);
+    setNotices(notes ?? []);
     setGate("open");
   }
 
-  async function refreshNotices() {
-    if (!admin) return;
+  const refreshNotices = useCallback(async () => {
+    const epoch = cacheEpoch();
     const notes = await loadNotices();
-    if (!notes) return;
+    if (!notes || cacheEpoch() !== epoch) return;
     rememberNotices(notes);
     setNotices(notes);
-  }
+  }, []);
+
+  useEffect(() => {
+    if (gate !== "open") return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshNotices();
+    }, NOTICE_POLL_MS);
+    function onVisible() {
+      if (document.visibilityState === "visible") void refreshNotices();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [gate, refreshNotices]);
 
   async function dismissNotice(id: string) {
     setNotices((current) => {
@@ -601,7 +602,7 @@ export function PilotApp() {
           <div className="breadcrumb"><span>Arbejdsrum</span><ChevronRight size={14} /><strong>{activeLabel}</strong></div>
           <div className="topbar-right">
             {mobile ? null : orgSwitch}
-            <NoticeBell notices={notices} onDismiss={(id) => void dismissNotice(id)} onRefresh={() => void refreshNotices()} />
+            <NoticeBell notices={notices} orgs={orgs} onDismiss={(id) => void dismissNotice(id)} onRefresh={() => void refreshNotices()} />
             <AccountMenu
               admin={admin}
               onCreated={(created) => {
@@ -1358,8 +1359,20 @@ function InvoicePages({ fileId, companyId }: { fileId: string; companyId: string
   );
 }
 
-function NoticeBell({ notices, onDismiss, onRefresh }: {
+function noticeText(item: Notice, orgs: { id: string; name: string }[]): { title: string; lines: string[] } {
+  if (item.kind === "invoice") {
+    const orgName = orgs.find((org) => org.id === item.company)?.name ?? item.company;
+    return {
+      title: item.name ? `Faktura modtaget fra ${item.name}` : "Faktura modtaget",
+      lines: [[item.subject, orgName].filter(Boolean).join(" · ")],
+    };
+  }
+  return { title: "Demoønske", lines: [`${item.name} · ${item.company}`, item.email] };
+}
+
+function NoticeBell({ notices, orgs, onDismiss, onRefresh }: {
   notices: Notice[];
+  orgs: { id: string; name: string }[];
   onDismiss: (id: string) => void;
   onRefresh: () => void;
 }) {
@@ -1405,17 +1418,19 @@ function NoticeBell({ notices, onDismiss, onRefresh }: {
           <p className="notice-pop-title">Beskeder</p>
           {unread === 0 ? <p className="notice-empty">Ingen beskeder.</p> : (
             <ul>
-              {notices.map((item) => (
-                <li key={item.id}>
-                  <div>
-                    <strong>Demoønske</strong>
-                    <p>{item.name} · {item.company}</p>
-                    <p>{item.email}</p>
-                    <small>{dateLabel(item.createdAt)}</small>
-                  </div>
-                  <button type="button" onClick={() => onDismiss(item.id)}>Læst</button>
-                </li>
-              ))}
+              {notices.map((item) => {
+                const { title, lines } = noticeText(item, orgs);
+                return (
+                  <li key={item.id}>
+                    <div>
+                      <strong>{title}</strong>
+                      {lines.map((line) => <p key={line}>{line}</p>)}
+                      <small>{dateLabel(item.createdAt)}</small>
+                    </div>
+                    <button type="button" onClick={() => onDismiss(item.id)}>Læst</button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
