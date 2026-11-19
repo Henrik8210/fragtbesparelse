@@ -6,12 +6,13 @@ import {
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
-import { agreementFromCsv, sampleAgreement, splitAgreements, todayIso, type Agreement } from "./agreements.ts";
+import { agreementFromCsv, agreementFromRows, sampleAgreement, splitAgreements, todayIso, type Agreement } from "./agreements.ts";
 import { createPriceAgreement, deletePriceAgreement, listPriceAgreements, migrateBrowserAgreements, updatePriceAgreement, type AgreementStore } from "./agreementClient.ts";
 import { extractOriginalRows, recordToAgreement, type AgreementCreate, type AgreementPatch } from "./agreementRecord.ts";
 import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
 import { AuditFlow, downloadCsv } from "./audit.tsx";
-import { carrierFromMail } from "./carrierName.ts";
+import { carrierFromMail, carrierIn, carrierInDocument } from "./carrierName.ts";
+import { agreementFromExtract, agreementName, reviewReasons } from "./agreementAuto.ts";
 import { AgreementReview } from "./AgreementReview.tsx";
 import { AgreementTermsView } from "./AgreementTerms.tsx";
 import type { AgreementExtract } from "./agreementExtract.ts";
@@ -2402,18 +2403,34 @@ function RateTable({ rows }: { rows: RateRow[] }) {
   );
 }
 
+function elapsedLabel(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} s`;
+}
+
+type CsvDraft = { filename: string; rows: Agreement["rows"]; carrier: string; from: string; to: string };
+
 function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org: Org; initialCarrier?: string; onClose: () => void; onAdded: (input: AgreementCreate) => Promise<void> }) {
-  const [name, setName] = useState("");
-  const [carrier, setCarrier] = useState(initialCarrier);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [file, setFile] = useState<{ name: string; csv: string } | null>(null);
-  const [reading, setReading] = useState("");
-  const [review, setReview] = useState<AgreementExtract | null>(null);
+  const [reading, setReading] = useState<{ name: string; started: number; done: number; total: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [review, setReview] = useState<{ extract: AgreementExtract; reasons: string[] } | null>(null);
+  const [csv, setCsv] = useState<CsvDraft | null>(null);
   const [problem, setProblem] = useState("");
   const [saving, setSaving] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const picked = useRef(0);
+
+  useEffect(() => {
+    if (!reading) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [reading]);
+
+  const savePdf = (extract: AgreementExtract, agreement: Agreement) => onAdded({
+    name: agreement.name, carrier: agreement.carrier, from: agreement.from, to: agreement.to, ended: null,
+    rows: agreement.rows, terms: agreement.terms, original: extractOriginalRows(extract), source: "pdf",
+    sourceFilename: extract.filename, extractSha256: /^[a-f0-9]{64}$/.test(extract.sha256) ? extract.sha256 : null,
+  });
 
   async function readPdf(chosen: File) {
     if (chosen.size > 8 * 1024 * 1024) {
@@ -2421,25 +2438,63 @@ function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org
       return;
     }
     const turn = ++picked.current;
-    setFile(null);
-    setReading(chosen.name);
+    setCsv(null);
+    setReading({ name: chosen.name, started: Date.now(), done: 0, total: 0 });
+    setNow(Date.now());
+    let extract: AgreementExtract;
     try {
-      const extract = await extractAgreementUpload(chosen, org.id);
-      if (turn !== picked.current) return;
-      if (!extract.rates.length && !extract.items.length && !extract.grids.length && !extract.surcharges.length) {
-        setProblem("Der blev ikke fundet priser i PDF'en. Brug skabelonen som CSV.");
-        return;
-      }
-      setReview(extract);
+      extract = await extractAgreementUpload(chosen, org.id, (progress) => {
+        if (turn === picked.current) setReading((current) => current && { ...current, done: progress.done, total: progress.total });
+      });
     } catch (error) {
-      if (turn === picked.current) setProblem((error as Error).message || "PDF'ens priser kunne ikke læses.");
-    } finally {
-      if (turn === picked.current) setReading("");
+      if (turn === picked.current) {
+        setReading(null);
+        setProblem((error as Error).message || "PDF'ens priser kunne ikke læses.");
+      }
+      return;
+    }
+    if (turn !== picked.current) return;
+    setReading(null);
+    if (!extract.carrier && initialCarrier) extract = { ...extract, carrier: initialCarrier };
+    const reasons = reviewReasons(extract);
+    if (reasons.length) {
+      setReview({ extract, reasons });
+      return;
+    }
+    setSaving(true);
+    try {
+      await savePdf(extract, agreementFromExtract(extract, org.id));
+    } catch (error) {
+      setSaving(false);
+      const message = error instanceof ApiError && error.message !== error.code ? error.message : (error as Error).message || "Prisaftalen blev ikke gemt.";
+      setReview({ extract, reasons: [message] });
+    }
+  }
+
+  async function saveCsv(draft: CsvDraft) {
+    setProblem("");
+    let made: Agreement;
+    try {
+      made = agreementFromRows(draft.rows, { orgId: org.id, name: agreementName(draft.carrier, draft.from, draft.to), carrier: draft.carrier, from: draft.from, to: draft.to });
+    } catch (error) {
+      setProblem((error as Error).message);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onAdded({
+        name: made.name, carrier: made.carrier, from: made.from, to: made.to, ended: null,
+        rows: made.rows, source: "csv", sourceFilename: draft.filename, extractSha256: null,
+      });
+    } catch (error) {
+      setProblem(error instanceof ApiError && error.message !== error.code ? error.message : "Prisaftalen blev ikke gemt. Prøv igen.");
+      setSaving(false);
     }
   }
 
   async function pick(chosen: File) {
     setProblem("");
+    setReview(null);
     if (/\.pdf$/i.test(chosen.name) || chosen.type === "application/pdf") {
       await readPdf(chosen);
       return;
@@ -2453,88 +2508,94 @@ function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org
       return;
     }
     picked.current += 1;
-    setReading("");
-    setFile({ name: chosen.name, csv: decodeCsv(await chosen.arrayBuffer()) });
-    if (!name.trim()) setName(chosen.name.replace(/\.[^.]+$/, "").slice(0, 100));
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!file) {
-      setProblem("Vælg prisaftalens fil.");
-      return;
-    }
-    let made: Agreement;
+    setReading(null);
+    const text = decodeCsv(await chosen.arrayBuffer());
+    let read: Agreement;
     try {
-      made = agreementFromCsv(file.csv, { orgId: org.id, name, carrier, from, to });
+      read = agreementFromCsv(text, { orgId: org.id, name: "", carrier: "", from: "", to: "" });
     } catch (error) {
+      setCsv(null);
       setProblem((error as Error).message);
       return;
     }
-    setSaving(true);
-    setProblem("");
-    try {
-      await onAdded({
-        name: made.name, carrier: made.carrier, from: made.from, to: made.to, ended: null,
-        rows: made.rows, source: "csv", sourceFilename: file.name, extractSha256: null,
-      });
-    } catch (error) {
-      setProblem(error instanceof ApiError && error.message !== error.code ? error.message : "Prisaftalen blev ikke gemt. Prøv igen.");
-      setSaving(false);
-    }
+    const draft: CsvDraft = {
+      filename: chosen.name,
+      rows: read.rows,
+      carrier: carrierIn(chosen.name) || carrierInDocument(text) || initialCarrier,
+      from: read.from,
+      to: read.to,
+    };
+    if (draft.carrier && draft.from && draft.to) await saveCsv(draft);
+    else setCsv(draft);
   }
 
   if (review) {
     return (
       <Modal title="Gennemse prisaftale" check onClose={onClose}>
         <AgreementReview
-          extract={review}
+          extract={review.extract}
+          reasons={review.reasons}
           orgId={org.id}
           carriers={carrierProfiles.map((profile) => profile.name)}
           onBack={() => setReview(null)}
-          onSave={(agreement) => onAdded({
-            name: agreement.name, carrier: agreement.carrier, from: agreement.from, to: agreement.to, ended: null,
-            rows: agreement.rows, terms: agreement.terms, original: extractOriginalRows(review), source: "pdf",
-            sourceFilename: review.filename, extractSha256: /^[a-f0-9]{64}$/.test(review.sha256) ? review.sha256 : null,
-          })}
+          onSave={(agreement) => savePdf(review.extract, agreement)}
         />
       </Modal>
     );
   }
 
+  const elapsed = reading ? now - reading.started : 0;
   return (
     <Modal title="Tilføj prisaftale" onClose={onClose}>
-      <p>Prisaftalen gemmes for {org.name}, så kolleger ser den samme aftale. En CSV har én række pr. leveringsform og vægttrin. En PDF læses af Workers AI: pakkepriser, lager- og ordrepriser, prisgitre, tillæg og betingelser. Du gennemser dem, før de gemmes.</p>
-      <form onSubmit={(event) => void submit(event)}>
-        <div className="file-pick">
-          <input
-            ref={input}
-            className="sr-only"
-            type="file"
-            tabIndex={-1}
-            accept=".pdf,.csv,.tsv,.txt,application/pdf,text/csv,text/tab-separated-values"
-            aria-label="Vælg prisaftalefil"
-            onChange={(event) => {
-              const chosen = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              if (chosen) void pick(chosen);
-            }}
-          />
-          <button type="button" className="button secondary" onClick={() => input.current?.click()} disabled={Boolean(reading)}><UploadCloud size={16} /> {file ? "Skift fil" : "Vælg fil"}</button>
-          <span aria-live="polite">{reading ? `Læser priserne i ${reading}…` : file ? file.name : "PDF (maks. 8 MB), CSV eller TSV (maks. 1 MB)"}</span>
-          <button type="button" className="text-button muted" onClick={() => downloadCsv("prisaftale-skabelon.csv", DEMO_RATES)}>Hent skabelon</button>
+      <p>Vælg prisaftalen, så læses transportør, gyldighed og priser fra filen, og aftalen gemmes for {org.name}. En PDF læses af Workers AI. Du ser den kun igen, hvis noget ikke kunne læses.</p>
+      <div className="file-pick">
+        <input
+          ref={input}
+          className="sr-only"
+          type="file"
+          tabIndex={-1}
+          accept=".pdf,.csv,.tsv,.txt,application/pdf,text/csv,text/tab-separated-values"
+          aria-label="Vælg prisaftalefil"
+          onChange={(event) => {
+            const chosen = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (chosen) void pick(chosen);
+          }}
+        />
+        <button type="button" className="button primary" onClick={() => input.current?.click()} disabled={Boolean(reading) || saving}><UploadCloud size={16} /> {csv ? "Skift fil" : "Vælg fil"}</button>
+        <span>{csv ? csv.filename : "PDF (maks. 8 MB), CSV eller TSV (maks. 1 MB)"}</span>
+        <button type="button" className="text-button muted" onClick={() => downloadCsv("prisaftale-skabelon.csv", DEMO_RATES)}>Hent skabelon</button>
+      </div>
+      {reading ? (
+        <div className="agreement-progress" role="status" aria-live="polite">
+          <div className="progress-track" aria-hidden="true">
+            <span style={{ width: `${reading.total ? Math.max(4, Math.round((reading.done / reading.total) * 100)) : 4}%` }} />
+          </div>
+          <p>
+            <strong>Læser {reading.name}</strong>
+            {" · "}
+            {reading.total ? `${reading.done} af ${reading.total} dele læst` : "Sender PDF'en"}
+            {" · "}
+            {elapsedLabel(elapsed)}
+          </p>
+          <p className="quiet">En lang prisaftale tager typisk 1–3 minutter. Læsningen stopper senest efter 10 minutter med en besked.</p>
         </div>
-        <label>Navn<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="F.eks. GLS 2027" /></label>
-        <label>Transportør<input value={carrier} onChange={(event) => setCarrier(event.target.value)} maxLength={70} list="agreement-carriers" placeholder="Transportørens navn" /></label>
-        <datalist id="agreement-carriers">{carrierProfiles.map((profile) => <option key={profile.name} value={profile.name} />)}</datalist>
-        <div className="date-pair">
-          <label>Gyldig fra<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
-          <label>Gyldig til<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
-        </div>
-        <p className="quiet">Tomme datoer hentes fra filens kolonner gyldig_fra og gyldig_til.</p>
-        {problem ? <p className="org-note" role="alert">{problem}</p> : null}
-        <button className="button primary" type="submit" disabled={!file || saving}>{saving ? "Gemmer…" : "Gem prisaftale"}</button>
-      </form>
+      ) : null}
+      {saving && !csv ? <p role="status">Gemmer prisaftalen…</p> : null}
+      {csv ? (
+        <form onSubmit={(event) => { event.preventDefault(); void saveCsv(csv); }}>
+          <p className="quiet">{csv.rows.length} priser læst. Udfyld det, filen ikke angav.</p>
+          <label>Transportør<input value={csv.carrier} onChange={(event) => setCsv({ ...csv, carrier: event.target.value })} maxLength={70} list="agreement-carriers" placeholder="Transportørens navn" required /></label>
+          <datalist id="agreement-carriers">{carrierProfiles.map((profile) => <option key={profile.name} value={profile.name} />)}</datalist>
+          <div className="date-pair">
+            <label>Gyldig fra<input type="date" value={csv.from} onChange={(event) => setCsv({ ...csv, from: event.target.value })} required /></label>
+            <label>Gyldig til<input type="date" value={csv.to} onChange={(event) => setCsv({ ...csv, to: event.target.value })} /></label>
+          </div>
+          <p className="quiet">Navn: {agreementName(csv.carrier, csv.from, csv.to)}</p>
+          {problem ? <p className="org-note" role="alert">{problem}</p> : null}
+          <button className="button primary" type="submit" disabled={saving || !csv.carrier.trim() || !csv.from}>{saving ? "Gemmer…" : "Gem prisaftale"}</button>
+        </form>
+      ) : problem ? <p className="org-note" role="alert">{problem}</p> : null}
     </Modal>
   );
 }

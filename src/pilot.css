@@ -266,7 +266,9 @@ small { font-size: .8rem; }
 .check-actions .button { min-width: 120px; justify-content: center; }
 .check-chip.warn { background: #fff8db; color: #7a5a00; }
 .check-chip.warn svg { color: #b78105; }
-.review-fields { display: grid; grid-template-columns: 1.4fr 1.2fr 1fr 1fr; gap: 10px; }
+.review-fields { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 10px; }
+.review-name { margin: 0; color: var(--muted); font-size: .85rem; }
+.review-name strong { color: var(--ink); }
 .review-fields input { height: 36px; }
 .review-note { color: var(--muted); font-size: .8rem; }
 .agreement-review .check-table td:nth-child(2) input { min-width: 140px; }
@@ -368,6 +370,10 @@ small { font-size: .8rem; }
 .agreement-actions { display: flex; gap: 16px; justify-content: flex-end; padding: 0 12px 4px; }
 .agreement-empty { padding: 0 18px 16px; }
 .file-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px; border: 1px dashed var(--line-dark); border-radius: 12px; background: #f8fbf9; }
+.agreement-progress { display: grid; gap: 6px; margin-top: 12px; }
+.agreement-progress p { margin: 0; overflow-wrap: anywhere; }
+.progress-track { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.progress-track span { display: block; height: 100%; background: var(--ink); border-radius: inherit; transition: width .4s ease; }
 .file-pick span { flex: 1; min-width: 120px; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
 .modal-card form .file-pick .button { width: auto; }
 .date-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

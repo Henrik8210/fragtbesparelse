@@ -944,6 +944,21 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         });
         return;
       }
+      if (/application\/x-ndjson/.test(headerValue(req, "accept"))) {
+        res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
+        const line = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
+        line({ progress: { done: 0, total: prepared.batches.length } });
+        try {
+          const outputs = await runBatches(run, prepared.batches, 4, (done, total) => line({ progress: { done, total } }));
+          const extract = await finishExtract(companyId, prepared, outputs);
+          void observeExtract(companyId, extract, fileId);
+          line({ status: 200, body: { extract, cached: false, cache: extractCacheMode() } });
+        } catch (error) {
+          line({ status: 502, body: { error: "ai", message: (error as Error).message.slice(0, 200) } });
+        }
+        res.end();
+        return;
+      }
       try {
         const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
         void observeExtract(companyId, extract, fileId);
