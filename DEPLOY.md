@@ -156,6 +156,8 @@ alter table public.notifications add column if not exists detail jsonb;
 
 Without it the notice still appears and opens the document, without the reasons.
 
+A price agreement PDF goes through the same hook with kind `agreement` (`observeExtract` in `server/formatAlerts.ts`). Its layout comes from the agreement's text layer plus its service, category, grid and surcharge labels, and is learned per carrier from the `agreement:` rows in `invoice_extracts`, apart from invoice layouts. Its signals are numbers not printed verbatim (rates, items, every grid cell, surcharges) and keys the model returned outside the schema.
+
 ## Check faktura
 
 Each invoice on Fakturaer has a Check faktura button. It opens the invoice lines in an editor. Checked saves them as they are. Gem ændringer saves the edited values. The edited lines then replace the extract or the CSV rows in the viewer and in Nyt fakturatjek. The original lines, who checked, when, and each change are kept. An unchecked invoice is used as read. The app does not create the table. Without it, checks are kept in the running container until it restarts, and Fakturaer says so. Run this in the Supabase SQL editor to keep them:

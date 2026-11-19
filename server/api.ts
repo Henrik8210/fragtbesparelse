@@ -7,7 +7,7 @@ import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
-import { observeCheckEdits, observeInvoiceExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
+import { observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, runBatches, takeRun } from "./invoiceExtract.ts";
 import { AGREEMENT_NO_TEXT } from "../src/pilot/agreementExtract.ts";
@@ -283,7 +283,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           send(res, 410, { error: "job", message: "Udtrækket udløb. Prøv igen." });
           return;
         }
-        if (origin) void observeInvoiceExtract(origin.companyId, extract, origin.fileId);
+        if (origin) void observeExtract(origin.companyId, extract, origin.fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {
         send(res, 502, { error: "ai-output", message: (error as Error).message.slice(0, 200) });
@@ -822,7 +822,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       try {
         const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
-        void observeInvoiceExtract(companyId, extract, fileId);
+        void observeExtract(companyId, extract, fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {
         send(res, 502, { error: "ai", message: (error as Error).message.slice(0, 200) });

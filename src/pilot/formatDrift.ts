@@ -176,7 +176,7 @@ const kroner = (ore: number) => `${(Math.abs(ore) / 100).toLocaleString("da-DK",
 const quoted = (labels: string[], max = 4) => labels.slice(0, max).map((label) => `"${label}"`).join(", ") + (labels.length > max ? " …" : "");
 
 /** Strong signals justify a notice on their own; low confidence is only mentioned beside them. */
-export function signalReasons(signals: ExtractSignals): { strong: SignalKind[]; reasons: string[] } {
+export function signalReasons(signals: ExtractSignals, kind: DocumentKind = "invoice"): { strong: SignalKind[]; reasons: string[] } {
   const strong: SignalKind[] = [];
   const reasons: string[] = [];
   const lines = Math.max(signals.lines, 1);
@@ -194,7 +194,9 @@ export function signalReasons(signals: ExtractSignals): { strong: SignalKind[]; 
   }
   if (signals.edited !== null && signals.edited >= 2 && signals.edited / lines >= EDITED_SHARE) {
     strong.push("edited");
-    reasons.push(`${signals.edited} af ${signals.lines} linjer rettet i Check faktura`);
+    reasons.push(kind === "agreement"
+      ? `${signals.edited} af ${signals.lines} priser rettet i gennemsynet af prisaftalen`
+      : `${signals.edited} af ${signals.lines} linjer rettet i Check faktura`);
   }
   if (strong.length > 0 && signals.lowConfidence) reasons.push("Lav sikkerhed i udtrækket");
   return { strong, reasons };
@@ -211,7 +213,7 @@ export function assessDocument(
   const known = profile.docs > 0;
   const comparison = input.fingerprint ? compareLayout(profile, input.fingerprint) : null;
   const variantId = input.fingerprint ? learnLayout(profile, input.fingerprint, input.documentId) : comparison?.variant?.id ?? "";
-  const { strong, reasons } = signalReasons(input.signals);
+  const { strong, reasons } = signalReasons(input.signals, profile.kind);
   const base = { kind: profile.kind, carrier: profile.carrier, variantId };
   if (known && comparison?.changed) {
     const layout = [`Layoutet ligner det kendte format ${Math.round(comparison.similarity * 100)} %`];

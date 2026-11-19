@@ -4,6 +4,7 @@ import {
   type AgreementTerms, type GridColumn, type SurchargeKind,
 } from "./agreementFormat.ts";
 import { MAX_RATES, rateRowSchema, type RateRow } from "./freight.ts";
+import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
 import { EXTRACT_MODEL, isoDate, printedAmounts, type AiInputs, type Confidence } from "./invoiceExtract.ts";
 
 export const AGREEMENT_EXTRACT_VERSION = 2;
@@ -63,6 +64,10 @@ export type AgreementExtract = {
   /** Distinct prices printed in the PDF (numbers with decimals) and how many of them the extract holds. */
   coverage: { printed: number; captured: number };
   chunks: number;
+  /** Keys the model returned outside the schema. */
+  unmapped: string[];
+  /** Normalized labels from the text layer, for format-change notices. */
+  layout?: LayoutFingerprint;
   confidence: Confidence;
   issues: string[];
   truncated: boolean;
@@ -308,6 +313,8 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
   const issues: string[] = [];
   if (parts.length < outputs.length) issues.push(`${outputs.length - parts.length} af ${outputs.length} dele af PDF'en kunne ikke læses.`);
 
+  const known = new Set(Object.keys(outputSchema.shape));
+  const unmapped = [...new Set(parts.flatMap((part) => Object.keys(part).filter((key) => !known.has(key))))].slice(0, 20);
   const amounts = printedAmounts(pdfText);
   const printed = (value: number) => value === 0 || amounts.has(Math.abs(ore(value)));
   const first = (pick: (part: Output) => string) => parts.map(pick).find(Boolean) ?? "";
@@ -463,6 +470,13 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     conditions,
     coverage,
     chunks: outputs.length,
+    unmapped,
+    layout: layoutFingerprint(pdfText, [
+      ...rates.map((rate) => rate.service),
+      ...items.map((item) => item.category),
+      ...grids.flatMap((grid) => [grid.name, grid.rowLabel]),
+      ...surcharges.map((item) => item.label),
+    ]),
     confidence,
     issues,
     truncated: Boolean(meta.truncated),

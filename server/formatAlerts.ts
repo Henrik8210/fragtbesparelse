@@ -6,6 +6,7 @@ import {
 } from "../src/pilot/formatDrift.ts";
 import { lineChanges, type InvoiceCheck } from "../src/pilot/invoiceCheck.ts";
 import { EXTRACT_VERSION, type InvoiceExtract } from "../src/pilot/invoiceExtract.ts";
+import { AGREEMENT_CACHE_PREFIX, AGREEMENT_EXTRACT_VERSION, type AgreementExtract } from "../src/pilot/agreementExtract.ts";
 import { postgresSql, storesInPostgres, type SqlQuery } from "./db.ts";
 import { cachedExtract, sha256Of } from "./invoiceExtract.ts";
 import { readInvoiceFile } from "./invoiceMail.ts";
@@ -84,32 +85,39 @@ function code(error: unknown): string {
   return typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "";
 }
 
-/** Learns earlier invoice layouts once per process, leaving out the document being observed. */
-function loadInvoiceLayouts(skipSha: string): Promise<void> {
-  const existing = loaded.get("invoice");
+/**
+ * Learns earlier layouts of one kind once per process, leaving out the document being observed. Agreement extracts
+ * share invoice_extracts under the `agreement:` prefix, so each kind reads only its own rows.
+ */
+function loadLayouts(kind: DocumentKind, skipKey: string): Promise<void> {
+  const existing = loaded.get(kind);
   if (existing) return existing;
+  const agreement = kind === "agreement";
   const run = (async () => {
     if (!inPostgres()) return;
     try {
       const rows = await query<{ company_id: string; content_sha256: string; extract: unknown }>(
         `select company_id, content_sha256, extract from public.invoice_extracts
          where version = $1 and content_sha256 <> $2 and extract ? 'layout'
+           and (content_sha256 like $3) = $4
          order by created_at asc
          limit 2000`,
-        [EXTRACT_VERSION, skipSha],
+        [agreement ? AGREEMENT_EXTRACT_VERSION : EXTRACT_VERSION, skipKey, `${AGREEMENT_CACHE_PREFIX}%`, agreement],
       );
       for (const row of rows) {
-        const extract = (typeof row.extract === "string" ? JSON.parse(row.extract) : row.extract) as InvoiceExtract;
+        const extract = (typeof row.extract === "string" ? JSON.parse(row.extract) : row.extract) as { carrier: string; layout?: LayoutFingerprint };
         if (!extract?.layout) continue;
-        learnLayout(profileFor("invoice", carrierKey(extract.carrier)), extract.layout, `${row.company_id}:${row.content_sha256}`);
+        learnLayout(profileFor(kind, carrierKey(extract.carrier)), extract.layout, `${row.company_id}:${row.content_sha256}`);
       }
     } catch {
       // No invoice_extracts table: layouts are learned from this process's extracts only.
     }
   })();
-  loaded.set("invoice", run);
+  loaded.set(kind, run);
   return run;
 }
+
+const loadInvoiceLayouts = (skipSha: string) => loadLayouts("invoice", skipSha);
 
 async function mailIdOf(fileId: string, companyId: string): Promise<string> {
   if (!fileId) return "";
@@ -250,4 +258,43 @@ export function takeJobFile(jobId: string): { companyId: string; fileId: string 
   const entry = jobFiles.get(jobId);
   jobFiles.delete(jobId);
   return entry && entry.expires >= Date.now() ? { companyId: entry.companyId, fileId: entry.fileId } : null;
+}
+
+/** Every number in an agreement extract, and how many of them are not printed verbatim in the PDF. */
+export function agreementSignals(extract: AgreementExtract, edited: number | null = null): ExtractSignals {
+  const unprintedRates = extract.rates.filter((rate) => rate.issues.some((issue) => /står ikke ordret/.test(issue))).length;
+  const unprintedItems = extract.items.filter((item) => item.issues.some((issue) => /står ikke ordret/.test(issue))).length;
+  const unprintedSurcharges = extract.surcharges.filter((item) => item.issues.some((issue) => /står ikke ordret/.test(issue))).length;
+  const cells = extract.grids.reduce((sum, grid) => sum + grid.rows.reduce((count, row) => count + row.cells.filter((cell) => cell !== null).length, 0)
+    + grid.minimum.filter((cell) => cell !== null).length + grid.maximum.filter((cell) => cell !== null).length, 0);
+  return {
+    lines: extract.rates.length + extract.items.length + cells + extract.surcharges.length,
+    unanchored: unprintedRates + unprintedItems + unprintedSurcharges + extract.grids.reduce((sum, grid) => sum + grid.unprinted.length, 0),
+    unmapped: extract.unmapped ?? [],
+    mismatchOre: null,
+    lowConfidence: extract.confidence === "low",
+    edited,
+  };
+}
+
+/** Call with a freshly read agreement extract, not a cache hit. */
+export async function observeAgreementExtract(companyId: string, extract: AgreementExtract): Promise<FormatFinding | null> {
+  const documentId = `${companyId}:${AGREEMENT_CACHE_PREFIX}${extract.sha256}`;
+  await loadLayouts("agreement", `${AGREEMENT_CACHE_PREFIX}${extract.sha256}`);
+  return observeDocument({
+    kind: "agreement",
+    companyId,
+    documentId,
+    carrier: carrierKey(extract.carrier),
+    filename: extract.filename,
+    fingerprint: extract.layout ?? null,
+    signals: agreementSignals(extract),
+  });
+}
+
+/** A fresh extract of either kind, as the extract route returns it. */
+export function observeExtract(companyId: string, extract: InvoiceExtract | AgreementExtract, fileId = ""): Promise<FormatFinding | null> {
+  return "kind" in extract && extract.kind === "agreement"
+    ? observeAgreementExtract(companyId, extract)
+    : observeInvoiceExtract(companyId, extract as InvoiceExtract, fileId);
 }

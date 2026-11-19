@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { linesFromExtract } from "../src/pilot/invoiceCheck.ts";
 import { validateExtract } from "../src/pilot/invoiceExtract.ts";
 import type { SqlQuery } from "./db.ts";
-import { formatNoticeId, observeCheckEdits, observeDocument, observeInvoiceExtract, setFormatDatabase } from "./formatAlerts.ts";
+import { validateAgreementExtract } from "../src/pilot/agreementExtract.ts";
+import { agreementSignals, formatNoticeId, observeCheckEdits, observeDocument, observeExtract, observeInvoiceExtract, setFormatDatabase } from "./formatAlerts.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
 
 const admin = { role: "admin" as const, company_id: null };
@@ -174,5 +175,53 @@ describe("format change notices", () => {
     });
     expect(finding).toMatchObject({ kind: "agreement", carrier: "DHL", change: "signals" });
     expect((await listNotices(query, admin))[0].detail?.docKind).toBe("agreement");
+  });
+
+  it("learns agreement layouts per carrier apart from invoices, and flags a redesigned rate sheet", async () => {
+    const sheet = (company: string) => [
+      `Prisaftale Nordlager Logistik og ${company}`,
+      "Lagerleje",
+      "Pallelagerplads pr. palle pr. uge  9,40  DKK",
+      "Ordreekspedition",
+      "Ordregebyr pr. ordre  6,85  DKK",
+      "Distribution fra Kolding",
+      "Pallepladser  Jylland/Fyn  Sjælland",
+      "1 ppl.  612,40  748,90",
+      "Forudsætninger",
+    ].join("\n");
+    const redesign = [
+      "Nordlager Logistics Rate Card",
+      "Warehousing services",
+      "Pallet storage per week  9,40  DKK",
+      "Outbound handling",
+      "Order fee per order  6,85  DKK",
+      "Transport matrix",
+      "Pallets  Region West  Region East",
+      "1 pallet  612,40  748,90",
+      "Terms and conditions",
+    ].join("\n");
+    const reply = { carrier: "Nordlager Logistik", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], grids: [], surcharges: [], conditions: [],
+      items: [{ category: "Lagerleje", description: "Pallelagerplads", unit: "pr. palle pr. uge", price: "9,40", currency: "DKK", note: "" }] };
+    const of = (text: string, sha: string) => validateAgreementExtract(reply, text, { sha256: sha.repeat(64).slice(0, 64), filename: `${sha}.pdf` });
+    const first = of(sheet("Kolding Table Co"), "a");
+    expect(first.layout?.tokens.length).toBeGreaterThan(3);
+    expect(await observeExtract("kolding-table-co", first)).toBeNull();
+    expect(await observeExtract("vesterbro-cloth", of(sheet("Vesterbro Cloth"), "b"))).toBeNull();
+    expect(await observeInvoiceExtract("kolding-table-co", extractOf(oldText("Kolding", 1), "s1"), "")).toBeNull();
+    const finding = await observeExtract("kolding-table-co", of(redesign, "c"));
+    expect(finding).toMatchObject({ kind: "agreement", change: "layout" });
+    const [notice] = await listNotices(query, admin);
+    expect(notice.detail).toMatchObject({ docKind: "agreement", filename: "c.pdf" });
+  });
+
+  it("counts every grid cell and unprinted number as agreement signals", () => {
+    const text = "Distribution\nPallepladser  Syd  Nord\n1  100,50  200,75\nMinimum  90,00  180,00";
+    const extract = validateAgreementExtract({
+      carrier: "DAO", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], items: [], surcharges: [], conditions: [], extraField: "x",
+      grids: [{ name: "Distribution", category: "", unit: "", currency: "DKK", rowLabel: "Pallepladser", note: "",
+        columns: [{ label: "Syd", detail: "" }, { label: "Nord", detail: "" }],
+        rows: [{ label: "1", cells: ["100,50", "207,75"] }], minimum: ["90,00", "180,00"], maximum: [] }],
+    }, text, { sha256: "d".repeat(64), filename: "d.pdf" });
+    expect(agreementSignals(extract, 2)).toEqual({ lines: 4, unanchored: 1, unmapped: ["extraField"], mismatchOre: null, lowConfidence: extract.confidence === "low", edited: 2 });
   });
 });
