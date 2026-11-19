@@ -117,6 +117,31 @@ Do not point the catch-all at a personal inbox. The worker stores the attachment
 
 No further SQL is required for a mail that was rejected. After `npx wrangler deploy`, open https://freightlytics.io and wait until the page loads, so the container is on health `ok ci`. Signed in as admin, open https://freightlytics.io/api/admin/db-status?company=nordhavn-living for the database host, the last connection error, and the invoice_mail count. The response has no password and no full URL. Cloudflare retries a delivery that failed. A sample company that is missing from `companies` is inserted for that address only. Indstillinger stays open on refresh at `#/indstillinger`.
 
+## PDF-linjer med Workers AI
+
+A PDF from Modtaget or a PDF uploaded in Nyt fakturatjek is read into invoice lines. The container reads the PDF's text layer with pdfjs and builds a JSON-schema request. The Durable Object runs it on the `AI` binding (`"ai": { "binding": "AI" }` in `wrangler.jsonc`) with `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, then posts the model output back to the container on `/api/internal/invoice-extract` with the sync token. The container validates the lines, checks their sum against the invoice total, sets a confidence, and caches the result per company and file hash. A scanned PDF with no text layer is not read.
+
+The binding needs no secret. Workers AI must be available on the Cloudflare account. Usage above the free 10,000 neurons a day needs the Workers Paid plan. One small invoice costs about $0.001 to $0.005. Each user can start at most 60 new reads an hour.
+
+Optional AI Gateway: create a gateway in the dashboard (AI → AI Gateway), then add `"vars": { "AI_GATEWAY_ID": "<gateway name>" }` to `wrangler.jsonc`. The gateway name is not a secret.
+
+The cache table is optional. Without it, results are cached in the running container until it restarts. Run this in the Supabase SQL editor to keep them:
+
+```sql
+create table if not exists public.invoice_extracts (
+  company_id text not null references public.companies (id),
+  content_sha256 text not null,
+  version integer not null,
+  model text not null,
+  confidence text not null,
+  extract jsonb not null,
+  created_at timestamptz not null default now(),
+  primary key (company_id, content_sha256)
+);
+```
+
+The same SQL is in `server/invoice-extract.sql`. Running the server outside Cloudflare has no binding, so a PDF answers "Workers AI er ikke tilgængelig her". Setting `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AI_TOKEN` (a Workers AI token) on that server uses the REST API instead.
+
 ## What could not be done from here
 
 There is no Cloudflare login on this machine, so the zone was not read, the Worker was not deployed, and no DNS record was created. `DATABASE_URL` for the Cursor app was not copied. freightlytics.io needs its own database.

@@ -1,0 +1,113 @@
+import { useEffect, useState } from "react";
+import { CircleAlert, Sparkles } from "lucide-react";
+import { extractMailFile } from "./extractClient.ts";
+import { CONFIDENCE_LABELS, lineTotalOre, type InvoiceExtract } from "./invoiceExtract.ts";
+
+const dkk = new Intl.NumberFormat("da-DK", { style: "currency", currency: "DKK" });
+const money = (ore: number) => dkk.format(ore / 100);
+const dateLabel = (value: string) =>
+  new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Copenhagen" })
+    .format(new Date(`${value}T12:00:00Z`));
+
+const KIND_LABELS = { shipment: "", credit: "Kreditering", surcharge: "Tillæg", fee: "Gebyr" } as const;
+const AGAINST_LABELS = { subtotal: "Subtotal ekskl. moms", "total-vat": "I alt minus moms", total: "Faktura i alt", none: "" } as const;
+
+export function ExtractPanel({ fileId, companyId }: { fileId: string; companyId: string }) {
+  const [state, setState] = useState<{ key: string; extract?: InvoiceExtract; error?: string } | null>(null);
+  const key = `${companyId}\n${fileId}`;
+  useEffect(() => {
+    let gone = false;
+    extractMailFile(fileId, companyId).then(
+      (extract) => { if (!gone) setState({ key, extract }); },
+      (error: unknown) => { if (!gone) setState({ key, error: (error as Error).message }); },
+    );
+    return () => { gone = true; };
+  }, [fileId, companyId, key]);
+
+  const current = state?.key === key ? state : null;
+  if (!current) {
+    return (
+      <section className="extract-panel" aria-busy="true">
+        <p className="extract-status"><Sparkles size={15} /> Læser fakturalinjer med Workers AI…</p>
+      </section>
+    );
+  }
+  if (current.error || !current.extract) {
+    return (
+      <section className="extract-panel">
+        <p className="extract-status error" role="alert"><CircleAlert size={15} /> {current.error}</p>
+      </section>
+    );
+  }
+  return <ExtractTable extract={current.extract} />;
+}
+
+export function ExtractTable({ extract }: { extract: InvoiceExtract }) {
+  const { check } = extract;
+  const meta = [
+    extract.carrier,
+    extract.invoiceNumber ? `Faktura ${extract.invoiceNumber}` : "",
+    extract.invoiceDate ? dateLabel(extract.invoiceDate) : "",
+  ].filter(Boolean).join(" · ");
+  return (
+    <section className="extract-panel" aria-label="Fakturalinjer læst fra PDF">
+      <div className="extract-head">
+        <div>
+          <h3><Sparkles size={15} /> Fakturalinjer</h3>
+          {meta ? <p>{meta}</p> : null}
+        </div>
+        <span className={`confidence ${extract.confidence}`}>{CONFIDENCE_LABELS[extract.confidence]}</span>
+      </div>
+      <div className="rate-scroll">
+        <table className="rate-table extract-table">
+          <thead>
+            <tr><th>Forsendelse</th><th>Dato</th><th>Service</th><th>Vægt / zone</th><th className="num">Beløb</th><th>Tillæg</th><th className="num">Linje i alt</th></tr>
+          </thead>
+          <tbody>
+            {extract.lines.map((line, index) => (
+              <tr key={index} className={line.issues.length ? "flagged" : undefined} title={line.issues.join(" ") || undefined}>
+                <td>
+                  {line.shipment || line.reference || `Linje ${index + 1}`}
+                  {line.shipment && line.reference ? <small>{line.reference}</small> : null}
+                  {KIND_LABELS[line.kind] ? <small>{KIND_LABELS[line.kind]}</small> : null}
+                </td>
+                <td>{line.date ? dateLabel(line.date) : "—"}</td>
+                <td>{line.service || "—"}</td>
+                <td>{[line.weightKg ? `${line.weightKg.toLocaleString("da-DK")} kg` : "", line.zone].filter(Boolean).join(" · ") || "—"}</td>
+                <td className="num">{money(line.amountOre)}</td>
+                <td>{line.surcharges.length ? line.surcharges.map((item) => `${item.label} ${money(item.amountOre)}`).join(", ") : "—"}</td>
+                <td className="num">
+                  {money(lineTotalOre(line))}
+                  {line.issues.length ? <small className="flag"><CircleAlert size={12} /> {line.issues[0]}</small> : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={6}>Linjesum</td>
+              <td className="num">{money(check.lineSumOre)}</td>
+            </tr>
+            {check.targetOre !== null ? (
+              <tr>
+                <td colSpan={6}>{AGAINST_LABELS[check.against]}</td>
+                <td className="num">{money(check.targetOre)}</td>
+              </tr>
+            ) : null}
+          </tfoot>
+        </table>
+      </div>
+      <p className={`extract-check ${check.status}`}>
+        {check.status === "match"
+          ? "Linjerne summer til fakturaens total."
+          : check.status === "mismatch"
+            ? `Linjerne afviger ${money(Math.abs(check.differenceOre ?? 0))} fra fakturaens total.`
+            : "Fakturaen har ingen total at afstemme mod."}
+      </p>
+      {extract.issues.filter((issue) => !/summer ikke|ingen total/.test(issue)).map((issue) => (
+        <p key={issue} className="extract-issue"><CircleAlert size={13} /> {issue}</p>
+      ))}
+      <p className="extract-note">Læst af Workers AI fra PDF'ens tekst. Kontrollér linjerne mod fakturaen. Beløb er ekskl. moms.</p>
+    </section>
+  );
+}

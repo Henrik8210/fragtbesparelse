@@ -5,6 +5,8 @@ import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile } from "./invoiceMail.ts";
+import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
+import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
@@ -255,6 +257,26 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const result = await acceptInvoiceMail(headerValue(req, "x-fragtblik-mail-to"), headerValue(req, "x-fragtblik-mail-from"), raw);
       const reply = invoiceMailReply(result);
       send(res, reply.status, reply.body);
+      return;
+    }
+
+    if (method === "POST" && path === "/api/internal/invoice-extract") {
+      if (!mailIngressAllowed(req)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      const body = (await readJson(req)) as { job?: unknown; output?: unknown };
+      const job = typeof body.job === "string" ? body.job : "";
+      try {
+        const extract = await closeJob(job, body.output);
+        if (extract === "missing") {
+          send(res, 410, { error: "job", message: "Udtrækket udløb. Prøv igen." });
+          return;
+        }
+        send(res, 200, { extract, cached: false, cache: extractCacheMode() });
+      } catch (error) {
+        send(res, 502, { error: "ai-output", message: (error as Error).message.slice(0, 200) });
+      }
       return;
     }
 
@@ -688,6 +710,75 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         "x-content-type-options": "nosniff",
       });
       res.end(file.content);
+      return;
+    }
+
+    if (method === "POST" && path === "/api/invoice-extract") {
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      const fileId = text(url.searchParams.get("file") ?? "", 80);
+      const refresh = url.searchParams.get("refresh") === "1" && user.role === "admin";
+      if (!companyId || !canSee(user, companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      let filename = "faktura.pdf";
+      let bytes: Buffer;
+      if (fileId) {
+        const file = isMailFileId(fileId) ? await readInvoiceFile(fileId).catch(() => null) : null;
+        if (!file || file.companyId !== companyId) {
+          send(res, 404, { error: "missing" });
+          return;
+        }
+        filename = file.filename;
+        bytes = file.content;
+      } else {
+        const uploaded = await readLimited(req, MAX_MAIL_BYTES);
+        if (uploaded === "large") {
+          send(res, 413, { error: "large", message: "PDF'en må fylde højst 8 MB." });
+          return;
+        }
+        bytes = uploaded;
+        filename = text(url.searchParams.get("name") ?? "", 120) || filename;
+      }
+      const prepared = await prepareExtract(companyId, filename, bytes, refresh);
+      if (prepared.result === "cached") {
+        send(res, 200, { extract: prepared.extract, cached: true, cache: extractCacheMode() });
+        return;
+      }
+      if (prepared.result !== "ready") {
+        const messages = {
+          "not-pdf": "Filen er ikke en PDF.",
+          pdf: "PDF'en kunne ikke åbnes.",
+          "no-text": "PDF'en har intet tekstlag (fx en scannet side), så linjerne kan ikke læses.",
+        } as const;
+        send(res, 422, { error: prepared.result, message: messages[prepared.result] });
+        return;
+      }
+      const bridged = mailIngressAllowed(req) && headerValue(req, "x-fragtblik-ai-bridge") === "1";
+      if ((bridged || restRunner()) && !takeRun(user.id)) {
+        send(res, 429, { error: "limit", message: "For mange PDF-udtræk den seneste time. Prøv igen senere." });
+        return;
+      }
+      if (bridged) {
+        const job = openJob(companyId, prepared);
+        res.writeHead(202, { "content-type": "application/json", "x-fragtblik-ai-job": "1", "cache-control": "no-store" });
+        res.end(JSON.stringify(job));
+        return;
+      }
+      const run = restRunner();
+      if (!run) {
+        send(res, 503, {
+          error: "ai-unavailable",
+          message: "Workers AI er ikke tilgængelig her. PDF-linjer læses på freightlytics.io, hvor Worker'en har AI-bindingen. Brug en CSV lokalt.",
+        });
+        return;
+      }
+      try {
+        const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
+        send(res, 200, { extract, cached: false, cache: extractCacheMode() });
+      } catch (error) {
+        send(res, 502, { error: "ai", message: (error as Error).message.slice(0, 200) });
+      }
       return;
     }
 

@@ -217,6 +217,30 @@ small { font-size: .8rem; }
 .invoice-files button.active { border-color: var(--green); color: var(--green); font-weight: 700; }
 .invoice-scroll { margin-top: 14px; overflow: auto; max-height: min(72dvh, 760px); background: #f4f7f6; border-radius: 12px; padding: 12px; display: grid; gap: 12px; }
 .invoice-scroll img { width: 100%; height: auto; background: #fff; }
+.extract-panel { margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 12px 4px 10px; display: grid; gap: 6px; }
+.extract-panel > p { padding: 0 12px; }
+.extract-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 0 12px; }
+.extract-head h3 { display: flex; align-items: center; gap: 6px; font-size: .95rem; }
+.extract-head p { color: var(--muted); font-size: .8rem; margin-top: 2px; }
+.extract-status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .85rem; }
+.extract-status.error { color: var(--amber); }
+.extract-table td small { display: block; color: var(--muted); font-size: .72rem; }
+.extract-table .num { text-align: right; }
+.extract-table tr.flagged td { background: var(--amber-light); }
+.extract-table small.flag { color: var(--amber); display: flex; gap: 4px; align-items: center; justify-content: flex-end; white-space: normal; }
+.extract-table tfoot td { font-weight: 700; }
+.extract-check { font-size: .83rem; font-weight: 650; }
+.extract-check.match { color: var(--green); }
+.extract-check.mismatch, .extract-check.no-total { color: var(--amber); }
+.extract-issue { display: flex; gap: 6px; align-items: center; color: var(--amber); font-size: .8rem; }
+.extract-note { color: var(--muted); font-size: .75rem; }
+.confidence { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: .72rem; font-weight: 750; white-space: nowrap; }
+.confidence.high { background: var(--green-light); color: var(--green); }
+.confidence.medium { background: #fff8db; color: #7a5a00; }
+.confidence.low { background: var(--amber-light); color: var(--amber); }
+.extract-summary { display: grid; gap: 6px; font-size: .8rem; color: var(--muted); line-height: 1.5; }
+.extract-summary > .text-button { justify-self: start; }
+.extract-summary .extract-panel { margin-top: 4px; }
 
 .main-content { max-width: 1440px; margin: 0 auto; padding: 30px 32px 28px; width: 100%; flex: 1; }
 .content-flow { display: grid; gap: 19px; min-width: 0; }

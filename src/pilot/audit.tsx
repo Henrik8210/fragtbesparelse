@@ -8,10 +8,13 @@ import {
   type CsvSheet, type ImportKind, type Mapping,
 } from "./csv.ts";
 import { DEMO_INVOICE, DEMO_RATES } from "./demo.ts";
+import { ExtractTable } from "./ExtractPanel.tsx";
+import { extractMailFile, extractUpload } from "./extractClient.ts";
 import { MAX_FILE_BYTES, runAudit, type AuditInput, type AuditReport } from "./freight.ts";
-import type { PastSource } from "./past.ts";
+import { CONFIDENCE_LABELS, extractToInvoiceRows, sharedSurchargeOre, type InvoiceExtract } from "./invoiceExtract.ts";
+import { invoiceCsv, type PastSource } from "./past.ts";
 
-type Uploaded = { name: string; sheet: CsvSheet; mapping: Mapping };
+type Uploaded = { name: string; sheet: CsvSheet; mapping: Mapping; extract?: InvoiceExtract };
 
 export type { PastSource };
 
@@ -117,7 +120,7 @@ export function AuditFlow({
 
         {error ? <div className="message error" role="alert">{error}</div> : null}
         <div className="form-actions">
-          <p className="quiet"><ShieldCheck size={17} /> Filerne læses i browseren. Du vælger, om resultatet skal gemmes.</p>
+          <p className="quiet"><ShieldCheck size={17} /> CSV læses i browseren. En PDF læses af Workers AI hos Freightlytics. Du vælger, om resultatet skal gemmes.</p>
           <div className="actions">
             {embedded ? <button type="button" className="button secondary" onClick={onExample}><FileText size={17} /> Prøv med eksempel</button> : null}
             <button type="submit" className="button primary" disabled={!invoice || !rates}>
@@ -145,7 +148,12 @@ function shortDate(value: string) {
   return new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Copenhagen" }).format(date);
 }
 
-async function mailCsv(fileId: string, companyId: string) {
+function extractSheet(extract: InvoiceExtract): CsvSheet {
+  return parseCsv(invoiceCsv(extractToInvoiceRows(extract)));
+}
+
+async function mailSource(fileId: string, filename: string, companyId: string): Promise<{ csv: string } | { extract: InvoiceExtract }> {
+  if (/\.pdf$/i.test(filename)) return { extract: await extractMailFile(fileId, companyId) };
   const response = await fetch(
     `/api/invoice-mail/files/${encodeURIComponent(fileId)}?company=${encodeURIComponent(companyId)}`,
     { credentials: "same-origin" },
@@ -154,8 +162,28 @@ async function mailCsv(fileId: string, companyId: string) {
   const bytes = await response.arrayBuffer();
   if (bytes.byteLength > MAX_FILE_BYTES) throw new Error("Filen må fylde højst 1 MB.");
   const head = String.fromCharCode(...new Uint8Array(bytes.slice(0, 5)));
-  if (head === "%PDF-") throw new Error("PDF'en har ikke et linjeudtræk. Vælg en CSV eller en tidligere kontrol.");
-  return decodeCsv(bytes);
+  if (head === "%PDF-") return { extract: await extractMailFile(fileId, companyId) };
+  return { csv: decodeCsv(bytes) };
+}
+
+function ExtractSummary({ extract }: { extract: InvoiceExtract }) {
+  const [open, setOpen] = useState(false);
+  const shared = sharedSurchargeOre(extract);
+  const kr = (ore: number) => (ore / 100).toLocaleString("da-DK", { style: "currency", currency: "DKK" });
+  return (
+    <div className="extract-summary">
+      <p>
+        <span className={`confidence ${extract.confidence}`}>{CONFIDENCE_LABELS[extract.confidence]}</span>
+        {" "}Læst fra PDF med Workers AI.{" "}
+        {extract.check.status === "match" ? "Linjerne summer til fakturaens total." : extract.check.status === "mismatch" ? `Linjerne afviger ${kr(Math.abs(extract.check.differenceOre ?? 0))} fra totalen.` : "Ingen total at afstemme mod."}
+        {shared ? ` Tillæg på fakturaniveau (${kr(shared)}) er fordelt på forsendelserne efter beløb.` : ""}
+      </p>
+      <button type="button" className="text-button" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {open ? "Skjul linjer" : "Vis linjer"} <ChevronDown size={15} className={open ? "rotate" : ""} />
+      </button>
+      {open ? <ExtractTable extract={extract} /> : null}
+    </div>
+  );
 }
 
 function UploadCard({
@@ -197,15 +225,16 @@ function UploadCard({
     setError("");
     setBusy(source.id);
     try {
-      const csv = source.csv ?? await mailCsv(source.fileId ?? "", companyId);
+      const loaded = source.csv !== undefined ? { csv: source.csv } : await mailSource(source.fileId ?? "", source.note, companyId);
       if (id !== uploadId.current) return;
-      const sheet = parseCsv(csv);
+      const extract = "extract" in loaded ? loaded.extract : undefined;
+      const sheet = "extract" in loaded ? extractSheet(loaded.extract) : parseCsv(loaded.csv);
       if (!sheet.rows.length) throw new Error("Filen har ingen datalinjer.");
       const mapping = suggestMapping(kind, sheet.headers);
-      onChange({ name: source.name, sheet, mapping });
+      onChange({ name: source.name, sheet, mapping, extract });
       setPicked(source.id);
       setShowMapping(Boolean(missingFields(kind, mapping).length));
-      onHint?.(source);
+      onHint?.(extract?.carrier && !source.carrier ? { ...source, carrier: extract.carrier } : source);
     } catch (cause) {
       if (id !== uploadId.current) return;
       setPicked("");
@@ -219,7 +248,21 @@ function UploadCard({
     const id = ++uploadId.current;
     setError("");
     try {
-      if (!/\.(csv|tsv)$/i.test(file.name)) throw new Error("Vælg en CSV- eller TSV-fil.");
+      if (invoice && /\.pdf$/i.test(file.name)) {
+        if (!companyId) throw new Error("Vælg en organisation, før en PDF kan læses.");
+        if (file.size > 8_000_000) throw new Error("PDF'en må fylde højst 8 MB.");
+        setBusy("upload");
+        const extract = await extractUpload(file, companyId);
+        if (id !== uploadId.current) return;
+        const sheet = extractSheet(extract);
+        const mapping = suggestMapping(kind, sheet.headers);
+        onChange({ name: file.name, sheet, mapping, extract });
+        setPicked("");
+        setShowMapping(false);
+        if (extract.carrier) onHint?.({ id: "upload", name: file.name, date: "", carrier: extract.carrier, note: "" });
+        return;
+      }
+      if (!/\.(csv|tsv)$/i.test(file.name)) throw new Error(invoice ? "Vælg en CSV-, TSV- eller PDF-fil." : "Vælg en CSV- eller TSV-fil.");
       if (file.size > MAX_FILE_BYTES) throw new Error("Filen må fylde højst 1 MB.");
       const sheet = parseCsv(decodeCsv(await file.arrayBuffer()));
       if (id !== uploadId.current) return;
@@ -230,6 +273,8 @@ function UploadCard({
     } catch (cause) {
       if (id !== uploadId.current) return;
       setError((cause as Error).message);
+    } finally {
+      if (id === uploadId.current) setBusy((now) => (now === "upload" ? "" : now));
     }
   }
 
@@ -285,7 +330,7 @@ function UploadCard({
           className="sr-only"
           type="file"
           tabIndex={-1}
-          accept=".csv,.tsv,text/csv,text/tab-separated-values"
+          accept={invoice ? ".csv,.tsv,.pdf,text/csv,text/tab-separated-values,application/pdf" : ".csv,.tsv,text/csv,text/tab-separated-values"}
           aria-label={invoice ? "Vælg fakturafil" : "Vælg prisaftalefil"}
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
@@ -297,22 +342,28 @@ function UploadCard({
           <>
             <div className="drop-icon"><Check size={22} /></div>
             <strong className="filename">{value.name}</strong>
-            <span>{value.sheet.rows.length.toLocaleString("da-DK")} datalinjer</span>
+            <span>{value.sheet.rows.length.toLocaleString("da-DK")} {value.extract ? "forsendelser fra PDF" : "datalinjer"}</span>
             <div className="drop-links">
               <button type="button" className="text-button" onClick={() => input.current?.click()}>Skift fil</button>
               <button type="button" className="icon-button" aria-label="Fjern fil" onClick={clear}><X size={15} /></button>
             </div>
           </>
+        ) : busy === "upload" ? (
+          <>
+            <div className="drop-icon"><UploadCloud size={23} /></div>
+            <span role="status">Læser PDF'ens linjer med Workers AI…</span>
+          </>
         ) : (
           <>
             <div className="drop-icon"><UploadCloud size={23} /></div>
             <button type="button" className="text-button" onClick={() => input.current?.click()}>Vælg fil</button>
-            <span>eller slip den her · CSV / TSV · maks. 1 MB</span>
+            <span>eller slip den her · {invoice ? "CSV / TSV maks. 1 MB · PDF maks. 8 MB" : "CSV / TSV · maks. 1 MB"}</span>
           </>
         )}
       </div>
       ) : null}
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
+      {value?.extract ? <ExtractSummary extract={value.extract} /> : null}
       <div className="upload-footer">
         <button
           type="button"

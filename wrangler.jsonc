@@ -3,6 +3,7 @@
   "main": "deploy/freightlytics.ts",
   "compatibility_date": "2026-11-13",
   "workers_dev": true,
+  "ai": { "binding": "AI" },
   "routes": [
     { "pattern": "freightlytics.io", "custom_domain": true },
     { "pattern": "www.freightlytics.io", "custom_domain": true }
