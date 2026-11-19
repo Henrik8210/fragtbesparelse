@@ -6,8 +6,10 @@ import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
+import { agreementStore, createAgreement, deleteAgreement, listAgreements, readAgreement, updateAgreement } from "./priceAgreements.ts";
+import { agreementCreateSchema, agreementPatchSchema } from "../src/pilot/agreementRecord.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
-import { observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
+import { observeAgreementEdits, observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, runBatches, takeRun } from "./invoiceExtract.ts";
 import { AGREEMENT_NO_TEXT } from "../src/pilot/agreementExtract.ts";
@@ -723,6 +725,94 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const saved = await saveCheck({ companyId, fileId, original: original.data, lines: lines.data, by: user.id, name: user.name || user.username });
       void observeCheckEdits(companyId, saved.check);
       send(res, 200, saved);
+      return;
+    }
+
+    if (path === "/api/price-agreements" || path === "/api/price-agreements/import") {
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      if (method === "GET" && !companyId && user.role === "admin") {
+        send(res, 200, await listAgreements(null));
+        return;
+      }
+      if (!companyId || !canSee(user, companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      if (method === "GET" && path === "/api/price-agreements") {
+        send(res, 200, await listAgreements(companyId));
+        return;
+      }
+      if (method !== "POST") {
+        send(res, 405, { error: "method" });
+        return;
+      }
+      const by = { id: user.id, name: user.name || user.username };
+      if (path === "/api/price-agreements/import") {
+        const body = (await readJson(req)) as { agreements?: unknown };
+        const items = Array.isArray(body.agreements) ? body.agreements.slice(0, 200) : [];
+        const imported: string[] = [];
+        const skipped: string[] = [];
+        let store = agreementStore();
+        for (const item of items) {
+          const parsed = agreementCreateSchema.safeParse({ ...(item as object), source: "browser", extractSha256: null });
+          const id = typeof (item as { id?: unknown })?.id === "string" ? (item as { id: string }).id : "";
+          if (!parsed.success || !parsed.data.id) {
+            if (id) skipped.push(id);
+            continue;
+          }
+          try {
+            const saved = await createAgreement(companyId, parsed.data, by, true);
+            store = saved.store;
+            imported.push(saved.agreement.id);
+          } catch {
+            skipped.push(parsed.data.id);
+          }
+        }
+        send(res, 200, { imported, skipped, store });
+        return;
+      }
+      const parsed = agreementCreateSchema.safeParse(await readJson(req));
+      if (!parsed.success) {
+        send(res, 400, { error: "agreement", message: /^(Slutdatoen|Tilføj mindst)/.test(parsed.error.issues[0]?.message ?? "") ? parsed.error.issues[0].message : "Prisaftalen kunne ikke gemmes. Kontrollér priser og datoer." });
+        return;
+      }
+      try {
+        const saved = await createAgreement(companyId, parsed.data, by);
+        void observeAgreementEdits(saved.agreement);
+        send(res, 201, { agreement: saved.agreement, store: saved.store });
+      } catch (error) {
+        if ((error as Error).message !== "conflict") throw error;
+        send(res, 409, { error: "conflict", message: "Prisaftalen findes allerede." });
+      }
+      return;
+    }
+
+    const priceAgreement = path.match(/^\/api\/price-agreements\/([\w:-]{8,80})$/);
+    if (priceAgreement && (method === "GET" || method === "PATCH" || method === "DELETE")) {
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      const found = await readAgreement(priceAgreement[1]);
+      if (!found || !canSee(user, found.companyId) || (companyId && companyId !== found.companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      if (method === "GET") {
+        send(res, 200, { agreement: found, store: agreementStore() });
+        return;
+      }
+      if (method === "DELETE") {
+        send(res, 200, { deleted: found.id, store: await deleteAgreement(found) });
+        return;
+      }
+      const patch = agreementPatchSchema.safeParse(await readJson(req));
+      if (!patch.success) {
+        send(res, 400, { error: "agreement", message: "Ændringen kunne ikke gemmes. Kontrollér priser og datoer." });
+        return;
+      }
+      try {
+        send(res, 200, await updateAgreement(found, patch.data, { id: user.id, name: user.name || user.username }));
+      } catch (error) {
+        send(res, 400, { error: "agreement", message: (error as Error).message.slice(0, 200) });
+      }
       return;
     }
 

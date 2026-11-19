@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { CircleAlert, Plus, Trash2 } from "lucide-react";
+import { ApiError } from "../api.ts";
 import { agreementFromRows, type Agreement } from "./agreements.ts";
 import {
   decimalText, parseDecimal, SURCHARGE_KINDS, UNIT_SUGGESTIONS,
@@ -118,7 +119,7 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
   orgId: string;
   carriers: string[];
   onBack: () => void;
-  onSave: (agreement: Agreement) => void;
+  onSave: (agreement: Agreement) => Promise<void>;
 }) {
   const [rates, setRates] = useState<RateDraft[]>(() => extract.rates.map(toRate));
   const [items, setItems] = useState<ItemDraft[]>(() => extract.items.map((item) => ({ ...item, price: decimalText(item.price) })));
@@ -130,6 +131,7 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
   const [from, setFrom] = useState(extract.validFrom);
   const [to, setTo] = useState(extract.validTo);
   const [problem, setProblem] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const parsedRates = useMemo(() => rates.map(fromRate), [rates]);
   const flagged = rates.filter((draft) => draft.issues.length).length + items.filter((item) => item.issues.length).length
@@ -158,7 +160,7 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
     setGrids((current) => current.map((grid, at) => at === index ? change(grid) : grid));
   }
 
-  function save() {
+  async function save() {
     setProblem("");
     const badRate = parsedRates.findIndex((rate) => rate === null);
     if (badRate >= 0) {
@@ -174,11 +176,20 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
       setProblem(terms);
       return;
     }
+    let agreement: Agreement;
     try {
       const rows = agreementRatesToRows(parsedRates as Omit<AgreementRate, "issues">[], from, to);
-      onSave(agreementFromRows(rows, { orgId, name, carrier, from, to }, new Date(), terms));
+      agreement = agreementFromRows(rows, { orgId, name, carrier, from, to }, new Date(), terms);
     } catch (error) {
       setProblem((error as Error).message);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(agreement);
+    } catch (error) {
+      setProblem(error instanceof ApiError && error.message !== error.code ? error.message : "Prisaftalen blev ikke gemt. Prøv igen.");
+      setSaving(false);
     }
   }
 
@@ -342,8 +353,8 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
         </div>
         {problem ? <p className="check-problem" role="alert"><CircleAlert size={14} /> {problem}</p> : null}
         <div className="check-actions">
-          <button type="button" className="button secondary" onClick={onBack}>Tilbage</button>
-          <button type="button" className="button primary" onClick={save} disabled={empty}>Gem prisaftale</button>
+          <button type="button" className="button secondary" onClick={onBack} disabled={saving}>Tilbage</button>
+          <button type="button" className="button primary" onClick={() => void save()} disabled={empty || saving}>{saving ? "Gemmer…" : "Gem prisaftale"}</button>
         </div>
       </div>
     </div>

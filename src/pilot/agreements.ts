@@ -1,5 +1,6 @@
 import { importRows, missingFields, parseCsv, suggestMapping } from "./csv.ts";
 import { agreementTermsSchema, hasTerms, type AgreementTerms } from "./agreementFormat.ts";
+import type { AgreementSource } from "./agreementRecord.ts";
 import type { RateRow } from "./freight.ts";
 
 const KEY = "freightlytics-agreements";
@@ -18,6 +19,10 @@ export type Agreement = {
   createdAt: string;
   sample: boolean;
   ended?: string;
+  /** Set on agreements read from the database: whether the rows differ from what was first read. */
+  changed?: boolean;
+  source?: AgreementSource;
+  createdByName?: string;
 };
 
 export type AgreementState = "active" | "historic";
@@ -33,8 +38,10 @@ export function loadAgreements(): Agreement[] {
   }
 }
 
+/** Keeps only the browser agreements that have not reached the database yet; with none left the key is removed. */
 export function saveAgreements(items: Agreement[]) {
-  localStorage.setItem(KEY, JSON.stringify(items.slice(0, 200)));
+  if (items.length === 0) localStorage.removeItem(KEY);
+  else localStorage.setItem(KEY, JSON.stringify(items.slice(0, 200)));
 }
 
 export function rowSpan(rows: RateRow[]): { from: string; to: string } {
