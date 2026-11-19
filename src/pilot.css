@@ -228,6 +228,18 @@ small { font-size: .8rem; }
 .checked-note svg { flex: none; margin-top: 2px; }
 .check-modal { width: min(1040px, 100%); max-height: min(92dvh, 860px); display: flex; flex-direction: column; }
 .check-modal .modal-head h2 { font-size: 1.15rem; }
+.modal-card.compact-modal { font-size: .8rem; }
+.modal-card.compact-modal .modal-head h2 { font-size: 1.05rem; }
+.modal-card.compact-modal .modal-close { font-size: .8rem; }
+.modal-card.compact-modal > p, .modal-card.compact-modal p { font-size: .78rem; }
+.modal-card.compact-modal label { font-size: .74rem; }
+.modal-card.compact-modal input, .modal-card.compact-modal select, .modal-card.compact-modal textarea { font-size: .78rem; height: 32px; }
+.modal-card.compact-modal .check-table th { font-size: .66rem; }
+.modal-card.compact-modal .check-table input, .modal-card.compact-modal .check-table select { font-size: .74rem; height: 28px; }
+.modal-card.compact-modal .review-section h3 { font-size: .86rem; }
+.modal-card.compact-modal .check-chip, .modal-card.compact-modal .confidence { font-size: .68rem; }
+.modal-card.compact-modal .check-problem, .modal-card.compact-modal .review-note, .modal-card.compact-modal .review-name { font-size: .74rem; }
+.modal-card.compact-modal .button { font-size: .8rem; }
 .check-editor { display: flex; flex-direction: column; gap: 10px; min-height: 0; margin-top: 6px; }
 .check-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .check-meta p { color: var(--muted); font-size: .8rem; }

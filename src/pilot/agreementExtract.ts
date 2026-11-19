@@ -6,14 +6,17 @@ import {
 import { MAX_RATES, rateRowSchema, type RateRow } from "./freight.ts";
 import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
 import { EXTRACT_MODEL, isoDate, printedAmounts, type AiInputs, type Confidence } from "./invoiceExtract.ts";
+import { lostPartIssues, PART_MIN_PRICES, printedOre, type PartPlan, type PartReport } from "./agreementParts.ts";
 
-export const AGREEMENT_EXTRACT_VERSION = 3;
+export const AGREEMENT_EXTRACT_VERSION = 4;
 export const AGREEMENT_CACHE_PREFIX = "agreement:";
-export const AGREEMENT_NO_TEXT = "PDF'en er kun et billede (fx en scannet side) og har intet tekstlag, så priserne kan ikke læses. Brug en PDF med tekst, eller udfyld skabelonen som CSV.";
+export const AGREEMENT_NO_TEXT = "PDF'en er kun et billede (fx en scannet side) og har intet tekstlag, så priserne kan ikke læses. Brug en PDF med tekst, eller tilføj prisaftalen som CSV.";
 /** Text per model call. A 3PL rate sheet has hundreds of numbers, more than one reply can hold, so pages are read in groups. */
 export const AGREEMENT_CHUNK_CHARS = 5_000;
 export const AGREEMENT_MAX_CHARS = 60_000;
 export const AGREEMENT_MAX_CHUNKS = 12;
+/** Printed prices per part. A denser page is split, so one reply never has to hold a hundred grid cells. */
+export const AGREEMENT_CHUNK_PRICES = 60;
 
 export type AgreementRate = {
   service: string;
@@ -185,7 +188,9 @@ const SYSTEM_PROMPT = `You read Danish and Nordic freight and logistics price ag
 Rules:
 - Copy every number exactly as printed, in Danish notation, e.g. "1.234,50". Never compute, convert or invent a price.
 - The carrier is the supplier that issues the agreement and does the work. The customer is who it is for: in "Rateblad for X", "Prisaftale for X" or "Tilbud til X", X is the customer, never the carrier.
-- Every line with a description and one price, e.g. "Pluk pr. kolli  1,57  DKK", is an item. Return every such line; never skip, merge or summarise them.
+- Every line with a description and one price, e.g. "Pluk pr. kolli  1,57  DKK", is an item. Return every such line; never skip, merge or summarise them. A row inside a table is part of that grid, never an item.
+- The carrier is the full company name as printed (e.g. "Nordfragt A/S" becomes "Nordfragt"), never an abbreviation used in headings.
+- A surcharge whose percentages are listed in bullets under it is percent, one surcharge per bullet, with the value printed there.
 - A price per hour, day, order or unit followed by DKK is an item or an amount, never a percent.
 - A single price with a description and a unit is an item. A table with tiers down the side and regions, receiver types, destinations, zones or islands across the top is a grid; return every cell.
 - The first cell of a grid's header row (Destination, Postnr., Ø Navn, Zone) names the row-label column. It is not a price column. Each column has one value per row, in printed order.
@@ -199,48 +204,126 @@ function cleanText(pdfText: string): string {
   return pdfText.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/** Page groups of at most AGREEMENT_CHUNK_CHARS. pdfText separates pages with a blank line. */
-export function agreementChunks(pdfText: string): { chunks: string[]; truncated: boolean } {
+type Piece = { text: string; page: number };
+
+/** Index of each line that starts a block: a line without prices right after one with prices (a new table's name). */
+function blockStarts(lines: string[]): number[] {
+  const starts = [0];
+  for (let index = 1; index < lines.length; index += 1) {
+    if (!printedOre(lines[index]).size && printedOre(lines[index - 1]).size) starts.push(index);
+  }
+  return starts;
+}
+
+const isTitle = (line: string) => /^\p{Lu}/u.test(line.trim()) && !/\s{2,}/.test(line.trim()) && !printedOre(line).size && line.trim().length <= 90;
+
+/** A page's blocks, grouped so no group passes a part's limit on text or prices unless one block alone does. */
+function splitPage(text: string, page: number): Piece[] {
+  if (text.length <= AGREEMENT_CHUNK_CHARS && printedOre(text).size <= AGREEMENT_CHUNK_PRICES) return [{ text, page }];
+  const lines = text.split("\n");
+  const starts = blockStarts(lines);
+  const blocks = starts.map((start, at) => lines.slice(start, starts[at + 1] ?? lines.length).join("\n"));
+  const pieces: Piece[] = [];
+  let current = "";
+  let title = "";
+  for (const block of blocks) {
+    const joined = current ? `${current}\n${block}` : block;
+    if (current && (joined.length > AGREEMENT_CHUNK_CHARS || printedOre(joined).size > AGREEMENT_CHUNK_PRICES)) {
+      pieces.push({ text: current, page });
+      // A table cut from its title ("Distribution til Sverige") keeps the title as context.
+      current = title && !block.startsWith(title) ? `${title}\n${block}` : block;
+    } else current = joined;
+    for (const line of block.split("\n")) if (isTitle(line)) title = line.trim();
+  }
+  if (current) pieces.push({ text: current, page });
+  // A single block longer than a part is cut by line, as before.
+  return pieces.flatMap((piece) => piece.text.length <= AGREEMENT_CHUNK_CHARS ? [piece] : cutLines(piece.text).map((part) => ({ text: part, page })));
+}
+
+function cutLines(text: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (const line of text.split("\n")) {
+    if (current && current.length + line.length + 1 > AGREEMENT_CHUNK_CHARS) {
+      parts.push(current);
+      current = "";
+    }
+    current = current ? `${current}\n${line}` : line;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+export type AgreementChunk = { text: string; pages: [number, number] };
+
+/**
+ * Page groups of at most AGREEMENT_CHUNK_CHARS and AGREEMENT_CHUNK_PRICES. pdfText separates pages with a blank line.
+ * A page dense with prices gets parts of its own, so no single reply has to hold a hundred cells.
+ */
+export function agreementParts(pdfText: string): { parts: AgreementChunk[]; truncated: boolean } {
   const cleaned = cleanText(pdfText);
   const truncated = cleaned.length > AGREEMENT_MAX_CHARS;
   const body = truncated ? cleaned.slice(0, AGREEMENT_MAX_CHARS) : cleaned;
-  const pieces = body.split(/\n\n+/).flatMap((page) => {
-    if (page.length <= AGREEMENT_CHUNK_CHARS) return [page];
-    const parts: string[] = [];
-    let current = "";
-    for (const line of page.split("\n")) {
-      if (current && current.length + line.length + 1 > AGREEMENT_CHUNK_CHARS) {
-        parts.push(current);
-        current = "";
-      }
-      current = current ? `${current}\n${line}` : line;
-    }
-    if (current) parts.push(current);
-    return parts;
-  });
-  const chunks: string[] = [];
+  const pieces = body.split(/\n\n+/).flatMap((page, index) => splitPage(page, index + 1));
+  const parts: (AgreementChunk & { prices: number })[] = [];
   for (const piece of pieces) {
-    const last = chunks.at(-1);
-    if (last !== undefined && last.length + piece.length + 2 <= AGREEMENT_CHUNK_CHARS) chunks[chunks.length - 1] = `${last}\n\n${piece}`;
-    else chunks.push(piece);
+    const last = parts.at(-1);
+    const prices = printedOre(piece.text).size;
+    if (last && last.text.length + piece.text.length + 2 <= AGREEMENT_CHUNK_CHARS && last.prices + prices <= AGREEMENT_CHUNK_PRICES) {
+      last.text = `${last.text}\n\n${piece.text}`;
+      last.pages = [last.pages[0], piece.page];
+      last.prices += prices;
+    } else parts.push({ text: piece.text, pages: [piece.page, piece.page], prices });
   }
-  if (chunks.length > AGREEMENT_MAX_CHUNKS) return { chunks: chunks.slice(0, AGREEMENT_MAX_CHUNKS), truncated: true };
-  return { chunks: chunks.length ? chunks : [""], truncated };
+  const kept = parts.slice(0, AGREEMENT_MAX_CHUNKS).map(({ text, pages }) => ({ text, pages }));
+  return { parts: kept.length ? kept : [{ text: "", pages: [1, 1] }], truncated: truncated || parts.length > AGREEMENT_MAX_CHUNKS };
 }
 
-export function buildAgreementBatches(pdfText: string): { batches: AiInputs[]; truncated: boolean } {
-  const { chunks, truncated } = agreementChunks(pdfText);
+export function agreementChunks(pdfText: string): { chunks: string[]; truncated: boolean } {
+  const { parts, truncated } = agreementParts(pdfText);
+  return { chunks: parts.map((part) => part.text), truncated };
+}
+
+/** The part in two at the block start nearest half of its prices, so a table keeps its name and header. */
+function halves(text: string): [string, string] | null {
+  const lines = text.split("\n");
+  const total = printedOre(text).size;
+  if (lines.length < 4 || total < PART_MIN_PRICES) return null;
+  let best: { at: number; gap: number } | null = null;
+  for (const at of blockStarts(lines).slice(1)) {
+    const gap = Math.abs(printedOre(lines.slice(0, at).join("\n")).size - total / 2);
+    if (!best || gap < best.gap) best = { at, gap };
+  }
+  const at = best?.at ?? Math.floor(lines.length / 2);
+  return [lines.slice(0, at).join("\n"), lines.slice(at).join("\n")];
+}
+
+function agreementRequest(text: string, label: string): AiInputs {
+  return {
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: `Price agreement text extracted from the PDF, ${label}:\n\n${text}` },
+    ],
+    response_format: { type: "json_schema", json_schema: AGREEMENT_JSON_SCHEMA },
+    max_tokens: 7000,
+    temperature: 0,
+  };
+}
+
+export function buildAgreementBatches(pdfText: string): { batches: AiInputs[]; plans: PartPlan[]; truncated: boolean } {
+  const { parts, truncated } = agreementParts(pdfText);
+  const label = (index: number) => `part ${index + 1} of ${parts.length}`;
   return {
     truncated,
-    batches: chunks.map((chunk, index) => ({
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `Price agreement text extracted from the PDF, part ${index + 1} of ${chunks.length}:\n\n${chunk}` },
-      ],
-      response_format: { type: "json_schema", json_schema: AGREEMENT_JSON_SCHEMA },
-      max_tokens: 7000,
-      temperature: 0,
-    })),
+    batches: parts.map((part, index) => agreementRequest(part.text, label(index))),
+    plans: parts.map((part, index) => {
+      const split = halves(part.text);
+      return {
+        pages: part.pages,
+        prices: [...printedOre(part.text)],
+        halves: split ? split.map((text, half) => agreementRequest(text, `${label(index)}, ${half ? "second" : "first"} half`)) : [],
+      };
+    }),
   };
 }
 
@@ -315,9 +398,12 @@ export function agreementCustomer(pdfText: string): string {
   return CUSTOMER.exec(pdfText.normalize("NFKC"))?.[1]?.replace(/\s+/g, " ").trim().slice(0, 70) ?? "";
 }
 
+const initials = (name: string) => name.split(/[\s&-]+/).filter(Boolean).map((word) => word[0]).join("").toLowerCase();
+
 /**
  * The issuing company. The model's answers count, except one that names the customer; then the company with a
- * legal suffix (A/S, ApS, AB …) named most often in the text, again not the customer.
+ * legal suffix (A/S, ApS, AB …) named most often in the text, again not the customer. An answer that is that company's
+ * initials or the start of its name ("NF" for Nord Fragt A/S) becomes the full name.
  */
 export function issuingCarrier(answers: string[], pdfText: string): string {
   const customer = squash(agreementCustomer(pdfText));
@@ -325,15 +411,6 @@ export function issuingCarrier(answers: string[], pdfText: string): string {
     const key = squash(baseName(name));
     return Boolean(customer && key && (key === customer || key.includes(customer) || customer.includes(key)));
   };
-  const votes = new Map<string, { name: string; count: number }>();
-  for (const answer of answers) {
-    const name = baseName(answer);
-    if (!name || isCustomer(name)) continue;
-    const key = squash(name);
-    votes.set(key, { name: votes.get(key)?.name ?? name, count: (votes.get(key)?.count ?? 0) + 1 });
-  }
-  const voted = [...votes.values()].sort((a, b) => b.count - a.count)[0];
-  if (voted) return voted.name.slice(0, 70);
   const text = pdfText.normalize("NFKC");
   const named = new Map<string, { name: string; count: number; at: number }>();
   for (const match of text.matchAll(LEGAL_NAME)) {
@@ -341,10 +418,28 @@ export function issuingCarrier(answers: string[], pdfText: string): string {
     if (isCustomer(name)) continue;
     const key = squash(name);
     if (named.has(key)) continue;
-    const count = text.split(name).length - 1;
-    named.set(key, { name, count, at: match.index ?? 0 });
+    named.set(key, { name, count: text.split(name).length - 1, at: match.index ?? 0 });
   }
-  const best = [...named.values()].sort((a, b) => b.count - a.count || a.at - b.at)[0];
+  const companies = [...named.values()].sort((a, b) => b.count - a.count || a.at - b.at);
+  const fullName = (answer: string) => {
+    const key = squash(answer);
+    const found = companies.find((company) => {
+      const full = squash(company.name);
+      return full !== key && (initials(company.name) === key || (key.length >= 3 && full.startsWith(key)));
+    });
+    return found?.name ?? answer;
+  };
+  const votes = new Map<string, { name: string; count: number }>();
+  for (const answer of answers) {
+    const name = baseName(answer);
+    if (!name || isCustomer(name)) continue;
+    const full = fullName(name);
+    const key = squash(full);
+    votes.set(key, { name: votes.get(key)?.name ?? full, count: (votes.get(key)?.count ?? 0) + 1 });
+  }
+  const voted = [...votes.values()].sort((a, b) => b.count - a.count)[0];
+  if (voted) return voted.name.slice(0, 70);
+  const best = companies[0];
   return best && best.count >= 2 ? best.name.slice(0, 70) : "";
 }
 
@@ -407,6 +502,22 @@ function dropHeaderColumn(grid: ExtractGrid): ExtractGrid {
   };
 }
 
+/** Percentages listed in bullets under the line that introduces the label and ends with a colon. */
+export function listedPercents(label: string, pdfText: string): { value: number; scope: string }[] {
+  const key = squash(label);
+  if (!key) return [];
+  const lines = pdfText.normalize("NFKC").split("\n");
+  const start = lines.findIndex((line) => squash(line).includes(key) && line.trim().endsWith(":"));
+  if (start < 0) return [];
+  const found: { value: number; scope: string }[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const match = /^[^\p{L}\d]*(\d+(?:,\d+)?)\s*%\s*(.*)$/u.exec(line.trim());
+    if (!match) break;
+    found.push({ value: Number(match[1].replace(",", ".")), scope: match[2].replace(/\.$/, "").slice(0, 200) });
+  }
+  return found;
+}
+
 const cellsOf = (line: string) => line.trim().split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
 
 /**
@@ -467,16 +578,21 @@ function printedAsMoney(value: number, pdfText: string): boolean {
   return money.test(normalized) && !percent.test(normalized);
 }
 
-export type AgreementMeta = { sha256: string; filename: string; truncated?: boolean; usage?: AgreementExtract["usage"]; now?: Date };
+export type AgreementMeta = { sha256: string; filename: string; truncated?: boolean; usage?: AgreementExtract["usage"]; now?: Date; parts?: PartReport[] };
 
 /** Merges the replies for each page group, then looks up every number in the PDF's own text; what is not printed is flagged. */
 export function validateAgreementExtract(rawOutput: unknown, pdfText: string, meta: AgreementMeta): AgreementExtract {
   const outputs: unknown[] = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
-  const parsedParts = outputs.map((output) => outputSchema.safeParse(output));
+  // Every field falls back to empty, so a reply that is not an agreement object at all must not pass as an empty part.
+  const shaped = (output: unknown) => Boolean(output && typeof output === "object" && !Array.isArray(output)
+    && ["carrier", "rates", "items", "grids", "surcharges", "conditions"].some((key) => key in output));
+  const parsedParts = outputs.map((output) => shaped(output) ? outputSchema.safeParse(output) : outputSchema.safeParse(null));
   const parts = parsedParts.flatMap((part) => part.success ? [part.data as Output] : []);
   if (parts.length === 0) throw new Error("Modellens svar passer ikke til prisaftaleskemaet.");
   const issues: string[] = [];
-  if (parts.length < outputs.length) issues.push(`${outputs.length - parts.length} af ${outputs.length} dele af PDF'en kunne ikke læses.`);
+  const lost = meta.parts ? lostPartIssues(meta.parts) : [];
+  if (meta.parts) issues.push(...lost);
+  else if (parts.length < outputs.length) issues.push(`${outputs.length - parts.length} af ${outputs.length} dele af PDF'en kunne ikke læses.`);
 
   const known = new Set(Object.keys(outputSchema.shape));
   const unmapped = [...new Set(parts.flatMap((part) => Object.keys(part).filter((key) => !known.has(key))))].slice(0, 20);
@@ -590,6 +706,31 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     return { label: item.label, kind, value, unit: item.unit, scope: item.scope, note: item.note, issues: surchargeIssues };
   });
 
+  // A grid row the model also returned as an item ("Minimum 1.007,01" under the grid's own name) is the grid read twice.
+  const gridValues = new Map(grids.map((grid) => [squash(grid.name), new Set(
+    [...grid.rows.flatMap((row) => row.cells), ...grid.minimum, ...grid.maximum].flatMap((value) => value === null ? [] : [ore(value)]),
+  )]));
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    const values = gridValues.get(squash(item.category));
+    if (values && item.price !== null && values.has(ore(item.price))) items.splice(index, 1);
+  }
+
+  // "Olietillæg … udgør:" followed by "◦ 21,58% for …" bullets: the values are printed, one surcharge per bullet.
+  const taken = new Map<string, number>();
+  for (const item of surcharges) {
+    if (item.value !== null || item.kind !== "agreed") continue;
+    const key = squash(item.label);
+    const listed = listedPercents(item.label, pdfText);
+    const at = taken.get(key) ?? 0;
+    if (at >= listed.length) continue;
+    taken.set(key, at + 1);
+    item.kind = "percent";
+    item.value = listed[at].value;
+    if (!item.scope) item.scope = listed[at].scope;
+    item.issues = [];
+  }
+
   // On a parcel rate card the agreement-wide surcharges belong on each weight step, which is what the invoice check prices.
   if (rates.length && !grids.length) {
     const pct = Math.round(surcharges.filter((item) => item.kind === "percent").reduce((sum, item) => sum + (item.value ?? 0), 0) * 100) / 100;
@@ -648,7 +789,7 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     + grids.reduce((sum, grid) => sum + grid.rows.length * grid.columns.length, 0) + surcharges.length;
   const flagged = rates.filter((rate) => rate.issues.length).length + items.filter((item) => item.issues.length).length
     + grids.reduce((sum, grid) => sum + grid.unprinted.length, 0) + surcharges.filter((item) => item.issues.length).length;
-  const confidence: Confidence = priceCount === 0 || meta.truncated || flagged * 5 > numbers || parts.length < outputs.length
+  const confidence: Confidence = priceCount === 0 || meta.truncated || flagged * 5 > numbers || lost.length > 0 || (!meta.parts && parts.length < outputs.length)
     || (coverage.printed >= 10 && coverage.captured / coverage.printed < 0.75)
     ? "low"
     : flagged > 0 || issues.length > 0 ? "medium" : "high";

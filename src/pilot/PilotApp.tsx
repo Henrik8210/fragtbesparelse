@@ -10,7 +10,7 @@ import { agreementFromCsv, agreementFromRows, sampleAgreement, splitAgreements, 
 import { createPriceAgreement, deletePriceAgreement, listPriceAgreements, migrateBrowserAgreements, updatePriceAgreement, type AgreementStore } from "./agreementClient.ts";
 import { extractOriginalRows, recordToAgreement, type AgreementCreate, type AgreementPatch } from "./agreementRecord.ts";
 import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
-import { AuditFlow, downloadCsv } from "./audit.tsx";
+import { AuditFlow } from "./audit.tsx";
 import { carrierFromMail, carrierIn, carrierInDocument } from "./carrierName.ts";
 import { agreementFromExtract, agreementName, reviewReasons } from "./agreementAuto.ts";
 import { AgreementReview } from "./AgreementReview.tsx";
@@ -21,7 +21,6 @@ import { InvoiceAgreement } from "./InvoiceAgreement.tsx";
 import { isCheckable, isSheetName } from "./checkSource.ts";
 import { fetchInvoiceCheck, listInvoiceChecks } from "./checkClient.ts";
 import { decodeCsv, importRows, parseCsv, suggestMapping } from "./csv.ts";
-import { DEMO_RATES } from "./demo.ts";
 import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution, type InvoiceRow, type RateRow,
@@ -1925,7 +1924,7 @@ function clearHash(hash: string) {
 /** Escape closes only the topmost of stacked modals. */
 const openModals: symbol[] = [];
 
-function Modal({ title, onClose, children, wide = false, audit = false, check = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; audit?: boolean; check?: boolean }) {
+function Modal({ title, onClose, children, wide = false, audit = false, check = false, compact = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; audit?: boolean; check?: boolean; compact?: boolean }) {
   const close = useRef(onClose);
   close.current = onClose;
   const card = useRef<HTMLDivElement>(null);
@@ -1949,7 +1948,7 @@ function Modal({ title, onClose, children, wide = false, audit = false, check = 
   }, []);
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close.current(); }}>
-      <div className={["modal-card", wide ? "invoice-modal" : "", audit ? "audit-modal" : "", check ? "check-modal" : ""].filter(Boolean).join(" ")} ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div className={["modal-card", wide ? "invoice-modal" : "", audit ? "audit-modal" : "", check ? "check-modal" : "", compact ? "compact-modal" : ""].filter(Boolean).join(" ")} ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div className="modal-head">
           <h2 id="modal-title">{title}</h2>
           <button type="button" className="modal-close" onClick={() => close.current()}>Luk</button>
@@ -2531,7 +2530,7 @@ function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org
 
   if (review) {
     return (
-      <Modal title="Gennemse prisaftale" check onClose={onClose}>
+      <Modal title="Gennemse prisaftale" check compact onClose={onClose}>
         <AgreementReview
           extract={review.extract}
           reasons={review.reasons}
@@ -2546,7 +2545,7 @@ function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org
 
   const elapsed = reading ? now - reading.started : 0;
   return (
-    <Modal title="Tilføj prisaftale" onClose={onClose}>
+    <Modal title="Tilføj prisaftale" compact onClose={onClose}>
       <p>Vælg prisaftalen, så læses transportør, gyldighed og priser fra filen, og aftalen gemmes for {org.name}. En PDF læses af Workers AI. Du ser den kun igen, hvis noget ikke kunne læses.</p>
       <div className="file-pick">
         <input
@@ -2564,7 +2563,6 @@ function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org
         />
         <button type="button" className="button primary" onClick={() => input.current?.click()} disabled={Boolean(reading) || saving}><UploadCloud size={16} /> {csv ? "Skift fil" : "Vælg fil"}</button>
         <span>{csv ? csv.filename : "PDF (maks. 8 MB), CSV eller TSV (maks. 1 MB)"}</span>
-        <button type="button" className="text-button muted" onClick={() => downloadCsv("prisaftale-skabelon.csv", DEMO_RATES)}>Hent skabelon</button>
       </div>
       {reading ? (
         <div className="agreement-progress" role="status" aria-live="polite">

@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
+import type { PartReport } from "../src/pilot/agreementParts.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
@@ -12,7 +13,7 @@ import { agreementCreateSchema, agreementPatchSchema } from "../src/pilot/agreem
 import { listNotices, markNoticeSeen } from "./notifications.ts";
 import { observeAgreementEdits, observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
-import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, runBatches, takeRun } from "./invoiceExtract.ts";
+import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, runParts, takeRun } from "./invoiceExtract.ts";
 import { AGREEMENT_NO_TEXT } from "../src/pilot/agreementExtract.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
@@ -119,6 +120,20 @@ function clientIp(req: IncomingMessage): string {
   const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
   const first = raw?.split(",")[0]?.trim();
   return first || req.socket.remoteAddress || "unknown";
+}
+
+/** Part reports from the Durable Object, kept only when every entry has the expected shape. */
+function partReports(value: unknown): PartReport[] | undefined {
+  if (!Array.isArray(value) || value.length > 64) return undefined;
+  const reports: PartReport[] = [];
+  for (const item of value) {
+    const report = item as Partial<PartReport> | null;
+    const pages = report?.pages;
+    if (!report || !Array.isArray(pages) || pages.length !== 2 || !pages.every((page) => Number.isInteger(page) && page >= 0 && page < 10_000)
+      || !Number.isInteger(report.expected) || !Number.isInteger(report.captured) || typeof report.retried !== "boolean" || typeof report.failed !== "boolean") return undefined;
+    reports.push({ pages: [pages[0], pages[1]], expected: report.expected as number, captured: report.captured as number, retried: report.retried, failed: report.failed });
+  }
+  return reports;
 }
 
 function headerValue(req: IncomingMessage, name: string): string {
@@ -277,11 +292,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 404, { error: "missing" });
         return;
       }
-      const body = (await readJson(req)) as { job?: unknown; output?: unknown; outputs?: unknown };
+      const body = (await readJson(req)) as { job?: unknown; output?: unknown; outputs?: unknown; reports?: unknown };
       const job = typeof body.job === "string" ? body.job : "";
       try {
         const origin = takeJobFile(job);
-        const extract = await closeJob(job, Array.isArray(body.outputs) ? body.outputs : body.output);
+        const extract = await closeJob(job, Array.isArray(body.outputs) ? body.outputs : body.output, partReports(body.reports));
         if (extract === "missing") {
           send(res, 410, { error: "job", message: "Udtrækket udløb. Prøv igen." });
           return;
@@ -949,8 +964,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const line = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
         line({ progress: { done: 0, total: prepared.batches.length } });
         try {
-          const outputs = await runBatches(run, prepared.batches, 4, (done, total) => line({ progress: { done, total } }));
-          const extract = await finishExtract(companyId, prepared, outputs);
+          const { outputs, reports } = await runParts(run, prepared.batches, prepared.plans, (done, total) => line({ progress: { done, total } }));
+          const extract = await finishExtract(companyId, prepared, outputs, reports);
           void observeExtract(companyId, extract, fileId);
           line({ status: 200, body: { extract, cached: false, cache: extractCacheMode() } });
         } catch (error) {
@@ -960,7 +975,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       try {
-        const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
+        const { outputs, reports } = await runParts(run, prepared.batches, prepared.plans);
+        const extract = await finishExtract(companyId, prepared, outputs, reports);
         void observeExtract(companyId, extract, fileId);
         send(res, 200, { extract, cached: false, cache: extractCacheMode() });
       } catch (error) {

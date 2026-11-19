@@ -257,3 +257,43 @@ describe("a reply that misses lines and shifts a wrapped header", () => {
     expect(empty.grids[0].issues.join(" ")).toMatch(/«Vang» har ingen priser/);
   });
 });
+
+describe("listed surcharges and grid rows read twice", () => {
+  const text = `Distribution til Nord
+Pallepladser  Aarby  Bstrup
+Minimum  1.007,01  1.057,36
+Alle transportrater er ekskl. gældende olietillæg, som pr. 01-12-2026 udgør:
+◦  21,58% for national kørsel.
+◦  28,22% for øvrige lande.
+Olietillæg reguleres månedligt.`;
+  const extract = validateAgreementExtract([{
+    carrier: "Nordfragt", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], conditions: [],
+    items: [
+      { category: "Distribution til Nord", description: "Minimum", unit: "", price: "1.007,01", currency: "DKK", note: "" },
+    ],
+    grids: [{
+      name: "Distribution til Nord", category: "", unit: "", currency: "DKK", rowLabel: "Pallepladser", note: "", minimum: [], maximum: [],
+      columns: [{ label: "Aarby", detail: "" }, { label: "Bstrup", detail: "" }], rows: [{ label: "Minimum", cells: ["1.007,01", "1.057,36"] }],
+    }],
+    surcharges: [
+      { label: "Olietillæg", kind: "agreed", value: null, unit: "", scope: "", note: "" },
+      { label: "Olietillæg", kind: "agreed", value: null, unit: "", scope: "", note: "" },
+    ],
+  }], text, { sha256: "x", filename: "x.pdf" });
+
+  it("takes each percentage from the bullets under the surcharge", () => {
+    expect(extract.surcharges.map((item) => [item.kind, item.value, item.scope])).toEqual([
+      ["percent", 21.58, "for national kørsel"], ["percent", 28.22, "for øvrige lande"],
+    ]);
+  });
+
+  it("drops an item that repeats a cell of the grid it names", () => {
+    expect(extract.items).toEqual([]);
+    expect(extract.grids[0].rows[0].cells).toEqual([1007.01, 1057.36]);
+  });
+
+  it("does not take a reply that is not an agreement object as an empty part", () => {
+    const wrapped = validateAgreementExtract([{ response: {} }, reply([])], TEXT, { sha256: "x", filename: "x.pdf" });
+    expect(wrapped.issues).toContain("1 af 2 dele af PDF'en kunne ikke læses.");
+  });
+});
