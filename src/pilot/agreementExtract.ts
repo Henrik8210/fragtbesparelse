@@ -7,7 +7,7 @@ import { MAX_RATES, rateRowSchema, type RateRow } from "./freight.ts";
 import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
 import { EXTRACT_MODEL, isoDate, printedAmounts, type AiInputs, type Confidence } from "./invoiceExtract.ts";
 
-export const AGREEMENT_EXTRACT_VERSION = 2;
+export const AGREEMENT_EXTRACT_VERSION = 3;
 export const AGREEMENT_CACHE_PREFIX = "agreement:";
 export const AGREEMENT_NO_TEXT = "PDF'en er kun et billede (fx en scannet side) og har intet tekstlag, så priserne kan ikke læses. Brug en PDF med tekst, eller udfyld skabelonen som CSV.";
 /** Text per model call. A 3PL rate sheet has hundreds of numbers, more than one reply can hold, so pages are read in groups. */
@@ -81,7 +81,7 @@ const cell = { ...text, description: "Number exactly as printed, e.g. \"1.234,50
 export const AGREEMENT_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
-    carrier: { ...text, description: "Logistics or freight company that offers the agreement, empty if not in this part" },
+    carrier: { ...text, description: "Company that issues the agreement and does the transport or warehousing (the supplier). Not the customer the agreement is for. Empty if the supplier is not named in this part" },
     title: { ...text, description: "Agreement title as printed, empty if not in this part" },
     validFrom: { ...text, description: "First valid day YYYY-MM-DD, empty if not in this part" },
     validTo: { ...text, description: "Last valid day YYYY-MM-DD, empty if not in this part" },
@@ -184,7 +184,11 @@ export const AGREEMENT_JSON_SCHEMA: Record<string, unknown> = {
 const SYSTEM_PROMPT = `You read Danish and Nordic freight and logistics price agreements (prisaftaler, rateblade, 3PL contracts, parcel rate cards) and return their prices as JSON matching the schema.
 Rules:
 - Copy every number exactly as printed, in Danish notation, e.g. "1.234,50". Never compute, convert or invent a price.
+- The carrier is the supplier that issues the agreement and does the work. The customer is who it is for: in "Rateblad for X", "Prisaftale for X" or "Tilbud til X", X is the customer, never the carrier.
+- Every line with a description and one price, e.g. "Pluk pr. kolli  1,57  DKK", is an item. Return every such line; never skip, merge or summarise them.
+- A price per hour, day, order or unit followed by DKK is an item or an amount, never a percent.
 - A single price with a description and a unit is an item. A table with tiers down the side and regions, receiver types, destinations, zones or islands across the top is a grid; return every cell.
+- The first cell of a grid's header row (Destination, Postnr., Ø Navn, Zone) names the row-label column. It is not a price column. Each column has one value per row, in printed order.
 - In a grid, rows labelled Minimum or Maksimum go in minimum and maximum, not in rows. A second header line (receiver type, Postnr., postcodes) goes in the column detail.
 - Parcel prices by weight step (service and max kg) are rates.
 - Fuel (olietillæg, brændstof), refrigeration (køletillæg), ETS, toll and dangerous goods supplements are surcharges. "Skal aftales" or "aftales separat" is kind "agreed" with value "".
@@ -302,6 +306,167 @@ export function printedPrices(pdfText: string): Set<number> {
   return found;
 }
 
+const CUSTOMER = /\b(?:rateblad|prisaftale|prisblad|prisliste|tilbud|aftale|kontrakt|rate card|price list)\s+(?:for|til)\s+([^\n(,:]{2,60})/i;
+const LEGAL_NAME = /(\p{Lu}[\p{L}&.'-]*(?: \p{Lu}[\p{L}&.'-]*){0,3}) (?:A\/S|ApS|I\/S|K\/S|AB|AS|GmbH|Oy|BV)(?![\p{L}])/gu;
+const baseName = (value: string) => value.replace(/\s+(?:A\/S|ApS|I\/S|K\/S|AB|AS|GmbH|Oy|BV)\.?$/i, "").trim();
+
+/** Who the agreement is for, from "Rateblad for X" and similar. */
+export function agreementCustomer(pdfText: string): string {
+  return CUSTOMER.exec(pdfText.normalize("NFKC"))?.[1]?.replace(/\s+/g, " ").trim().slice(0, 70) ?? "";
+}
+
+/**
+ * The issuing company. The model's answers count, except one that names the customer; then the company with a
+ * legal suffix (A/S, ApS, AB …) named most often in the text, again not the customer.
+ */
+export function issuingCarrier(answers: string[], pdfText: string): string {
+  const customer = squash(agreementCustomer(pdfText));
+  const isCustomer = (name: string) => {
+    const key = squash(baseName(name));
+    return Boolean(customer && key && (key === customer || key.includes(customer) || customer.includes(key)));
+  };
+  const votes = new Map<string, { name: string; count: number }>();
+  for (const answer of answers) {
+    const name = baseName(answer);
+    if (!name || isCustomer(name)) continue;
+    const key = squash(name);
+    votes.set(key, { name: votes.get(key)?.name ?? name, count: (votes.get(key)?.count ?? 0) + 1 });
+  }
+  const voted = [...votes.values()].sort((a, b) => b.count - a.count)[0];
+  if (voted) return voted.name.slice(0, 70);
+  const text = pdfText.normalize("NFKC");
+  const named = new Map<string, { name: string; count: number; at: number }>();
+  for (const match of text.matchAll(LEGAL_NAME)) {
+    const name = match[1].trim();
+    if (isCustomer(name)) continue;
+    const key = squash(name);
+    if (named.has(key)) continue;
+    const count = text.split(name).length - 1;
+    named.set(key, { name, count, at: match.index ?? 0 });
+  }
+  const best = [...named.values()].sort((a, b) => b.count - a.count || a.at - b.at)[0];
+  return best && best.count >= 2 ? best.name.slice(0, 70) : "";
+}
+
+const PRICE_LINE = /^(?![\u2022\u25e6\uf0b7\uf0a7\u25aa•◦])(\S.{2,160}?)\s{2,}(\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})\s{2,}(DKK|EUR|SEK|NOK)\s*$/i;
+const HEADING = /^\p{Lu}[^\d:]{2,58}[^\d:.,;]$/u;
+
+/** "Description  1,57  DKK" lines from the text, each with the heading above it. */
+export function printedPriceLines(pdfText: string): { category: string; description: string; unit: string; price: number; currency: string }[] {
+  const found: { category: string; description: string; unit: string; price: number; currency: string }[] = [];
+  let heading = "";
+  for (const raw of pdfText.normalize("NFKC").split("\n")) {
+    const line = raw.trim();
+    const match = PRICE_LINE.exec(line);
+    if (!match) {
+      if (HEADING.test(line) && !/\s{2,}/.test(line) && !/^(?:raterne|priserne|alle priser)\b/i.test(line)) heading = line;
+      continue;
+    }
+    const price = cellValue(match[2]);
+    if (price === null || price <= 0) continue;
+    const text = match[1].replace(/\s+/g, " ").trim();
+    const split = text.search(/,?\s+pr\.\s/i);
+    // "Tillæg pr. ordrelinje" says nothing without its unit, so a generic first word keeps the whole line.
+    const at = split > 0 && !/^(?:tillæg|pris|håndtering|gebyr|rate)$/i.test(text.slice(0, split).trim()) ? split : -1;
+    found.push({
+      category: heading.slice(0, 80),
+      description: (at > 0 ? text.slice(0, at) : text).replace(/,$/, "").slice(0, 200),
+      unit: at > 0 ? text.slice(at).replace(/^,?\s+/, "").slice(0, 60) : "",
+      price,
+      currency: match[3].toUpperCase(),
+    });
+  }
+  return found;
+}
+
+const HEADER_CELL = /^(?:destination(?:er)?|postnr\.?|post nr\.?|postnumre|ø[- ]?navn|zone|zoner|region|land|område|modtager|til)$/i;
+
+/** The model sometimes makes the row-label header (Destination, Ø Navn) a price column and shifts the names by one. */
+const isHeaderCell = (cell: string, grid: { rowLabel: string }) =>
+  HEADER_CELL.test(cell.trim()) || Boolean(grid.rowLabel.trim() && squash(cell) === squash(grid.rowLabel));
+
+function dropHeaderColumn(grid: ExtractGrid): ExtractGrid {
+  if (grid.columns.length < 2 || !isHeaderCell(grid.columns[0].label, grid)) return grid;
+  const lines = [...grid.rows.map((row) => row.cells), grid.minimum, grid.maximum].filter((line) => line.length);
+  const lastEmpty = lines.every((line) => line[grid.columns.length - 1] === null || line[grid.columns.length - 1] === undefined);
+  const firstEmpty = lines.every((line) => line[0] === null || line[0] === undefined);
+  if (!lastEmpty && !firstEmpty) return grid;
+  const keep = (line: (number | null)[]) => (firstEmpty ? line.slice(1) : line.slice(0, grid.columns.length - 1));
+  const shiftKey = (key: string) => {
+    const [row, column] = key.split(":");
+    const index = Number(column) - (firstEmpty ? 1 : 0);
+    return index >= 0 && index < grid.columns.length - 1 ? `${row}:${index}` : "";
+  };
+  return {
+    ...grid,
+    columns: firstEmpty ? grid.columns.slice(1) : grid.columns.slice(1).map((column, index) => ({ ...column, detail: column.detail || grid.columns[index]?.detail || "" })),
+    rows: grid.rows.map((row) => ({ ...row, cells: keep(row.cells) })),
+    minimum: grid.minimum.length ? keep(grid.minimum) : [],
+    maximum: grid.maximum.length ? keep(grid.maximum) : [],
+    unprinted: grid.unprinted.map(shiftKey).filter(Boolean),
+  };
+}
+
+const cellsOf = (line: string) => line.trim().split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
+
+/**
+ * Takes a grid's column names from the header line printed above its first row ("Destination  Aarby  Bstrup …"), with
+ * the Postnr. line under it as the column detail, when that header has as many names as the row has prices.
+ */
+export function alignToPrintedHeader(grid: ExtractGrid, pdfText: string): ExtractGrid {
+  const first = grid.rows.find((row) => row.cells.some((cell) => cell !== null));
+  if (!first) return grid;
+  const lines = pdfText.normalize("NFKC").split("\n");
+  const firstValue = danishNumber(first.cells.find((cell) => cell !== null) as number);
+  const at = lines.findIndex((line) => squash(line).startsWith(squash(first.label)) && line.includes(firstValue));
+  if (at < 0) return grid;
+  const printed = cellsOf(lines[at]).length - 1;
+  for (let index = at - 1; index >= Math.max(0, at - 4); index -= 1) {
+    const cells = cellsOf(lines[index]);
+    if (!cells.length || !isHeaderCell(cells[0], grid)) continue;
+    let labels = cells.slice(1);
+    let details: string[] = [];
+    const below = cellsOf(lines[index + 1] ?? "");
+    if (index + 1 < at && below.length && isHeaderCell(below[0], grid)) details = below.slice(1);
+    else if (index > 0 && /^(?:postnr\.?|post nr\.?)$/i.test(cells[0])) {
+      const above = cellsOf(lines[index - 1]);
+      details = labels;
+      labels = above.length && isHeaderCell(above[0], grid) ? above.slice(1) : grid.columns.slice(0, details.length).map((column) => column.label);
+    }
+    if (labels.length !== printed) return grid;
+    const width = labels.length;
+    const lead = grid.columns.length - width;
+    const used = [...grid.rows.map((row) => row.cells), grid.minimum, grid.maximum].filter((line) => line.length);
+    const outside = (index: number) => used.every((line) => line[index] === null || line[index] === undefined);
+    // Extra columns the model added must be empty, or the cells cannot be moved under the printed names.
+    const extra = grid.columns.map((_, index) => index).filter((index) => index >= width);
+    if (lead < 0 || !extra.every(outside)) return grid;
+    const fit = (line: (number | null)[]) => (line.length ? line.slice(0, width) : line);
+    return {
+      ...grid,
+      columns: labels.map((label, column) => ({ label: label.slice(0, 80), detail: (details.length === width ? details[column] : grid.columns[column]?.detail ?? "").slice(0, 80) })),
+      rows: grid.rows.map((row) => ({ ...row, cells: fit(row.cells) })),
+      minimum: fit(grid.minimum),
+      maximum: fit(grid.maximum),
+      unprinted: grid.unprinted.filter((key) => Number(key.split(":")[1]) < width),
+    };
+  }
+  return grid;
+}
+
+function danishNumber(value: number): string {
+  return new Intl.NumberFormat("da-DK", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true }).format(value);
+}
+
+/** True when the value is printed as money ("576,00 DKK") and never as a percent. */
+function printedAsMoney(value: number, pdfText: string): boolean {
+  const token = danishNumber(value).replace(/\./g, "\\.").replace(/\s/g, "\\s?");
+  const money = new RegExp(`(?<![\\d.,])${token}\\s*(?:DKK|kr\\.?|EUR|SEK|NOK)`, "i");
+  const percent = new RegExp(`(?<![\\d.,])${token}\\s*%`);
+  const normalized = pdfText.normalize("NFKC").replace(/[\u00a0\u2007\u2009\u202f]/g, " ");
+  return money.test(normalized) && !percent.test(normalized);
+}
+
 export type AgreementMeta = { sha256: string; filename: string; truncated?: boolean; usage?: AgreementExtract["usage"]; now?: Date };
 
 /** Merges the replies for each page group, then looks up every number in the PDF's own text; what is not printed is flagged. */
@@ -320,7 +485,11 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
   const first = (pick: (part: Output) => string) => parts.map(pick).find(Boolean) ?? "";
   const currency = (first((part) => part.currency) || "DKK").toUpperCase();
 
-  const rates: AgreementRate[] = parts.flatMap((part) => part.rates).slice(0, MAX_RATES).map((rate) => {
+  // A rate with no price and no weight that only repeats a grid's name is the grid read twice.
+  const gridNames = new Set(parts.flatMap((part) => part.grids.map((grid) => squash(grid.name))).filter(Boolean));
+  const rates: AgreementRate[] = parts.flatMap((part) => part.rates)
+    .filter((rate) => ore(rate.price) > 0 || rate.maxWeightKg > 0 || !gridNames.has(squash(rate.service)))
+    .slice(0, MAX_RATES).map((rate) => {
     const rowIssues: string[] = [];
     const baseOre = Math.max(0, ore(rate.price));
     const maxWeight = rate.maxWeightKg > 0 && rate.maxWeightKg <= 1000 ? Math.round(rate.maxWeightKg * 1000) / 1000 : 0;
@@ -352,6 +521,22 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     };
   });
 
+  const heldPrices = new Set<number>([
+    ...rates.map((rate) => rate.baseOre),
+    ...items.flatMap((item) => item.price === null ? [] : [ore(item.price)]),
+    ...parts.flatMap((part) => [...part.grids.flatMap((grid) => [...grid.rows.flatMap((row) => row.cells), ...grid.minimum, ...grid.maximum]),
+      ...part.surcharges.map((item) => item.value)]).flatMap((value) => {
+      const parsed = cellValue(value);
+      return parsed === null ? [] : [ore(parsed)];
+    }),
+  ]);
+  // Lines the model left out are taken from the text layer as printed, so they are anchored by construction.
+  for (const line of printedPriceLines(pdfText)) {
+    if (items.length >= MAX_ITEMS || heldPrices.has(ore(line.price))) continue;
+    heldPrices.add(ore(line.price));
+    items.push({ ...line, note: "", issues: [] });
+  }
+
   const grids: ExtractGrid[] = parts.flatMap((part) => part.grids).filter((grid) => grid.columns.length && grid.rows.length).slice(0, MAX_GRIDS).map((grid) => {
     const width = Math.min(grid.columns.length, MAX_GRID_COLUMNS);
     const unprinted: string[] = [];
@@ -371,7 +556,7 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
       + minimum.filter((value) => value !== null).length + maximum.filter((value) => value !== null).length;
     if (unprinted.length) gridIssues.push(`${unprinted.length} af ${total} tal står ikke ordret i PDF'en.`);
     if (grid.rows.some((row) => row.cells.length !== grid.columns.length)) gridIssues.push("Nogle rækker har ikke én værdi pr. kolonne.");
-    return {
+    return dropHeaderColumn({
       name: grid.name || "Prisgitter",
       category: grid.category,
       unit: grid.unit,
@@ -384,13 +569,21 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
       note: grid.note,
       unprinted,
       issues: gridIssues,
-    };
+    });
+  }).map((grid) => alignToPrintedHeader(grid, pdfText)).map((grid) => {
+    const empty = grid.columns.map((column, index) => ({ column, index })).filter(({ index }) =>
+      [...grid.rows.map((row) => row.cells), grid.minimum, grid.maximum].every((line) => line[index] === null || line[index] === undefined));
+    const issues = [...grid.issues];
+    for (const { column, index } of empty) issues.push(`Kolonnen «${column.label || index + 1}» har ingen priser. Kontrollér kolonnerne.`);
+    if (grid.columns.some((column) => !column.label.trim() || isHeaderCell(column.label, grid))) issues.push("En kolonne mangler sit navn.");
+    return { ...grid, issues };
   });
 
   const surcharges: ExtractSurcharge[] = parts.flatMap((part) => part.surcharges).filter((item) => item.label && !VAT.test(item.label)).slice(0, MAX_SURCHARGES).map((item) => {
     const value = cellValue(item.value);
-    const kind: SurchargeKind = value === null ? "agreed" : item.kind === "amount" ? "amount" : item.kind === "percent" ? "percent"
+    const stated: SurchargeKind = value === null ? "agreed" : item.kind === "amount" ? "amount" : item.kind === "percent" ? "percent"
       : typeof item.value === "string" && item.value.includes("%") ? "percent" : "amount";
+    const kind: SurchargeKind = stated === "percent" && value !== null && printedAsMoney(value, pdfText) ? "amount" : stated;
     const surchargeIssues: string[] = [];
     if (value !== null && !printed(value)) surchargeIssues.push("Værdien står ikke ordret i PDF'en.");
     if (value === null && item.kind !== "agreed" && !(typeof item.value === "string" && AGREED.test(item.value))) surchargeIssues.push("Værdien mangler.");
@@ -437,6 +630,15 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
   for (const item of items) take(item.price);
   for (const grid of grids) for (const value of [...grid.rows.flatMap((row) => row.cells), ...grid.minimum, ...grid.maximum]) take(value);
   for (const item of surcharges) take(item.value);
+  // Numbers inside text the extract holds (tier labels such as "0,5 ppl", conditions such as "maks. 2,60 meter") are read too.
+  const held = [
+    ...rates.map((rate) => `${rate.service} ${rate.zone}`),
+    ...items.map((item) => `${item.description} ${item.unit} ${item.note}`),
+    ...grids.flatMap((grid) => [grid.name, grid.note, ...grid.rows.map((row) => row.label), ...grid.columns.flatMap((column) => [column.label, column.detail])]),
+    ...surcharges.map((item) => `${item.label} ${item.unit} ${item.scope} ${item.note}`),
+    ...conditions.filter((condition) => condition.printed).map((condition) => condition.text),
+  ].join("\n");
+  for (const value of printedPrices(held)) if (prices.has(value)) captured.add(value);
   const coverage = { printed: prices.size, captured: captured.size };
   if (coverage.printed >= 10 && coverage.captured / coverage.printed < 0.9) {
     issues.push(`Kun ${coverage.captured} af ${coverage.printed} priser i PDF'en er med i udtrækket.`);
@@ -458,7 +660,7 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     sha256: meta.sha256,
     filename: meta.filename,
     createdAt: (meta.now ?? new Date()).toISOString(),
-    carrier: first((part) => part.carrier),
+    carrier: issuingCarrier(parts.map((part) => part.carrier), pdfText),
     title: first((part) => part.title),
     validFrom,
     validTo: validTo && validFrom && validTo < validFrom ? "" : validTo,

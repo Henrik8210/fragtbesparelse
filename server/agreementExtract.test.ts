@@ -168,7 +168,7 @@ test("reads a 3PL agreement into items, a price grid, surcharges and conditions"
   assert.equal(done.result, "extracted");
   if (done.result !== "extracted") return;
   const extract = done.extract;
-  assert.equal(extract.version, 2);
+  assert.equal(extract.version, 3);
   assert.equal(extract.validFrom, "2027-03-01");
   assert.deepEqual(extract.items.map((item) => [item.unit, item.price]), [
     ["pr. palle pr. uge", 9.4], ["pr. hyldemeter pr. måned", 31.75], ["pr. ordre", 6.85], ["pr. ordrelinje", 1.92], ["pr. time", 412.5],
@@ -200,4 +200,18 @@ test("a long agreement is read in page groups and the replies are merged", async
   assert.equal(extract.confidence, "low", "an unread part keeps confidence low");
   assert.ok(extract.issues.includes("1 af 3 dele af PDF'en kunne ikke læses."));
   assert.deepEqual(extract.usage && [extract.usage.inputTokens, extract.usage.outputTokens], [30, 12]);
+});
+
+test("runBatches reports progress and turns a stuck part into an unread part", async () => {
+  const { runBatches } = await import("./invoiceExtract.ts");
+  const seen: string[] = [];
+  const outputs = await runBatches(
+    async (_model, inputs) => (inputs as { stuck?: boolean }).stuck ? new Promise(() => undefined) : { ok: true },
+    [{ stuck: false }, { stuck: true }, { stuck: false }] as never[],
+    2,
+    (done, total) => seen.push(`${done}/${total}`),
+    50,
+  );
+  assert.deepEqual(outputs, [{ ok: true }, null, { ok: true }]);
+  assert.deepEqual(seen, ["1/3", "2/3", "3/3"]);
 });

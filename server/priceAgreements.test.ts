@@ -13,6 +13,7 @@ const {
 } = await import("./priceAgreements.ts");
 const { extractAgreement } = await import("./invoiceExtract.ts");
 const { newRecord, patchRecord } = await import("../src/pilot/agreementRecord.ts");
+const { extractTerms } = await import("../src/pilot/agreementExtract.ts");
 
 const row: RateRow = { service: "Pakkeshop", maxWeight: 5, baseOre: 4600, fuelPct: 12.5, fixedOre: 240, from: "2027-01-01", to: "2027-12-31" };
 const henrik = { id: "u1", name: "Henrik" };
@@ -125,10 +126,11 @@ test("a 3PL agreement with only terms is stored, and edits to a grid cell count 
   const reply = { response: { carrier: "Nordlager", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], ...terms } };
   const done = await extractAgreement("kolding-table-co", "n.pdf", pdf, async () => reply);
   if (done.result !== "extracted") throw new Error(done.result);
-  const same = await createAgreement("kolding-table-co", input({ rows: [], terms, source: "pdf", extractSha256: done.extract.sha256 }), henrik);
+  const read = extractTerms(done.extract);
+  const same = await createAgreement("kolding-table-co", input({ rows: [], terms: read, source: "pdf", extractSha256: done.extract.sha256 }), henrik);
   expect(same.agreement).toMatchObject({ rows: [], changed: false, formatVersion: 2 });
   expect(same.agreement.terms.grids[0].minimum).toEqual([612.4, 748.9]);
-  const edited = structuredClone(terms);
+  const edited = structuredClone(read);
   edited.grids[0].rows[0].cells[1] = 750;
   const changed = await createAgreement("kolding-table-co", input({ rows: [], terms: edited, source: "pdf", extractSha256: done.extract.sha256 }), henrik);
   expect(changed.agreement.changed).toBe(true);

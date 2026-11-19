@@ -193,3 +193,67 @@ describe("agreementRatesToRows", () => {
     expect(rateService("Pakkeshop", "")).toBe("Pakkeshop");
   });
 });
+
+const ISSUED_TEXT = `Rateblad for Kunde Handel
+Gyldig fra 01.01.2027 til 31.12.2027
+Lager
+Lagerleje pr. uge, pr. EUR-palle  31,50  DKK
+Pluk pr. kolli  1,75  DKK
+Distribution til Tyskland
+Destination  Aarby  Bstrup  Nedre Vang
+Postnr.  DE-10000  DE-20000  DE-30000
+Minimum pr. lev.  700,10  455,20  440,30
+1-5 pallepladser  250,40  170,50  160,60
+Ventetid pr. påbegyndt time  580,00  DKK
+Med venlig hilsen
+Nordfragt A/S
+Nordfragt A/S, Havnevej 1, 9000 Aalborg`;
+
+describe("a reply that misses lines and shifts a wrapped header", () => {
+  const raw = {
+    carrier: "Kunde Handel", title: "Rateblad for Kunde Handel", validFrom: "01.01.2027", validTo: "31.12.2027", currency: "DKK",
+    rates: [{ service: "Distribution til Tyskland", zone: "", maxWeightKg: 0, price: 0, fuelPercent: 0, fixedSurcharge: 0 }],
+    items: [],
+    grids: [{
+      name: "Distribution til Tyskland", category: "", unit: "pr. palleplads", currency: "DKK", rowLabel: "",
+      columns: ["Destination", "Aarby", "Bstrup", "Nedre", "Vang"].map((label) => ({ label, detail: "" })),
+      rows: [
+        { label: "Minimum pr. lev.", cells: ["700,10", "455,20", "440,30", null, null] },
+        { label: "1-5 pallepladser", cells: ["250,40", "170,50", "160,60", null, null] },
+      ],
+      minimum: [], maximum: [], note: "",
+    }],
+    surcharges: [{ label: "Ventetid", kind: "percent", value: "580", unit: "pr. påbegyndt time", scope: "", note: "" }],
+    conditions: [],
+  };
+  const extract = validateAgreementExtract([raw], ISSUED_TEXT, { sha256: "x", filename: "rateblad.pdf" });
+
+  it("takes the carrier as the issuing company, not the customer", () => {
+    expect(extract.carrier).toBe("Nordfragt");
+  });
+
+  it("adds the price lines the model skipped, from the text as printed", () => {
+    expect(extract.items.map((item) => [item.category, item.price])).toEqual([["Lager", 31.5], ["Lager", 1.75]]);
+    expect(extract.items.every((item) => item.issues.length === 0)).toBe(true);
+  });
+
+  it("puts the cells under the printed column names", () => {
+    const [read] = extract.grids;
+    expect(read.columns).toEqual([
+      { label: "Aarby", detail: "DE-10000" }, { label: "Bstrup", detail: "DE-20000" }, { label: "Nedre Vang", detail: "DE-30000" },
+    ]);
+    expect(read.rows[0].cells).toEqual([700.1, 455.2, 440.3]);
+    expect(read.issues).toEqual([]);
+  });
+
+  it("drops an empty rate, reads an hourly price as an amount and finds every price", () => {
+    expect(extract.rates).toEqual([]);
+    expect(extract.surcharges[0]).toMatchObject({ kind: "amount", value: 580 });
+    expect(extract.coverage.captured).toBe(extract.coverage.printed);
+  });
+
+  it("flags a column without prices", () => {
+    const empty = validateAgreementExtract([{ ...raw, grids: [{ ...raw.grids[0], columns: raw.grids[0].columns.slice(1), rows: raw.grids[0].rows.map((row) => ({ ...row, cells: [...row.cells.slice(0, 3), null] })) }] }], ISSUED_TEXT.replace(/^(?:Destination|Postnr\.).*\n/gm, ""), { sha256: "x", filename: "x.pdf" });
+    expect(empty.grids[0].issues.join(" ")).toMatch(/«Vang» har ingen priser/);
+  });
+});

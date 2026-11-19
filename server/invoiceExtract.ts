@@ -58,7 +58,9 @@ const SPECS: Record<ExtractKind, Spec> = {
   },
 };
 
-const JOB_TTL_MS = 5 * 60 * 1000;
+// A long agreement runs up to 12 parts four at a time, each allowed BATCH_TIMEOUT_MS, so the job outlives that.
+const JOB_TTL_MS = 15 * 60 * 1000;
+export const BATCH_TIMEOUT_MS = 150_000;
 const MEMORY_KEEP = 300;
 const memory = new Map<string, AnyExtract>();
 const jobs = new Map<string, { kind: ExtractKind; companyId: string; sha256: string; filename: string; text: string; truncated: boolean; expires: number }>();
@@ -86,7 +88,7 @@ export async function prepareExtract<K extends ExtractKind = "invoice">(
   }
   let text: string;
   try {
-    text = await pdfText(bytes);
+    text = await pdfText(bytes, { joinWrappedHeaders: kind === "agreement" });
   } catch {
     return { result: "pdf" };
   }
@@ -121,14 +123,32 @@ function totalUsage(outputs: unknown[]): InvoiceExtract["usage"] {
   }));
 }
 
-/** Runs every batch, a few at a time, in order. */
-export async function runBatches(run: AiRun, batches: AiInputs[], concurrency = 4): Promise<unknown[]> {
+/**
+ * Runs every batch, a few at a time, in order. A batch that takes longer than `timeoutMs` gives `null`, which the
+ * validator reports as a part that could not be read, so one stuck call does not hold the whole read.
+ */
+export async function runBatches(
+  run: AiRun,
+  batches: AiInputs[],
+  concurrency = 4,
+  onProgress?: (done: number, total: number) => void,
+  timeoutMs = BATCH_TIMEOUT_MS,
+): Promise<unknown[]> {
   const outputs: unknown[] = new Array(batches.length);
   let next = 0;
+  let done = 0;
   const worker = async () => {
     while (next < batches.length) {
       const index = next++;
-      outputs[index] = await run(EXTRACT_MODEL, batches[index]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
+      try {
+        outputs[index] = await Promise.race([run(EXTRACT_MODEL, batches[index]), late]);
+      } finally {
+        clearTimeout(timer);
+      }
+      done += 1;
+      onProgress?.(done, batches.length);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));

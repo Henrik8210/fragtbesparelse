@@ -9,6 +9,7 @@ import {
 import { agreementRatesToRows, type AgreementExtract, type AgreementRate, type ExtractGrid } from "./agreementExtract.ts";
 import { kronerText, parseKroner, parseWeight } from "./invoiceCheck.ts";
 import { CONFIDENCE_LABELS } from "./invoiceExtract.ts";
+import { agreementName } from "./agreementAuto.ts";
 
 type RateDraft = { service: string; zone: string; weight: string; base: string; fuel: string; fixed: string; issues: string[] };
 type ItemDraft = { category: string; description: string; unit: string; price: string; currency: string; note: string; issues: string[] };
@@ -114,8 +115,9 @@ function toTerms(items: ItemDraft[], grids: GridDraft[], surcharges: SurchargeDr
 
 const BLANK_RATE: RateDraft = { service: "", zone: "", weight: "", base: "", fuel: "", fixed: "", issues: [] };
 
-export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
+export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack, onSave }: {
   extract: AgreementExtract;
+  reasons?: string[];
   orgId: string;
   carriers: string[];
   onBack: () => void;
@@ -126,12 +128,12 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
   const [grids, setGrids] = useState<GridDraft[]>(() => extract.grids.map(toGrid));
   const [surcharges, setSurcharges] = useState<SurchargeDraft[]>(() => extract.surcharges.map((item) => ({ ...item, value: decimalText(item.value, item.kind === "percent" ? "percent" : "money") })));
   const [conditions, setConditions] = useState<ConditionDraft[]>(() => extract.conditions.map((item) => ({ ...item })));
-  const [name, setName] = useState(() => (extract.title || extract.filename.replace(/\.[^.]+$/, "")).slice(0, 100));
   const [carrier, setCarrier] = useState(extract.carrier);
   const [from, setFrom] = useState(extract.validFrom);
   const [to, setTo] = useState(extract.validTo);
   const [problem, setProblem] = useState("");
   const [saving, setSaving] = useState(false);
+  const name = agreementName(carrier, from, to);
 
   const parsedRates = useMemo(() => rates.map(fromRate), [rates]);
   const flagged = rates.filter((draft) => draft.issues.length).length + items.filter((item) => item.issues.length).length
@@ -206,14 +208,20 @@ export function AgreementReview({ extract, orgId, carriers, onBack, onSave }: {
         </div>
       </div>
       <div className="review-fields">
-        <label>Navn<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="F.eks. GLS 2027" /></label>
         <label>Transportør<input value={carrier} onChange={(event) => setCarrier(event.target.value)} maxLength={70} list="review-carriers" placeholder="Transportørens navn" /></label>
         <datalist id="review-carriers">{carriers.map((item) => <option key={item} value={item} />)}</datalist>
         <label>Gyldig fra<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
         <label>Gyldig til<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
       </div>
+      <p className="review-name">Navn: <strong>{name}</strong></p>
+      {reasons.length ? (
+        <div className="check-problem" role="status">
+          <CircleAlert size={14} />
+          <div><strong>Tjek før aftalen gemmes:</strong> {reasons.join(" ")}</div>
+        </div>
+      ) : null}
       <datalist id="review-units">{UNIT_SUGGESTIONS.map((unit) => <option key={unit} value={unit} />)}</datalist>
-      {extract.issues.length ? <p className="check-problem" role="status"><CircleAlert size={14} /> {extract.issues.join(" ")}</p> : null}
+      {!reasons.length && extract.issues.length ? <p className="check-problem" role="status"><CircleAlert size={14} /> {extract.issues.join(" ")}</p> : null}
       <p className="review-note">Felter markeret med gult står ikke ordret i PDF'ens tekst. Ret dem, eller slet dem, før aftalen gemmes.</p>
 
       <div className="check-scroll review-sections">
