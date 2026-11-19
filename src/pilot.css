@@ -273,6 +273,7 @@ small { font-size: .8rem; }
 .extract-table tr.flagged td { background: var(--amber-light); }
 .extract-table small.flag { color: var(--amber); display: flex; gap: 4px; align-items: center; justify-content: flex-end; white-space: normal; }
 .extract-table tfoot td { font-weight: 700; }
+.extract-table .soft-hint { color: var(--muted); font-style: italic; }
 .extract-check { font-size: .83rem; font-weight: 650; }
 .extract-check.match { color: var(--green); }
 .extract-check.mismatch, .extract-check.no-total { color: var(--amber); }

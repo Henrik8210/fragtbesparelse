@@ -2,7 +2,7 @@ import { z } from "zod";
 import { invoiceRowSchema, type InvoiceRow } from "./freight.ts";
 
 export const EXTRACT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-export const EXTRACT_VERSION = 1;
+export const EXTRACT_VERSION = 2;
 export const MAX_PROMPT_CHARS = 36_000;
 export const MAX_EXTRACT_LINES = 400;
 const SUM_TOLERANCE_ORE = 100;
@@ -55,6 +55,8 @@ export type InvoiceExtract = {
   subtotalOre: number | null;
   vatOre: number | null;
   totalOre: number | null;
+  /** Whether the invoice mentions VAT at all. Older cached extracts lack it. */
+  vatStated?: boolean;
   lines: ExtractLine[];
   check: SumCheck;
   confidence: Confidence;
@@ -120,7 +122,9 @@ Rules:
 - Amounts are plain numbers with "." as decimal separator. Danish "1.234,56 kr" is 1234.56.
 - One entry per invoice line. A shipment or parcel line is kind "shipment". A credit note line is kind "credit" with a negative amount.
 - Surcharges printed on the same line as a shipment go in that line's surcharges array. A surcharge printed as its own line for the whole invoice (for example brændstoftillæg, fuel, vejafgift, miljøtillæg) is kind "surcharge" with its amount in amount. Administration or invoice fees are kind "fee".
-- Do not add VAT (moms), subtotal or total lines as lines. Put them in subtotal, vat and total.
+- shipment is only a tracking or consignment number. A product word such as "Pakke" or "Parcel" goes in service. A line number such as "Linje 1" goes in reference.
+- A route such as "Taastrup til Aarhus" goes in zone. For a surcharge or fee line, put its description in service.
+- Do not add VAT (moms), subtotal or total lines as lines. Put them in subtotal, vat and total. subtotal and vat are 0 unless the invoice prints them; never compute them.
 - amount excludes VAT.
 - Dates are YYYY-MM-DD.`;
 
@@ -238,16 +242,67 @@ function countryCode(value: string): string {
 
 const ore = (value: number) => Math.round(value * 100);
 
-function printedForms(valueOre: number): string[] {
-  const absolute = Math.abs(valueOre);
-  const whole = Math.floor(absolute / 100);
-  const cents = String(absolute % 100).padStart(2, "0");
-  const grouped = whole.toLocaleString("en-US").replaceAll(",", ".");
-  return [`${whole},${cents}`, `${whole}.${cents}`, `${grouped},${cents}`, `${whole.toLocaleString("en-US")}.${cents}`];
+const SPACES = /[\u00a0\u2007\u2009\u202f]/g;
+
+/** Every amount printed in the text, in øre. pdf.js can split "1 234,50" or "223 ,50" into pieces, so separators are rejoined first. */
+export function printedAmounts(text: string): Set<number> {
+  const joined = text.normalize("NFKC").replace(SPACES, " ")
+    .replace(/(\d)\s*([.,])\s*(?=\d)/g, "$1$2")
+    .replace(/(\d)[ '](?=\d{3}(?!\d))/g, "$1")
+    .replace(/(\d)[ '](?=\d{3}(?!\d))/g, "$1");
+  const found = new Set<number>();
+  for (const [token] of joined.matchAll(/\d[\d.,]*\d|\d/g)) {
+    const comma = token.lastIndexOf(",");
+    const dot = token.lastIndexOf(".");
+    const readings: string[] = [];
+    if (comma >= 0 && dot >= 0) readings.push(comma > dot ? token.replaceAll(".", "").replace(",", ".") : token.replaceAll(",", ""));
+    else if (comma >= 0 || dot >= 0) {
+      const separator = comma >= 0 ? "," : ".";
+      const parts = token.split(separator);
+      if (parts.length === 2) readings.push(`${parts[0]}.${parts[1]}`);
+      if (parts.slice(1).every((part) => part.length === 3)) readings.push(parts.join(""));
+    } else readings.push(token);
+    for (const reading of readings) {
+      const value = Number(reading);
+      if (Number.isFinite(value)) found.add(ore(value));
+    }
+  }
+  return found;
 }
 
-function printed(valueOre: number, haystack: string): boolean {
-  return printedForms(valueOre).some((form) => haystack.includes(form));
+const textLines = (text: string) => text.split(/\r?\n/).map((line) => line.replace(SPACES, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
+
+const REFERENCE_PREFIX = /^((?:linje|line|pos(?:ition)?\.?|nr\.?)\s*\d+)\b[:.]?\s*/i;
+const ROUTE = /(\p{Lu}[\p{L}.-]+(?: \p{Lu}[\p{L}.-]+)?) (?:til|to|->|→|–) (\p{Lu}[\p{L}.-]+(?: \p{Lu}[\p{L}.-]+)?)/u;
+const MONEY_TAIL = /\s*-?\d[\d .,]*\s*(?:kr\.?|dkk)?\s*-?$/i;
+const SURCHARGE_NAMES: [RegExp, string][] = [
+  [/br(?:æ|ae)ndstof|fuel|diesel/i, "Brændstoftillæg"],
+  [/vejafgift|road ?toll|maut/i, "Vejafgift"],
+  [/milj(?:ø|oe)/i, "Miljøtillæg"],
+  [/peak|spids|s(?:æ|ae)son/i, "Sæsontillæg"],
+];
+
+function surchargeName(value: string): string {
+  return SURCHARGE_NAMES.find(([pattern]) => pattern.test(value))?.[1] ?? value;
+}
+
+type SourceFill = { reference: string; service: string; zone: string; weightKg: number; description: string };
+
+/** What the PDF line that carries this amount says, used only where the model left a field empty. */
+function sourceFill(source: string): SourceFill {
+  const reference = REFERENCE_PREFIX.exec(source)?.[1] ?? "";
+  const rest = source.slice(reference ? REFERENCE_PREFIX.exec(source)![0].length : 0);
+  const route = ROUTE.exec(rest);
+  const weight = /(\d+(?:[.,]\d+)?) ?kg\b/i.exec(rest);
+  const service = /^([\p{L}][\p{L} ./-]{0,38}?) \d+(?:[.,]\d+)? ?kg\b/iu.exec(rest)?.[1] ?? "";
+  const description = rest.replace(MONEY_TAIL, "").trim().slice(0, 64);
+  return {
+    reference,
+    service,
+    zone: route ? `${route[1]} til ${route[2]}`.slice(0, 40) : "",
+    weightKg: weight ? Number(weight[1].replace(",", ".")) : 0,
+    description,
+  };
 }
 
 export type ExtractMeta = { sha256: string; filename: string; truncated?: boolean; usage?: InvoiceExtract["usage"]; now?: Date };
@@ -256,8 +311,10 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
   const parsed = outputSchema.safeParse(raw);
   if (!parsed.success) throw new Error("Modellens svar passer ikke til fakturaskemaet.");
   const data = parsed.data;
-  const haystack = pdfText.replace(/\s+/g, " ");
-  const compact = pdfText.replace(/\s+/g, "");
+  const amounts = printedAmounts(pdfText);
+  const printed = (valueOre: number) => amounts.has(Math.abs(valueOre));
+  const sources = textLines(pdfText).map((text) => ({ text, amounts: printedAmounts(text) }));
+  const used = new Set<number>();
   const issues: string[] = [];
 
   const lines: ExtractLine[] = data.lines.slice(0, MAX_EXTRACT_LINES).map((line) => {
@@ -265,25 +322,39 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
     const amountOre = ore(line.amount);
     const kind: LineKind = line.kind === "shipment" && amountOre < 0 ? "credit" : line.kind;
     const surcharges = line.surcharges
-      .map((item) => ({ label: item.label || "Tillæg", amountOre: ore(item.amount) }))
+      .map((item) => ({ label: surchargeName(item.label) || "Tillæg", amountOre: ore(item.amount) }))
       .filter((item) => item.amountOre !== 0);
     if (amountOre === 0 && surcharges.length === 0) lineIssues.push("Linjen har intet beløb.");
-    else if (amountOre !== 0 && !printed(amountOre, haystack) && !printed(amountOre, compact)) lineIssues.push("Beløbet står ikke ordret i PDF'en.");
-    const weightKg = line.weightKg > 0 && line.weightKg <= 1000 ? Math.round(line.weightKg * 1000) / 1000 : 0;
-    if (kind === "shipment") {
-      if (!line.service) lineIssues.push("Leveringsform mangler.");
-      if (!weightKg) lineIssues.push("Vægt mangler.");
+    else if (amountOre !== 0 && !printed(amountOre)) lineIssues.push("Beløbet står ikke ordret i PDF'en.");
+
+    const sourceIndex = amountOre === 0 ? -1 : sources.findIndex((source, index) => !used.has(index) && source.amounts.has(Math.abs(amountOre)));
+    if (sourceIndex >= 0) used.add(sourceIndex);
+    const fill = sourceIndex >= 0 ? sourceFill(sources[sourceIndex].text) : null;
+
+    let shipment = line.shipment;
+    let service = line.service;
+    if (shipment && !/\d/.test(shipment) && (!service || service === shipment)) {
+      service = shipment;
+      shipment = "";
     }
+    if (!service && fill) service = kind === "shipment" || kind === "credit" ? fill.service : fill.description;
+    if (kind === "surcharge" || kind === "fee") service = surchargeName(service);
+    const reference = line.reference || fill?.reference || "";
+    const zone = line.zone || fill?.zone || "";
+    const modelWeight = line.weightKg > 0 && line.weightKg <= 1000 ? line.weightKg : 0;
+    const sourceWeight = fill && fill.weightKg > 0 && fill.weightKg <= 1000 && (kind === "shipment" || kind === "credit") ? fill.weightKg : 0;
+    const weightKg = Math.round((modelWeight || sourceWeight) * 1000) / 1000;
+    if (kind === "shipment" && !weightKg) lineIssues.push("Vægt mangler.");
     const date = line.date ? isoDate(line.date) : "";
     if (line.date && !date) lineIssues.push("Datoen kunne ikke læses.");
     return {
       kind,
-      shipment: line.shipment,
+      shipment,
       date,
-      reference: line.reference,
-      service: line.service,
+      reference,
+      service: service.slice(0, 64),
       weightKg,
-      zone: line.zone,
+      zone,
       origin: countryCode(line.origin),
       destination: countryCode(line.destination),
       amountOre,
@@ -294,17 +365,18 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
   if (data.lines.length > MAX_EXTRACT_LINES) issues.push(`Kun de første ${MAX_EXTRACT_LINES} linjer er med.`);
   if (meta.truncated) issues.push("Fakturaen er lang. Kun den første del af teksten blev læst.");
 
-  const subtotalOre = data.subtotal > 0 ? ore(data.subtotal) : null;
-  const vatOre = data.vat > 0 ? ore(data.vat) : null;
+  // The model sometimes sums a subtotal or VAT the invoice never prints; those are dropped rather than trusted.
+  const subtotalOre = data.subtotal > 0 && printed(ore(data.subtotal)) ? ore(data.subtotal) : null;
+  const vatOre = data.vat > 0 && printed(ore(data.vat)) ? ore(data.vat) : null;
   const totalOre = data.total !== 0 ? ore(data.total) : null;
   const check = sumCheck(lines, subtotalOre, vatOre, totalOre);
   const shipments = lines.filter((line) => line.kind === "shipment" || line.kind === "credit");
   if (shipments.length === 0) issues.push("Der blev ikke fundet forsendelseslinjer.");
   if (check.status === "mismatch") issues.push("Linjerne summer ikke til fakturaens total.");
   if (check.status === "no-total") issues.push("Fakturaen har ingen total at afstemme mod.");
-  const totalPrinted = [subtotalOre, totalOre].filter((value): value is number => value !== null)
-    .every((value) => printed(value, haystack) || printed(value, compact));
+  const totalPrinted = totalOre === null || printed(totalOre);
   if (!totalPrinted) issues.push("Totalen står ikke ordret i PDF'en.");
+  const vatStated = vatOre !== null || /\b(moms|ekskl|excl|vat|mva|inkl)\b/i.test(pdfText);
 
   const lineIssues = lines.some((line) => line.issues.length > 0);
   const confidence: Confidence = check.status !== "match" || shipments.length === 0 || meta.truncated || !totalPrinted
@@ -324,6 +396,7 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
     subtotalOre,
     vatOre,
     totalOre,
+    vatStated,
     lines,
     check,
     confidence,
