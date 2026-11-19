@@ -8,6 +8,7 @@ import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddre
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
+import { forwardedHttps, sessionCookie, sessionTokenFromCookie } from "./session.ts";
 
 const SEATS = ["Owner", "Billing", "Operations"] as const;
 
@@ -63,23 +64,12 @@ function send(res: ServerResponse, status: number, body: unknown) {
 }
 
 function cookieToken(req: IncomingMessage): string | null {
-  const raw = req.headers.cookie ?? "";
-  for (const part of raw.split(";")) {
-    const [name, ...rest] = part.trim().split("=");
-    if (name === "fragtblik") return decodeURIComponent(rest.join("="));
-  }
-  return null;
+  return sessionTokenFromCookie(req.headers.cookie ?? "");
 }
 
 function setSessionCookie(req: IncomingMessage, res: ServerResponse, token: string | null) {
-  const proto = req.headers["x-forwarded-proto"];
-  const forwarded = Array.isArray(proto) ? proto.join(",") : (proto ?? "");
-  const https = forwarded.split(",").some((item) => item.trim().toLowerCase() === "https");
-  const secure = https ? "; Secure" : "";
-  const value = token
-    ? `fragtblik=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600${secure}`
-    : `fragtblik=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`;
-  res.setHeader("Set-Cookie", value);
+  const https = forwardedHttps(req.headers["x-forwarded-proto"]);
+  res.setHeader("Set-Cookie", sessionCookie(token, https));
   // The worker reads this and sets the browser cookie. It is removed before the response leaves the edge.
   if (https) res.setHeader("x-fragtblik-session", token ?? "clear");
 }
