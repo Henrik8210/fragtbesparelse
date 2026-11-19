@@ -52,7 +52,7 @@ let query: SqlQuery = (text, params) => postgresSql(text, params);
 let inPostgres = () => storesInPostgres();
 
 /** Tests swap the database. */
-export function useFormatDatabase(next: SqlQuery, postgres = true): void {
+export function setFormatDatabase(next: SqlQuery, postgres = true): void {
   query = next;
   inPostgres = () => postgres;
   profiles.clear();

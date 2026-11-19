@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { linesFromExtract } from "../src/pilot/invoiceCheck.ts";
 import { validateExtract } from "../src/pilot/invoiceExtract.ts";
 import type { SqlQuery } from "./db.ts";
-import { formatNoticeId, observeCheckEdits, observeDocument, observeInvoiceExtract, useFormatDatabase } from "./formatAlerts.ts";
+import { formatNoticeId, observeCheckEdits, observeDocument, observeInvoiceExtract, setFormatDatabase } from "./formatAlerts.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
 
 const admin = { role: "admin" as const, company_id: null };
@@ -21,7 +21,7 @@ async function setup(withDetail: boolean) {
   await db.exec("create table public.invoice_mail_files (id text primary key, mail_id text not null, company_id text not null, filename text not null)");
   await db.exec(readFileSync(new URL("./invoice-extract.sql", import.meta.url), "utf8").replace(/references public\.companies \(id\)/g, ""));
   query = (async (text, params = []) => (await db.query(text, params)).rows) as SqlQuery;
-  useFormatDatabase(query);
+  setFormatDatabase(query);
 }
 
 beforeEach(() => setup(true));
@@ -125,7 +125,7 @@ describe("format change notices", () => {
         [company, sha, extract.version, extract.model, extract.confidence, JSON.stringify(extract)],
       );
     }
-    useFormatDatabase(query);
+    setFormatDatabase(query);
     expect(await observeInvoiceExtract("kolding-table-co", extractOf(oldText("Kolding Table Co", 3), "s3"))).toBeNull();
     expect((await observeInvoiceExtract("kolding-table-co", extractOf(newText(4), "s4")))?.change).toBe("layout");
   });
