@@ -142,7 +142,17 @@ create table if not exists public.invoice_extracts (
 
 The same SQL is in `server/invoice-extract.sql`. Running the server outside Cloudflare has no binding, so a PDF answers "Workers AI er ikke tilgængelig her". Setting `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AI_TOKEN` (a Workers AI token) on that server uses the REST API instead.
 
-The validation only keeps a subtotal or VAT amount the PDF prints. Each line is matched to the PDF text line that carries its amount, and a reference, route, service, weight, or surcharge description the model left empty is taken from that line. `EXTRACT_VERSION` 2 reads a version 1 cache row again once.
+The validation only keeps a subtotal or VAT amount the PDF prints. Each line is matched to the PDF text line that carries its amount, and a reference, route, service, weight, or surcharge description the model left empty is taken from that line. `EXTRACT_VERSION` 3 reads an older cache row again once. Version 3 adds `unmapped` (printed fields the schema has no place for, plus any key the model returned outside the schema) and `layout` (normalized labels from the text layer) to each extract.
+
+## Formatændringer
+
+When a carrier's invoice layout drifts from the layouts learned from its earlier extracts, or the extractor signals are strong (three or more unmapped fields, a quarter of the amounts not printed verbatim, lines that do not sum to the total, or a third of the lines edited in Check faktura), admins get one bell notice of kind `format_change`. Company seats never see it. Layouts are learned per carrier across all companies from the `layout` in `invoice_extracts`, so no table of their own is needed. One notice per new layout, and one per layout and set of signals. To show what changed in the notice, run this once:
+
+```sql
+alter table public.notifications add column if not exists detail jsonb;
+```
+
+Without it the notice still appears and opens the document, without the reasons.
 
 ## Check faktura
 

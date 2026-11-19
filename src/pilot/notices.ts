@@ -1,12 +1,22 @@
+export type NoticeDetail = {
+  docKind: string;
+  change: string;
+  fileId: string;
+  mailId: string;
+  filename: string;
+  reasons: string[];
+};
+
 export type Notice = {
   id: string;
-  kind: "demo" | "invoice";
+  kind: "demo" | "invoice" | "format_change";
   name: string;
   company: string;
   email: string;
   subject: string;
   createdAt: string;
   seenAt: string | null;
+  detail?: NoticeDetail;
 };
 
 export type NoticeTarget =
@@ -17,8 +27,20 @@ export type NoticeTarget =
 const ZONE = "Europe/Copenhagen";
 
 export function noticeText(item: Notice, orgs: { id: string; name: string }[]): { title: string; lines: string[]; action: string } {
+  const orgName = orgs.find((org) => org.id === item.company)?.name ?? item.company;
+  if (item.kind === "format_change") {
+    const agreement = item.detail?.docKind === "agreement";
+    const carrier = item.name || "en transportør";
+    const title = item.detail?.change === "signals"
+      ? `Udtrækket passer dårligt til ${agreement ? "prisaftale" : "faktura"} fra ${carrier}`
+      : `Nyt ${agreement ? "prisaftaleformat" : "fakturaformat"} fra ${carrier}`;
+    return {
+      title,
+      lines: [[item.detail?.filename, orgName].filter(Boolean).join(" · "), ...(item.detail?.reasons ?? []).slice(0, 3)],
+      action: "Åbn dokument",
+    };
+  }
   if (item.kind === "invoice") {
-    const orgName = orgs.find((org) => org.id === item.company)?.name ?? item.company;
     return {
       title: item.name ? `Faktura modtaget fra ${item.name}` : "Faktura modtaget",
       lines: [[item.subject, orgName].filter(Boolean).join(" · ")],
@@ -30,6 +52,10 @@ export function noticeText(item: Notice, orgs: { id: string; name: string }[]): 
 
 /** Where a click on the notice leads: the invoice on Fakturaer, or a reply to the person who asked for a demo. */
 export function noticeTarget(item: Notice): NoticeTarget {
+  if (item.kind === "format_change") {
+    const mailId = item.detail?.mailId || item.email;
+    return item.company && mailId ? { kind: "invoice", orgId: item.company, mailId } : null;
+  }
   if (item.kind === "invoice") return item.company && item.id ? { kind: "invoice", orgId: item.company, mailId: item.id } : null;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item.email)) return null;
   return { kind: "mail", href: `mailto:${encodeURIComponent(item.email).replace(/%40/g, "@")}?subject=${encodeURIComponent("Demo af Freightlytics")}` };

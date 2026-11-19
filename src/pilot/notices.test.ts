@@ -52,3 +52,24 @@ describe("noticeText", () => {
     expect(noticeText(notice({}), []).title).toBe("Faktura modtaget");
   });
 });
+
+describe("format change notices", () => {
+  const detail = { docKind: "invoice", change: "layout", fileId: "file-9", mailId: "mail-9", filename: "gls-nov.pdf", reasons: ["Layoutet ligner det kendte format 20 %", 'Nye felter: "energy fee"', 'Mangler: "zone"', "fjerde"] };
+
+  it("names carrier, document and what changed", () => {
+    const text = noticeText(notice({ kind: "format_change", name: "GLS", detail }), [{ id: "nordhavn-living", name: "Nordhavn Living" }]);
+    expect(text).toEqual({
+      title: "Nyt fakturaformat fra GLS",
+      lines: ["gls-nov.pdf · Nordhavn Living", "Layoutet ligner det kendte format 20 %", 'Nye felter: "energy fee"', 'Mangler: "zone"'],
+      action: "Åbn dokument",
+    });
+    expect(noticeText(notice({ kind: "format_change", name: "GLS", detail: { ...detail, change: "signals" } }), []).title)
+      .toBe("Udtrækket passer dårligt til faktura fra GLS");
+  });
+
+  it("opens the document's mail, also when the detail column is missing", () => {
+    expect(noticeTarget(notice({ kind: "format_change", detail }))).toEqual({ kind: "invoice", orgId: "nordhavn-living", mailId: "mail-9" });
+    expect(noticeTarget(notice({ kind: "format_change", email: "mail-3" }))).toEqual({ kind: "invoice", orgId: "nordhavn-living", mailId: "mail-3" });
+    expect(noticeTarget(notice({ kind: "format_change", email: "" }))).toBeNull();
+  });
+});

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, Bell, Check, ChevronDown, ChevronRight, ClipboardCheck, Copy, Database, FileCheck2,
-  FileText, Funnel, History, LayoutGrid, LockKeyhole, Mail, Menu, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Receipt, RefreshCw,
+  FileText, FileWarning, Funnel, History, LayoutGrid, LockKeyhole, Mail, Menu, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Receipt, RefreshCw,
   Settings, UploadCloud, X,
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
@@ -1492,7 +1492,8 @@ function NoticeBell({ notices, orgs, onDismiss, onRefresh, onOpen, onAll }: {
 }
 
 function NoticeIcon({ kind }: { kind: Notice["kind"] }) {
-  return <span className={`notice-icon ${kind}`} aria-hidden="true">{kind === "invoice" ? <Receipt size={16} /> : <Mail size={16} />}</span>;
+  const icon = kind === "invoice" ? <Receipt size={16} /> : kind === "format_change" ? <FileWarning size={16} /> : <Mail size={16} />;
+  return <span className={`notice-icon ${kind}`} aria-hidden="true">{icon}</span>;
 }
 
 function NotificationsView({ unread, orgs, onOpen }: {
