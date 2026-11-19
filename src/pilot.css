@@ -182,8 +182,59 @@ small { font-size: .8rem; }
 .mail-tools { display: flex; justify-content: space-between; gap: 12px; align-items: end; flex-wrap: wrap; padding: 0 18px 12px; }
 .mail-tools label { display: grid; gap: 4px; font-size: .78rem; font-weight: 650; }
 .mail-tools select { height: 36px; min-width: 180px; border: 1px solid var(--line-dark); border-radius: 8px; padding: 0 8px; background: #fff; color: var(--ink); }
-.mail-head, .mail-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(120px, .8fr) minmax(0, 1fr); gap: 12px; align-items: center; }
-.mail-head { padding: 0 18px 8px; color: var(--muted); font-size: .75rem; font-weight: 700; }
+.mail-row, .mail-head > div { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(120px, .8fr) minmax(0, 1fr); gap: 12px; align-items: center; }
+.mail-head { display: grid; grid-template-columns: minmax(0, 1fr) 196px; padding: 0 18px 8px; color: var(--muted); font-size: .75rem; font-weight: 700; }
+.mail-head > div { padding-right: 18px; }
+.mail-head > span { text-align: right; }
+.mail-item { display: grid; grid-template-columns: minmax(0, 1fr) 196px; align-items: center; }
+.mail-item:hover { background: #f4faf7; }
+.mail-item .mail-row:hover { background: transparent; }
+.mail-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; padding-right: 18px; }
+.check-button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid #176650; border-radius: 9px; background: #176650; color: #fff; font: inherit; font-size: .8rem; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.check-button:hover:not(:disabled) { background: #105340; border-color: #105340; }
+.check-button:disabled { cursor: default; }
+.check-button:disabled:not(.done) { opacity: .45; }
+.check-button.done { background: #eef2f1; border-color: #dbe3e0; color: #7a8a86; }
+.check-button.done svg { color: #22a06b; }
+.check-note { padding: 0 4px; }
+.checked-note { display: flex; gap: 6px; align-items: flex-start; margin-top: 12px; padding: 9px 12px; border-radius: 10px; background: var(--green-light); color: #1d5a47; font-size: .8rem; line-height: 1.45; }
+.checked-note svg { flex: none; margin-top: 2px; }
+.check-modal { width: min(1040px, 100%); max-height: min(92dvh, 860px); display: flex; flex-direction: column; }
+.check-modal .modal-head h2 { font-size: 1.15rem; }
+.check-editor { display: flex; flex-direction: column; gap: 10px; min-height: 0; margin-top: 6px; }
+.check-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.check-meta p { color: var(--muted); font-size: .8rem; }
+.check-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.check-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: #eef2f1; color: #44605a; font-size: .72rem; font-weight: 680; }
+.check-chip svg { color: #22a06b; }
+.check-status { display: flex; align-items: center; gap: 6px; margin-top: 14px; color: var(--muted); font-size: .85rem; }
+.check-status.error { color: var(--amber); }
+.check-scroll { overflow: auto; min-height: 0; max-height: min(56dvh, 560px); border: 1px solid var(--line); border-radius: 12px; }
+.check-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .8rem; }
+.check-table th { position: sticky; top: 0; z-index: 1; background: #f7faf9; color: var(--muted); font-size: .7rem; font-weight: 720; text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.check-table th.num { text-align: right; }
+.check-table td { padding: 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.check-table tr:last-child td { border-bottom: 0; }
+.check-table .check-index { width: 28px; padding-left: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.check-table input, .check-table select { width: 100%; min-width: 0; height: 30px; padding: 0 7px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: .8rem; }
+.check-table select { min-width: 104px; padding-right: 2px; }
+.check-table input[type="date"] { min-width: 128px; }
+.check-table td:nth-child(3) input, .check-table td:nth-child(4) input { min-width: 110px; }
+.check-table td:nth-child(6) input { min-width: 120px; }
+.check-table input.num { min-width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+.check-table tr:hover input, .check-table tr:hover select { border-color: var(--line); background: #fff; }
+.check-table input:focus, .check-table select:focus { outline: none; border-color: #69ac95; background: #fff; box-shadow: 0 0 0 3px #d9f1e7; }
+.check-table td.edited input, .check-table td.edited select { background: #fff7e6; border-color: #f1d49b; }
+.check-table input.invalid { border-color: #d98a6b; background: #fff1ec; }
+.check-foot { display: grid; gap: 8px; }
+.check-sums { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: .8rem; }
+.check-sums strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.check-sums .match { color: var(--green); }
+.check-sums .mismatch { color: var(--amber); }
+.check-edited { color: #9a6a14; font-weight: 650; }
+.check-problem { display: flex; gap: 6px; align-items: center; color: var(--amber); font-size: .8rem; }
+.check-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.check-actions .button { min-width: 120px; justify-content: center; }
 .mail-row { width: 100%; padding: 12px 18px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .mail-carrier { font-weight: 650; }
 .mail-file { overflow-wrap: anywhere; color: var(--muted); }
@@ -519,7 +570,8 @@ select { max-width: 100%; }
 }
 @media (max-width: 510px) {
   .topbar-right { gap: 7px; }
-  .overview-bottom, .upload-grid, .mail-head, .mail-row { grid-template-columns: 1fr; gap: 9px; }
+  .overview-bottom, .upload-grid, .mail-head, .mail-row, .mail-item { grid-template-columns: 1fr; gap: 9px; }
+  .mail-actions { justify-content: flex-start; padding: 0 18px 12px; }
   .mail-head { display: none; }
   .mail-file { color: var(--muted); }
   .page-intro.split { align-items: flex-start; flex-direction: column; gap: 9px; }

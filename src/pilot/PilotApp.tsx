@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight, ArrowUpRight, BarChart3, Bell, Check, ChevronDown, ChevronRight, ClipboardCheck, Copy, Database, FileCheck2,
-  FileText, Funnel, History, LayoutGrid, LockKeyhole, Mail, Menu, Package, PanelLeftClose, PanelLeftOpen, Plus, Receipt, RefreshCw,
+  FileText, Funnel, History, LayoutGrid, LockKeyhole, Mail, Menu, Package, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Receipt, RefreshCw,
   Settings, UploadCloud, X,
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
@@ -10,6 +10,9 @@ import { agreementFromCsv, saveAgreements, loadAgreements, sampleAgreement, spli
 import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
 import { AuditFlow, downloadCsv } from "./audit.tsx";
 import { carrierFromMail } from "./carrierName.ts";
+import { CheckEditor } from "./CheckEditor.tsx";
+import { isCheckable, isSheetName } from "./checkSource.ts";
+import { fetchInvoiceCheck, listInvoiceChecks } from "./checkClient.ts";
 import { decodeCsv, importRows, parseCsv, suggestMapping } from "./csv.ts";
 import { DEMO_RATES } from "./demo.ts";
 import {
@@ -19,7 +22,8 @@ import {
 import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
 import { loadMailFile, saveBlob } from "./mailFiles.ts";
-import { ExtractPanel } from "./ExtractPanel.tsx";
+import { CheckedNote, ExtractPanel } from "./ExtractPanel.tsx";
+import { rowsFromLines, type CheckSummary, type InvoiceCheck } from "./invoiceCheck.ts";
 import { HeroMotion } from "./HeroMotion.tsx";
 import { hashForView, viewFromHash, type WorkspaceView } from "./place.ts";
 import { dateLabel, money, ReportView } from "./report.tsx";
@@ -793,6 +797,9 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
   const [filter, setFilter] = useState("");
   const [copied, setCopied] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [checks, setChecks] = useState<Map<string, CheckSummary>>(() => new Map());
+  const [checkNote, setCheckNote] = useState("");
+  const [checking, setChecking] = useState<{ subject: string; file: MailFile; carrier: string } | null>(null);
   const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
   const [fetching, setFetching] = useState<{ fileId: string; percent: number | null } | null>(null);
   const reload = useRef<(manual: boolean) => void>(() => undefined);
@@ -808,6 +815,13 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
       if (!hit && !manual) setLoading(true);
       if (manual) setRefreshing(true);
       const query = admin ? `?company=${encodeURIComponent(orgId)}` : "";
+      listInvoiceChecks(orgId)
+        .then((body) => {
+          if (gone || cacheEpoch() !== epoch) return;
+          setChecks(new Map(body.checks.map((item) => [item.fileId, item])));
+          setCheckNote(body.store === "memory" ? "Kontroller gemmes midlertidigt, indtil tabellen invoice_checks findes." : "");
+        })
+        .catch(() => undefined);
       try {
         const body = await api<{ address: string; ready: boolean; error?: string; mails: MailRow[] }>(`/api/invoice-mail${query}`);
         if (cacheEpoch() !== epoch) return;
@@ -961,13 +975,14 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
           <p className="quiet" style={{ padding: "0 18px 16px" }}>{mails.length === 0 ? "Ingen fakturaer endnu. Send en til fakturamailen, eller tilføj den her." : "Ingen fakturaer for den transportør."}</p>
         ) : (
           <>
-            <div className="mail-head"><span>Emne</span><span>Transportør</span><span className="mail-file">Fil</span></div>
+            <div className="mail-head"><div><span>Emne</span><span>Transportør</span><span className="mail-file">Fil</span></div><span>Kontrol</span></div>
             <ul className="mail-list">
               {shown.map((mail) => {
                 const files = invoiceFiles(mail);
                 const carrier = carrierFromMail(mail);
+                const target = files.find((file) => isCheckable(file.filename));
                 return (
-                  <li key={mail.id}>
+                  <li key={mail.id} className="mail-item">
                     <button type="button" className="mail-row" onClick={() => openMail(mail)}>
                       <span>
                         <strong>{mail.subject}</strong>
@@ -976,6 +991,11 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
                       <span className="mail-carrier">{carrier || "—"}</span>
                       <span className="mail-file">{files[0]?.filename ?? "Ingen fil"}{files.length > 1 ? ` +${files.length - 1}` : ""}</span>
                     </button>
+                    <CheckAction
+                      check={target ? checks.get(target.id) ?? null : null}
+                      disabled={!target}
+                      onCheck={() => { if (target) setChecking({ subject: mail.subject, file: target, carrier }); }}
+                    />
                   </li>
                 );
               })}
@@ -983,7 +1003,24 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
           </>
         )}
       </section>
+      {checkNote && checks.size ? <p className="quiet check-note">{checkNote}</p> : null}
       {adding ? <AddInvoiceModal orgId={orgId} onClose={() => setAdding(false)} onAdded={added} /> : null}
+      {checking ? (
+        <Modal title={`Check faktura · ${checking.subject}`} check onClose={() => setChecking(null)}>
+          <CheckEditor
+            fileId={checking.file.id}
+            filename={checking.file.filename}
+            companyId={orgId}
+            carrier={checking.carrier}
+            onClose={() => setChecking(null)}
+            onSaved={(check, store) => {
+              setChecks((current) => new Map(current).set(check.fileId, { fileId: check.fileId, changed: check.changed, checkedByName: check.checkedByName, checkedAt: check.checkedAt }));
+              setCheckNote(store === "memory" ? "Kontroller gemmes midlertidigt, indtil tabellen invoice_checks findes." : "");
+              setChecking(null);
+            }}
+          />
+        </Modal>
+      ) : null}
       {open ? (
         <Modal title={open.subject} wide onClose={() => setOpen(null)}>
           {open.files.length > 1 ? (
@@ -997,6 +1034,11 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
             <>
               <div className="invoice-toolbar">
                 {fetching?.fileId === openFile.id ? <DownloadProgress percent={fetching.percent} /> : null}
+                {isCheckable(openFile.filename) ? (
+                  <button className="button secondary" type="button" onClick={() => { setChecking({ subject: open.subject, file: openFile, carrier: "" }); setOpen(null); }}>
+                    {checks.has(openFile.id) ? <><Pencil size={15} /> Ret kontrol</> : <><ClipboardCheck size={15} /> Check faktura</>}
+                  </button>
+                ) : null}
                 <button
                   className="button secondary"
                   type="button"
@@ -1006,14 +1048,34 @@ function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
               </div>
               {isPdfName(openFile.filename) ? (
                 <>
-                  <ExtractPanel fileId={openFile.id} companyId={orgId} />
+                  <ExtractPanel fileId={openFile.id} companyId={orgId} checked={checks.get(openFile.id)?.checkedAt ?? ""} />
                   <InvoicePages fileId={openFile.id} companyId={orgId} />
                 </>
-              ) : <SheetPreview key={openFile.id} file={openFile} companyId={orgId} />}
+              ) : <SheetPreview key={openFile.id} file={openFile} companyId={orgId} checked={checks.get(openFile.id)?.checkedAt ?? ""} />}
             </>
           ) : <p>Denne faktura har ingen fil.</p>}
         </Modal>
       ) : null}
+    </div>
+  );
+}
+
+function CheckAction({ check, disabled, onCheck }: { check: CheckSummary | null; disabled: boolean; onCheck: () => void }) {
+  if (check) {
+    const when = new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Copenhagen" }).format(new Date(check.checkedAt));
+    const who = `Kontrolleret af ${check.checkedByName}, ${when}${check.changed ? " · rettet" : ""}`;
+    return (
+      <div className="mail-actions">
+        <button type="button" className="check-button done" disabled title={who} aria-label={who}><Check size={15} /> Checked</button>
+        <button type="button" className="tool-button" aria-label="Ret kontrol" data-tip="Ret" title="Ret kontrol" onClick={onCheck}><Pencil size={15} /></button>
+      </div>
+    );
+  }
+  return (
+    <div className="mail-actions">
+      <button type="button" className="check-button" disabled={disabled} title={disabled ? "Filen kan ikke læses som fakturalinjer" : undefined} onClick={onCheck}>
+        <ClipboardCheck size={15} /> Check faktura
+      </button>
     </div>
   );
 }
@@ -1154,14 +1216,18 @@ function AddInvoiceModal({ orgId, onClose, onAdded }: { orgId: string; onClose: 
   );
 }
 
-function SheetPreview({ file, companyId }: { file: MailFile; companyId: string }) {
-  const [state, setState] = useState<{ rows?: InvoiceRow[]; error?: string } | null>(null);
-  const sheetFile = /\.(csv|tsv|txt)$/i.test(file.filename);
+function SheetPreview({ file, companyId, checked }: { file: MailFile; companyId: string; checked: string }) {
+  const [state, setState] = useState<{ rows?: InvoiceRow[]; error?: string; check?: InvoiceCheck | null } | null>(null);
+  const sheetFile = isSheetName(file.filename);
   useEffect(() => {
     if (!sheetFile) return;
     let gone = false;
-    loadMailFile(file.id, companyId).promise
-      .then(async (blob) => {
+    Promise.all([loadMailFile(file.id, companyId).promise, checked ? fetchInvoiceCheck(file.id, companyId).catch(() => null) : null])
+      .then(async ([blob, check]) => {
+        if (check) {
+          if (!gone) setState({ rows: rowsFromLines(check.lines), check });
+          return;
+        }
         const sheet = parseCsv(decodeCsv(await blob.arrayBuffer()));
         const rows = importRows("invoice", sheet, suggestMapping("invoice", sheet.headers));
         if (!gone) setState({ rows });
@@ -1170,7 +1236,7 @@ function SheetPreview({ file, companyId }: { file: MailFile; companyId: string }
         if (!gone) setState({ error: (error as Error).message });
       });
     return () => { gone = true; };
-  }, [file.id, companyId, sheetFile]);
+  }, [file.id, companyId, sheetFile, checked]);
   if (!sheetFile) return <p className="quiet">Filen vises ikke her. Hent den, eller gem den som CSV.</p>;
   if (!state) return <p>Læser filen…</p>;
   if (state.error || !state.rows) {
@@ -1180,6 +1246,7 @@ function SheetPreview({ file, companyId }: { file: MailFile; companyId: string }
   return (
     <section className="extract-panel" aria-label="Fakturalinjer fra filen">
       <div className="extract-head"><div><h3><FileText size={15} /> Fakturalinjer</h3><p>Læst i browseren fra {file.filename}</p></div></div>
+      {state.check ? <CheckedNote check={state.check} /> : null}
       <div className="rate-scroll">
         <table className="rate-table extract-table">
           <thead><tr><th>Forsendelse</th><th>Dato</th><th>Service</th><th>Vægt</th><th className="num">Beløb</th></tr></thead>
@@ -1632,7 +1699,7 @@ function clearHash(hash: string) {
   }
 }
 
-function Modal({ title, onClose, children, wide = false, audit = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; audit?: boolean }) {
+function Modal({ title, onClose, children, wide = false, audit = false, check = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; audit?: boolean; check?: boolean }) {
   const close = useRef(onClose);
   close.current = onClose;
   const card = useRef<HTMLDivElement>(null);
@@ -1653,7 +1720,7 @@ function Modal({ title, onClose, children, wide = false, audit = false }: { titl
   }, []);
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close.current(); }}>
-      <div className={["modal-card", wide ? "invoice-modal" : "", audit ? "audit-modal" : ""].filter(Boolean).join(" ")} ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div className={["modal-card", wide ? "invoice-modal" : "", audit ? "audit-modal" : "", check ? "check-modal" : ""].filter(Boolean).join(" ")} ref={card} role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div className="modal-head">
           <h2 id="modal-title">{title}</h2>
           <button type="button" className="modal-close" onClick={() => close.current()}>Luk</button>

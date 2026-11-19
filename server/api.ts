@@ -4,7 +4,9 @@ import { knownCarrier } from "../src/data/carriers.ts";
 import { customers } from "../src/data/portfolio.ts";
 import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
-import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
+import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
+import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
+import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
 import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
@@ -716,6 +718,44 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       } as const;
       const [status, message] = replies[stored.result];
       send(res, status, { error: stored.result, message });
+      return;
+    }
+
+    if (method === "GET" && path === "/api/invoice-checks") {
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      if (!companyId || !canSee(user, companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      send(res, 200, await listChecks(companyId));
+      return;
+    }
+
+    const invoiceCheck = path.match(/^\/api\/invoice-checks\/([^/]+)$/);
+    if (invoiceCheck && (method === "GET" || method === "PUT")) {
+      const fileId = decodeURIComponent(invoiceCheck[1] ?? "");
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      if (!companyId || !canSee(user, companyId) || !isMailFileId(fileId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      if (method === "GET") {
+        send(res, 200, { check: await readCheck(companyId, fileId), store: checkStore() });
+        return;
+      }
+      if ((await invoiceFileCompany(fileId).catch(() => null)) !== companyId) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      const body = (await readJson(req)) as { original?: unknown; lines?: unknown };
+      const original = checkLinesSchema.safeParse(body.original);
+      const lines = checkLinesSchema.safeParse(body.lines);
+      if (!original.success || !lines.success) {
+        send(res, 400, { error: "lines", message: "Linjerne kunne ikke gemmes. Kontrollér dato, vægt og beløb." });
+        return;
+      }
+      const saved = await saveCheck({ companyId, fileId, original: original.data, lines: lines.data, by: user.id, name: user.name || user.username });
+      send(res, 200, saved);
       return;
     }
 
