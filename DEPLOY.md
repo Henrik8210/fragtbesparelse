@@ -176,9 +176,28 @@ create table if not exists public.invoice_checks (
   history jsonb not null default '[]'::jsonb,
   primary key (company_id, file_id)
 );
+
 ```
 
 The same SQL is in `server/invoice-check.sql`.
+
+## Prisaftale efter dato
+
+An invoice is checked against the price agreement valid on each line's date: the shipment date, else the invoice date. The candidates are the company's agreements with the invoice's carrier, historic ones included. When several overlap, the latest start wins and is flagged. A line with no valid agreement is not compared. A line dated after the newest agreement's end holds the whole invoice, with a prompt to add the new agreement first. A person can choose another agreement for an invoice; for a received or uploaded file the choice is kept in this table (already created in prod):
+
+```sql
+create table if not exists public.invoice_agreement_choices (
+  company_id text not null references public.companies (id),
+  file_id text not null references public.invoice_mail_files (id) on delete cascade,
+  agreement_id text not null,
+  chosen_by text not null,
+  chosen_by_name text not null,
+  chosen_at timestamptz not null default now(),
+  primary key (company_id, file_id)
+);
+```
+
+The same SQL is in `server/invoice-agreement-choices.sql`. Without it, choices are kept in the running container until it restarts.
 
 ## What could not be done from here
 

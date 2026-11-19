@@ -6,6 +6,7 @@ import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
+import { clearChoice, listChoices, saveChoice } from "./agreementChoices.ts";
 import { agreementStore, createAgreement, deleteAgreement, listAgreements, readAgreement, updateAgreement } from "./priceAgreements.ts";
 import { agreementCreateSchema, agreementPatchSchema } from "../src/pilot/agreementRecord.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
@@ -725,6 +726,39 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const saved = await saveCheck({ companyId, fileId, original: original.data, lines: lines.data, by: user.id, name: user.name || user.username });
       void observeCheckEdits(companyId, saved.check);
       send(res, 200, saved);
+      return;
+    }
+
+    if (method === "GET" && path === "/api/agreement-choices") {
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      if (!companyId || !canSee(user, companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      send(res, 200, await listChoices(companyId));
+      return;
+    }
+
+    const agreementChoice = path.match(/^\/api\/agreement-choices\/([^/]+)$/);
+    if (agreementChoice && (method === "PUT" || method === "DELETE")) {
+      const fileId = decodeURIComponent(agreementChoice[1] ?? "");
+      const companyId = text(url.searchParams.get("company") ?? "", 80);
+      if (!companyId || !canSee(user, companyId) || !isMailFileId(fileId)
+        || (await invoiceFileCompany(fileId).catch(() => null)) !== companyId) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
+      if (method === "DELETE") {
+        send(res, 200, await clearChoice(companyId, fileId));
+        return;
+      }
+      const body = (await readJson(req)) as { agreementId?: unknown };
+      const agreementId = typeof body.agreementId === "string" ? body.agreementId.trim() : "";
+      if (!agreementId || agreementId.length > 120) {
+        send(res, 400, { error: "agreement", message: "Vælg en prisaftale." });
+        return;
+      }
+      send(res, 200, await saveChoice({ companyId, fileId, agreementId, chosenBy: user.id, chosenByName: user.name || user.username }));
       return;
     }
 

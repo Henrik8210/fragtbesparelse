@@ -16,6 +16,7 @@ import { AgreementReview } from "./AgreementReview.tsx";
 import { AgreementTermsView } from "./AgreementTerms.tsx";
 import type { AgreementExtract } from "./agreementExtract.ts";
 import { CheckEditor } from "./CheckEditor.tsx";
+import { InvoiceAgreement } from "./InvoiceAgreement.tsx";
 import { isCheckable, isSheetName } from "./checkSource.ts";
 import { fetchInvoiceCheck, listInvoiceChecks } from "./checkClient.ts";
 import { decodeCsv, importRows, parseCsv, suggestMapping } from "./csv.ts";
@@ -122,16 +123,8 @@ function orgAgreements(org: Org, saved: Agreement[]): Agreement[] {
   return [...(sample ? [sample] : []), ...saved.filter((item) => item.orgId === org.id)];
 }
 
-function rateChoices(org: Org, checks: StoredAudit[], agreements: Agreement[]): PastSource[] {
-  const { active, historic } = splitAgreements(agreements, todayIso());
-  const agreement: PastSource[] = [...active, ...historic].filter((item) => item.sample || item.rows.length).map((item) => ({
-    id: `agreement:${item.id}`,
-    name: item.sample ? org.carrier || "Prisaftale" : item.name,
-    date: item.from || item.createdAt,
-    carrier: item.carrier,
-    note: active.includes(item) ? "Aktiv prisaftale" : "Historisk prisaftale",
-    csv: item.sample ? org.rates : rateCsv(item.rows),
-  }));
+/** Rate files from earlier checks. Saved agreements are matched on the invoice dates instead. */
+function rateChoices(checks: StoredAudit[]): PastSource[] {
   const fromChecks = checks.flatMap((check) => {
     if (check.id.startsWith("sample:")) return [];
     const stored = check.rates ?? [];
@@ -146,7 +139,7 @@ function rateChoices(org: Org, checks: StoredAudit[], agreements: Agreement[]): 
       csv: rateCsv(rows),
     }];
   });
-  return [...agreement, ...fromChecks];
+  return fromChecks;
 }
 
 function readPlace(): WorkspaceView {
@@ -208,7 +201,8 @@ export function PilotApp() {
   }, [admin, org, checks, libraryMail]);
   const [savedAgreements, setSavedAgreements] = useState<{ orgId: string; items: Agreement[]; store: AgreementStore | ""; error: string }>({ orgId: "", items: [], store: "", error: "" });
   const agreements = useMemo(() => orgAgreements(org, savedAgreements.orgId === org.id ? savedAgreements.items : []), [org, savedAgreements]);
-  const pastRates = useMemo(() => rateChoices(org, checks, agreements), [org, checks, agreements]);
+  const pastRates = useMemo(() => rateChoices(checks), [checks]);
+  const [addingAgreement, setAddingAgreement] = useState<{ carrier: string } | null>(null);
   const inCheck = view === "check" || view === "report" || view === "inbox" || view === "agreements";
   const activeTab = inCheck ? "check" : view;
   const activeLabel = view === "report" ? "Rapport"
@@ -706,7 +700,7 @@ export function PilotApp() {
             <ChecksPage checks={checks} onStart={newAudit} onOpen={openReport} />
           ) : null}
           {view === "inbox" ? (
-            <InvoicesView key={org.id} admin={admin} orgId={org.id} orgs={orgs} focus={focusMail} onFocused={() => setFocusMail(null)} />
+            <InvoicesView key={org.id} admin={admin} orgId={org.id} orgs={orgs} focus={focusMail} onFocused={() => setFocusMail(null)} agreements={agreements} onAddAgreement={(carrier) => setAddingAgreement({ carrier })} />
           ) : null}
           {view === "notifications" ? <NotificationsView unread={notices} orgs={orgs} onOpen={openNotice} /> : null}
           {view === "agreements" ? (
@@ -742,6 +736,8 @@ export function PilotApp() {
               companyId={org.id}
               invoices={pastInvoices}
               rates={pastRates}
+              agreements={agreements}
+              onAddAgreement={(carrier) => setAddingAgreement({ carrier })}
               onExample={() => { setComposer(false); demo(); }}
               onReport={(input, report) => {
                 setComposer(false);
@@ -751,6 +747,17 @@ export function PilotApp() {
               }}
             />
           </Modal>
+        ) : null}
+        {addingAgreement ? (
+          <AddAgreementModal
+            org={org}
+            initialCarrier={addingAgreement.carrier}
+            onClose={() => setAddingAgreement(null)}
+            onAdded={async (input) => {
+              await createAgreement(input);
+              setAddingAgreement(null);
+            }}
+          />
         ) : null}
         <footer className="main-footer"><span>Freightlytics</span><span>Privat pilot · Dansk indenrigs pakkefragt</span></footer>
       </div>
@@ -860,7 +867,9 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
   );
 }
 
-function InvoicesView({ admin, orgId, orgs, focus, onFocused }: {
+function InvoicesView({ admin, orgId, orgs, focus, onFocused, agreements, onAddAgreement }: {
+  agreements: Agreement[];
+  onAddAgreement: (carrier: string) => void;
   admin: boolean;
   orgId: string;
   orgs: { id: string; name: string }[];
@@ -881,7 +890,7 @@ function InvoicesView({ admin, orgId, orgs, focus, onFocused }: {
   const [checks, setChecks] = useState<Map<string, CheckSummary>>(() => new Map());
   const [checkNote, setCheckNote] = useState("");
   const [checking, setChecking] = useState<{ subject: string; file: MailFile; carrier: string } | null>(null);
-  const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
+  const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string; carrier: string } | null>(null);
   const [fetching, setFetching] = useState<{ fileId: string; percent: number | null } | null>(null);
   const reload = useRef<(manual: boolean) => void>(() => undefined);
   const addressField = useRef<HTMLInputElement>(null);
@@ -966,7 +975,7 @@ function InvoicesView({ admin, orgId, orgs, focus, onFocused }: {
 
   function openMail(mail: MailRow) {
     const files = invoiceFiles(mail);
-    setOpen({ subject: mail.subject, files, fileId: files[0]?.id ?? "" });
+    setOpen({ subject: mail.subject, files, fileId: files[0]?.id ?? "", carrier: carrierFromMail(mail) });
   }
 
   useEffect(() => {
@@ -975,7 +984,7 @@ function InvoicesView({ admin, orgId, orgs, focus, onFocused }: {
     if (mail) {
       setFilter("");
       const files = invoiceFiles(mail);
-      setOpen({ subject: mail.subject, files, fileId: files[0]?.id ?? "" });
+      setOpen({ subject: mail.subject, files, fileId: files[0]?.id ?? "", carrier: carrierFromMail(mail) });
       onFocused();
     } else if (fresh) {
       onFocused();
@@ -1132,7 +1141,7 @@ function InvoicesView({ admin, orgId, orgs, focus, onFocused }: {
               <div className="invoice-toolbar">
                 {fetching?.fileId === openFile.id ? <DownloadProgress percent={fetching.percent} /> : null}
                 {isCheckable(openFile.filename) ? (
-                  <button className="button secondary" type="button" onClick={() => { setChecking({ subject: open.subject, file: openFile, carrier: "" }); setOpen(null); }}>
+                  <button className="button secondary" type="button" onClick={() => { setChecking({ subject: open.subject, file: openFile, carrier: open.carrier }); setOpen(null); }}>
                     {checks.has(openFile.id) ? <><Pencil size={15} /> Ret kontrol</> : <><ClipboardCheck size={15} /> Check faktura</>}
                   </button>
                 ) : null}
@@ -1143,6 +1152,18 @@ function InvoicesView({ admin, orgId, orgs, focus, onFocused }: {
                   disabled={fetching?.fileId === openFile.id && fetching.percent !== -1 && fetching.percent !== 100}
                 >Hent</button>
               </div>
+              {isCheckable(openFile.filename) ? (
+                <InvoiceAgreement
+                  key={openFile.id}
+                  fileId={openFile.id}
+                  filename={openFile.filename}
+                  companyId={orgId}
+                  carrier={open.carrier}
+                  checked={checks.get(openFile.id)?.checkedAt ?? ""}
+                  agreements={agreements}
+                  onAdd={onAddAgreement}
+                />
+              ) : null}
               {isPdfName(openFile.filename) ? (
                 <>
                   <ExtractPanel fileId={openFile.id} companyId={orgId} checked={checks.get(openFile.id)?.checkedAt ?? ""} />
@@ -1900,21 +1921,27 @@ function clearHash(hash: string) {
   }
 }
 
+/** Escape closes only the topmost of stacked modals. */
+const openModals: symbol[] = [];
+
 function Modal({ title, onClose, children, wide = false, audit = false, check = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; audit?: boolean; check?: boolean }) {
   const close = useRef(onClose);
   close.current = onClose;
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const layer = Symbol("modal");
+    openModals.push(layer);
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     (card.current?.querySelector<HTMLElement>("input:not([tabindex='-1']), select:not([tabindex='-1']), textarea") ?? card.current?.querySelector<HTMLElement>("button:not(.modal-close)"))?.focus();
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") close.current();
+      if (event.key === "Escape" && openModals.at(-1) === layer) close.current();
     }
     document.addEventListener("keydown", onKey);
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", onKey);
+      openModals.splice(openModals.indexOf(layer), 1);
       document.body.style.overflow = overflow;
       previous?.focus();
     };
@@ -2375,9 +2402,9 @@ function RateTable({ rows }: { rows: RateRow[] }) {
   );
 }
 
-function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () => void; onAdded: (input: AgreementCreate) => Promise<void> }) {
+function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org: Org; initialCarrier?: string; onClose: () => void; onAdded: (input: AgreementCreate) => Promise<void> }) {
   const [name, setName] = useState("");
-  const [carrier, setCarrier] = useState("");
+  const [carrier, setCarrier] = useState(initialCarrier);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [file, setFile] = useState<{ name: string; csv: string } | null>(null);
