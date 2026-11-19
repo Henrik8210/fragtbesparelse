@@ -3,22 +3,43 @@ import {
   buildExtractRequest, EXTRACT_MODEL, EXTRACT_VERSION, modelUsage, parseModelOutput, validateExtract,
   type AiInputs, type InvoiceExtract,
 } from "../src/pilot/invoiceExtract.ts";
+import {
+  AGREEMENT_CACHE_PREFIX, AGREEMENT_EXTRACT_VERSION, buildAgreementRequest, validateAgreementExtract,
+  type AgreementExtract,
+} from "../src/pilot/agreementExtract.ts";
 import { postgresSql, storesInPostgres } from "./db.ts";
 import { pdfText } from "./pdfText.ts";
 
 export type AiRun = (model: string, inputs: AiInputs) => Promise<unknown>;
 
-export type Prepared =
-  | { result: "cached"; extract: InvoiceExtract }
-  | { result: "ready"; sha256: string; filename: string; text: string; inputs: AiInputs; truncated: boolean }
+export type ExtractKind = "invoice" | "agreement";
+type ExtractOf<K extends ExtractKind> = K extends "agreement" ? AgreementExtract : InvoiceExtract;
+type AnyExtract = InvoiceExtract | AgreementExtract;
+
+export type Prepared<K extends ExtractKind = "invoice"> =
+  | { result: "cached"; extract: ExtractOf<K> }
+  | { result: "ready"; kind: K; sha256: string; filename: string; text: string; inputs: AiInputs; truncated: boolean }
   | { result: "no-text" | "not-pdf" | "pdf" };
 
 export type ExtractJob = { id: string; model: string; inputs: AiInputs };
 
+type Spec = {
+  version: number;
+  /** Agreement extracts share invoice_extracts; the prefix keeps their rows apart from an invoice with the same bytes. */
+  prefix: string;
+  build: (text: string) => { inputs: AiInputs; truncated: boolean };
+  validate: (raw: unknown, text: string, meta: { sha256: string; filename: string; truncated: boolean; usage: InvoiceExtract["usage"] }) => AnyExtract;
+};
+
+const SPECS: Record<ExtractKind, Spec> = {
+  invoice: { version: EXTRACT_VERSION, prefix: "", build: buildExtractRequest, validate: validateExtract },
+  agreement: { version: AGREEMENT_EXTRACT_VERSION, prefix: AGREEMENT_CACHE_PREFIX, build: buildAgreementRequest, validate: validateAgreementExtract },
+};
+
 const JOB_TTL_MS = 5 * 60 * 1000;
 const MEMORY_KEEP = 300;
-const memory = new Map<string, InvoiceExtract>();
-const jobs = new Map<string, { companyId: string; sha256: string; filename: string; text: string; truncated: boolean; expires: number }>();
+const memory = new Map<string, AnyExtract>();
+const jobs = new Map<string, { kind: ExtractKind; companyId: string; sha256: string; filename: string; text: string; truncated: boolean; expires: number }>();
 
 export function sha256Of(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -28,11 +49,17 @@ export function isPdf(bytes: Uint8Array): boolean {
   return bytes.length > 5 && Buffer.from(bytes.subarray(0, 5)).toString("latin1") === "%PDF-";
 }
 
-export async function prepareExtract(companyId: string, filename: string, bytes: Uint8Array, refresh = false): Promise<Prepared> {
+export async function prepareExtract<K extends ExtractKind = "invoice">(
+  companyId: string,
+  filename: string,
+  bytes: Uint8Array,
+  refresh = false,
+  kind: K = "invoice" as K,
+): Promise<Prepared<K>> {
   if (!isPdf(bytes)) return { result: "not-pdf" };
   const sha256 = sha256Of(bytes);
   if (!refresh) {
-    const hit = await cachedExtract(companyId, sha256);
+    const hit = await cachedExtract(companyId, sha256, kind);
     if (hit) return { result: "cached", extract: hit };
   }
   let text: string;
@@ -42,28 +69,35 @@ export async function prepareExtract(companyId: string, filename: string, bytes:
     return { result: "pdf" };
   }
   if (text.replace(/\s/g, "").length < 20) return { result: "no-text" };
-  const { inputs, truncated } = buildExtractRequest(text);
-  return { result: "ready", sha256, filename, text, inputs, truncated };
+  const { inputs, truncated } = SPECS[kind].build(text);
+  return { result: "ready", kind, sha256, filename, text, inputs, truncated };
 }
 
-export async function finishExtract(
+export async function finishExtract<K extends ExtractKind>(
   companyId: string,
-  prepared: Extract<Prepared, { result: "ready" }>,
+  prepared: Extract<Prepared<K>, { result: "ready" }>,
   output: unknown,
-): Promise<InvoiceExtract> {
-  const extract = validateExtract(parseModelOutput(output), prepared.text, {
+): Promise<ExtractOf<K>> {
+  const extract = SPECS[prepared.kind].validate(parseModelOutput(output), prepared.text, {
     sha256: prepared.sha256,
     filename: prepared.filename,
     truncated: prepared.truncated,
     usage: modelUsage(output),
-  });
-  await storeExtract(companyId, extract);
+  }) as ExtractOf<K>;
+  await storeExtract(companyId, prepared.kind, extract);
   return extract;
 }
 
 /** Full run with an injected model call, used by the REST fallback and by tests. */
 export async function extractInvoice(companyId: string, filename: string, bytes: Uint8Array, run: AiRun, refresh = false) {
   const prepared = await prepareExtract(companyId, filename, bytes, refresh);
+  if (prepared.result !== "ready") return prepared;
+  const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
+  return { result: "extracted" as const, extract };
+}
+
+export async function extractAgreement(companyId: string, filename: string, bytes: Uint8Array, run: AiRun, refresh = false) {
+  const prepared = await prepareExtract(companyId, filename, bytes, refresh, "agreement");
   if (prepared.result !== "ready") return prepared;
   const extract = await finishExtract(companyId, prepared, await run(EXTRACT_MODEL, prepared.inputs));
   return { result: "extracted" as const, extract };
@@ -84,11 +118,12 @@ export function takeRun(userId: string, now = Date.now()): boolean {
   return true;
 }
 
-export function openJob(companyId: string, prepared: Extract<Prepared, { result: "ready" }>): ExtractJob {
+export function openJob<K extends ExtractKind>(companyId: string, prepared: Extract<Prepared<K>, { result: "ready" }>): ExtractJob {
   const now = Date.now();
   for (const [id, job] of jobs) if (job.expires < now) jobs.delete(id);
   const id = randomBytes(18).toString("hex");
   jobs.set(id, {
+    kind: prepared.kind,
     companyId,
     sha256: prepared.sha256,
     filename: prepared.filename,
@@ -99,11 +134,11 @@ export function openJob(companyId: string, prepared: Extract<Prepared, { result:
   return { id, model: EXTRACT_MODEL, inputs: prepared.inputs };
 }
 
-export async function closeJob(id: string, output: unknown): Promise<InvoiceExtract | "missing"> {
+export async function closeJob(id: string, output: unknown): Promise<AnyExtract | "missing"> {
   const job = jobs.get(id);
   jobs.delete(id);
   if (!job || job.expires < Date.now()) return "missing";
-  return finishExtract(job.companyId, { result: "ready", ...job, inputs: buildExtractRequest(job.text).inputs }, output);
+  return finishExtract<ExtractKind>(job.companyId, { result: "ready", ...job, inputs: SPECS[job.kind].build(job.text).inputs }, output);
 }
 
 export function restRunner(): AiRun | null {
@@ -142,27 +177,33 @@ export function extractCacheMode(): "postgres" | "memory" {
   return tableUsable() ? "postgres" : "memory";
 }
 
-export async function cachedExtract(companyId: string, sha256: string): Promise<InvoiceExtract | null> {
-  const key = `${companyId}\n${sha256}`;
+export async function cachedExtract<K extends ExtractKind = "invoice">(
+  companyId: string,
+  sha256: string,
+  kind: K = "invoice" as K,
+): Promise<ExtractOf<K> | null> {
+  const { prefix, version } = SPECS[kind];
+  const key = `${companyId}\n${prefix}${sha256}`;
   if (tableUsable()) {
     try {
       const rows = await postgresSql<{ extract: unknown }>(
         "select extract from public.invoice_extracts where company_id = $1 and content_sha256 = $2 and version = $3",
-        [companyId, sha256, EXTRACT_VERSION],
+        [companyId, prefix + sha256, version],
       );
       const value = rows[0]?.extract;
-      const parsed = typeof value === "string" ? JSON.parse(value) as InvoiceExtract : value as InvoiceExtract | undefined;
+      const parsed = typeof value === "string" ? JSON.parse(value) as ExtractOf<K> : value as ExtractOf<K> | undefined;
       if (parsed) return parsed;
     } catch (error) {
       noteTableError(error);
     }
   }
   const kept = memory.get(key);
-  return kept?.version === EXTRACT_VERSION ? kept : null;
+  return kept?.version === version ? kept as ExtractOf<K> : null;
 }
 
-async function storeExtract(companyId: string, extract: InvoiceExtract): Promise<void> {
-  const key = `${companyId}\n${extract.sha256}`;
+async function storeExtract(companyId: string, kind: ExtractKind, extract: AnyExtract): Promise<void> {
+  const contentKey = SPECS[kind].prefix + extract.sha256;
+  const key = `${companyId}\n${contentKey}`;
   memory.delete(key);
   memory.set(key, extract);
   while (memory.size > MEMORY_KEEP) {
@@ -178,7 +219,7 @@ async function storeExtract(companyId: string, extract: InvoiceExtract): Promise
        on conflict (company_id, content_sha256) do update
        set version = excluded.version, model = excluded.model, confidence = excluded.confidence,
            extract = excluded.extract, created_at = now()`,
-      [companyId, extract.sha256, extract.version, extract.model, extract.confidence, JSON.stringify(extract)],
+      [companyId, contentKey, extract.version, extract.model, extract.confidence, JSON.stringify(extract)],
     );
   } catch (error) {
     // The table is optional. The in-process copy above still answers repeat requests.

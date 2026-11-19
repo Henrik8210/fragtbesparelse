@@ -94,7 +94,15 @@ export function agreementFromCsv(
   if (missing.length) {
     throw new Error(`Filen mangler kolonnerne ${missing.map((field) => field.label.toLowerCase()).join(", ")}. Brug skabelonen.`);
   }
-  const rows = importRows("rates", sheet, mapping);
+  return agreementFromRows(importRows("rates", sheet, mapping), fields, now);
+}
+
+export function agreementFromRows(
+  rows: RateRow[],
+  fields: { orgId: string; name: string; carrier: string; from: string; to: string },
+  now = new Date(),
+): Agreement {
+  if (!rows.length) throw new Error("Tilføj mindst én pris.");
   const span = rowSpan(rows);
   const from = fields.from || span.from;
   const to = fields.to || span.to;

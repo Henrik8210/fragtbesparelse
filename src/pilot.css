@@ -264,6 +264,16 @@ small { font-size: .8rem; }
 .check-problem { display: flex; gap: 6px; align-items: center; color: var(--amber); font-size: .8rem; }
 .check-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .check-actions .button { min-width: 120px; justify-content: center; }
+.check-chip.warn { background: #fff8db; color: #7a5a00; }
+.check-chip.warn svg { color: #b78105; }
+.review-fields { display: grid; grid-template-columns: 1.4fr 1.2fr 1fr 1fr; gap: 10px; }
+.review-fields input { height: 36px; }
+.review-note { color: var(--muted); font-size: .8rem; }
+.agreement-review .check-table td:nth-child(2) input { min-width: 140px; }
+.agreement-review .check-table td:nth-child(3) input { min-width: 90px; }
+.agreement-review .check-table input.num { min-width: 84px; }
+.agreement-review .review-flag { color: #b78105; vertical-align: middle; }
+@media (max-width: 720px) { .review-fields { grid-template-columns: 1fr 1fr; } }
 .mail-row { width: 100%; padding: 12px 18px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .mail-carrier { font-weight: 650; }
 .mail-file { overflow-wrap: anywhere; color: var(--muted); }

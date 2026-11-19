@@ -142,6 +142,8 @@ create table if not exists public.invoice_extracts (
 
 The same SQL is in `server/invoice-extract.sql`. Running the server outside Cloudflare has no binding, so a PDF answers "Workers AI er ikke tilgængelig her". Setting `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AI_TOKEN` (a Workers AI token) on that server uses the REST API instead.
 
+A PDF added on Prisaftaler with Tilføj prisaftale goes through the same route with `kind=agreement`: the same model, binding, job bridge and hourly cap, with a rate-table prompt and schema in `src/pilot/agreementExtract.ts`. Every price, weight step and surcharge percent the model returns is looked up in the PDF text, and what is not printed is flagged on that row. The person reviews and edits the rows before the agreement is saved in the browser. Agreement extracts are cached in the same `invoice_extracts` table with `content_sha256` prefixed `agreement:` and their own version, so no new table or column is needed. A PDF that is only an image is refused before the model is called.
+
 The validation only keeps a subtotal or VAT amount the PDF prints. Each line is matched to the PDF text line that carries its amount, and a reference, route, service, weight, or surcharge description the model left empty is taken from that line. `EXTRACT_VERSION` 3 reads an older cache row again once. Version 3 adds `unmapped` (printed fields the schema has no place for, plus any key the model returned outside the schema) and `layout` (normalized labels from the text layer) to each extract.
 
 ## Formatændringer

@@ -11,6 +11,7 @@ import { observeCheckEdits, observeInvoiceExtract, rememberJobFile, takeJobFile 
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
 import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
+import { AGREEMENT_NO_TEXT } from "../src/pilot/agreementExtract.ts";
 import { loginBlocked, loginFailed, loginSucceeded } from "./loginLimit.ts";
 import { passwordOk } from "./passwordPolicy.ts";
 import { registerOwnerUser } from "./register.ts";
@@ -761,12 +762,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (method === "POST" && path === "/api/invoice-extract") {
       const companyId = text(url.searchParams.get("company") ?? "", 80);
       const fileId = text(url.searchParams.get("file") ?? "", 80);
+      const agreement = url.searchParams.get("kind") === "agreement";
       const refresh = url.searchParams.get("refresh") === "1" && user.role === "admin";
-      if (!companyId || !canSee(user, companyId)) {
+      if (!companyId || !canSee(user, companyId) || (agreement && fileId)) {
         send(res, 404, { error: "missing" });
         return;
       }
-      let filename = "faktura.pdf";
+      let filename = agreement ? "prisaftale.pdf" : "faktura.pdf";
       let bytes: Buffer;
       if (fileId) {
         const file = isMailFileId(fileId) ? await readInvoiceFile(fileId).catch(() => null) : null;
@@ -785,7 +787,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         bytes = uploaded;
         filename = text(url.searchParams.get("name") ?? "", 120) || filename;
       }
-      const prepared = await prepareExtract(companyId, filename, bytes, refresh);
+      const prepared = await prepareExtract<"invoice" | "agreement">(companyId, filename, bytes, refresh, agreement ? "agreement" : "invoice");
       if (prepared.result === "cached") {
         send(res, 200, { extract: prepared.extract, cached: true, cache: extractCacheMode() });
         return;
@@ -794,7 +796,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const messages = {
           "not-pdf": "Filen er ikke en PDF.",
           pdf: "PDF'en kunne ikke åbnes.",
-          "no-text": "PDF'en har intet tekstlag (fx en scannet side), så linjerne kan ikke læses.",
+          "no-text": agreement ? AGREEMENT_NO_TEXT : "PDF'en har intet tekstlag (fx en scannet side), så linjerne kan ikke læses.",
         } as const;
         send(res, 422, { error: prepared.result, message: messages[prepared.result] });
         return;

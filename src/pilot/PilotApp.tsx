@@ -10,6 +10,8 @@ import { agreementFromCsv, saveAgreements, loadAgreements, sampleAgreement, spli
 import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
 import { AuditFlow, downloadCsv } from "./audit.tsx";
 import { carrierFromMail } from "./carrierName.ts";
+import { AgreementReview } from "./AgreementReview.tsx";
+import type { AgreementExtract } from "./agreementExtract.ts";
 import { CheckEditor } from "./CheckEditor.tsx";
 import { isCheckable, isSheetName } from "./checkSource.ts";
 import { fetchInvoiceCheck, listInvoiceChecks } from "./checkClient.ts";
@@ -23,6 +25,7 @@ import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, p
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
 import { loadMailFile, saveBlob } from "./mailFiles.ts";
 import { CheckedNote, ExtractPanel } from "./ExtractPanel.tsx";
+import { extractAgreementUpload } from "./extractClient.ts";
 import { rowsFromLines, type CheckSummary, type InvoiceCheck } from "./invoiceCheck.ts";
 import { HeroMotion } from "./HeroMotion.tsx";
 import { groupByDay, noticeTarget, noticeText, noticeTime, type Notice } from "./notices.ts";
@@ -2313,19 +2316,51 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [file, setFile] = useState<{ name: string; csv: string } | null>(null);
+  const [reading, setReading] = useState("");
+  const [review, setReview] = useState<AgreementExtract | null>(null);
   const [problem, setProblem] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const picked = useRef(0);
+
+  async function readPdf(chosen: File) {
+    if (chosen.size > 8 * 1024 * 1024) {
+      setProblem("PDF'en må fylde højst 8 MB.");
+      return;
+    }
+    const turn = ++picked.current;
+    setFile(null);
+    setReading(chosen.name);
+    try {
+      const extract = await extractAgreementUpload(chosen, org.id);
+      if (turn !== picked.current) return;
+      if (!extract.rates.length) {
+        setProblem("Der blev ikke fundet priser i PDF'en. Brug skabelonen som CSV.");
+        return;
+      }
+      setReview(extract);
+    } catch (error) {
+      if (turn === picked.current) setProblem((error as Error).message || "PDF'ens priser kunne ikke læses.");
+    } finally {
+      if (turn === picked.current) setReading("");
+    }
+  }
 
   async function pick(chosen: File) {
     setProblem("");
+    if (/\.pdf$/i.test(chosen.name) || chosen.type === "application/pdf") {
+      await readPdf(chosen);
+      return;
+    }
     if (!/\.(csv|tsv|txt)$/i.test(chosen.name)) {
-      setProblem("Vælg en CSV- eller TSV-fil. Hent skabelonen, hvis aftalen kun findes som PDF.");
+      setProblem("Vælg en PDF, CSV- eller TSV-fil.");
       return;
     }
     if (chosen.size > 1024 * 1024) {
       setProblem("Filen må fylde højst 1 MB.");
       return;
     }
+    picked.current += 1;
+    setReading("");
     setFile({ name: chosen.name, csv: decodeCsv(await chosen.arrayBuffer()) });
     if (!name.trim()) setName(chosen.name.replace(/\.[^.]+$/, "").slice(0, 100));
   }
@@ -2343,9 +2378,23 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
     }
   }
 
+  if (review) {
+    return (
+      <Modal title="Gennemse prisaftale" check onClose={onClose}>
+        <AgreementReview
+          extract={review}
+          orgId={org.id}
+          carriers={carrierProfiles.map((profile) => profile.name)}
+          onBack={() => setReview(null)}
+          onSave={onAdded}
+        />
+      </Modal>
+    );
+  }
+
   return (
     <Modal title="Tilføj prisaftale" onClose={onClose}>
-      <p>Prisaftalen gemmes i denne browser for {org.name} og kan vælges i Nyt fakturatjek. Én række pr. leveringsform og vægttrin.</p>
+      <p>Prisaftalen gemmes i denne browser for {org.name} og kan vælges i Nyt fakturatjek. Én række pr. leveringsform og vægttrin. En PDF læses af Workers AI, og du gennemser priserne, før de gemmes.</p>
       <form onSubmit={submit}>
         <div className="file-pick">
           <input
@@ -2353,7 +2402,7 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
             className="sr-only"
             type="file"
             tabIndex={-1}
-            accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
+            accept=".pdf,.csv,.tsv,.txt,application/pdf,text/csv,text/tab-separated-values"
             aria-label="Vælg prisaftalefil"
             onChange={(event) => {
               const chosen = event.currentTarget.files?.[0];
@@ -2361,8 +2410,8 @@ function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () =>
               if (chosen) void pick(chosen);
             }}
           />
-          <button type="button" className="button secondary" onClick={() => input.current?.click()}><UploadCloud size={16} /> {file ? "Skift fil" : "Vælg fil"}</button>
-          <span>{file ? file.name : "CSV eller TSV · maks. 1 MB"}</span>
+          <button type="button" className="button secondary" onClick={() => input.current?.click()} disabled={Boolean(reading)}><UploadCloud size={16} /> {file ? "Skift fil" : "Vælg fil"}</button>
+          <span aria-live="polite">{reading ? `Læser priserne i ${reading}…` : file ? file.name : "PDF (maks. 8 MB), CSV eller TSV (maks. 1 MB)"}</span>
           <button type="button" className="text-button muted" onClick={() => downloadCsv("prisaftale-skabelon.csv", DEMO_RATES)}>Hent skabelon</button>
         </div>
         <label>Navn<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="F.eks. GLS 2027" /></label>
