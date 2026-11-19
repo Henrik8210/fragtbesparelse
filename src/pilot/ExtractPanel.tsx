@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { CircleAlert, Sparkles } from "lucide-react";
+import { CircleAlert, CircleCheck, Sparkles } from "lucide-react";
+import { fetchInvoiceCheck } from "./checkClient.ts";
 import { extractMailFile } from "./extractClient.ts";
+import { checkedExtract, lineChanges, type InvoiceCheck } from "./invoiceCheck.ts";
 import { CONFIDENCE_LABELS, lineTotalOre, type InvoiceExtract } from "./invoiceExtract.ts";
 
 const dkk = new Intl.NumberFormat("da-DK", { style: "currency", currency: "DKK" });
@@ -12,17 +14,30 @@ const dateLabel = (value: string) =>
 const KIND_LABELS = { shipment: "", credit: "Kreditering", surcharge: "Tillæg", fee: "Gebyr" } as const;
 const AGAINST_LABELS = { subtotal: "Subtotal ekskl. moms", "total-vat": "I alt minus moms", total: "Faktura i alt", none: "" } as const;
 
-export function ExtractPanel({ fileId, companyId }: { fileId: string; companyId: string }) {
-  const [state, setState] = useState<{ key: string; extract?: InvoiceExtract; error?: string } | null>(null);
-  const key = `${companyId}\n${fileId}`;
+export function CheckedNote({ check }: { check: InvoiceCheck }) {
+  const when = new Intl.DateTimeFormat("da-DK", {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Copenhagen",
+  }).format(new Date(check.checkedAt));
+  const edited = lineChanges(check.original, check.lines).length;
+  return (
+    <p className="checked-note">
+      <CircleCheck size={14} /> Kontrolleret af {check.checkedByName}, {when}.
+      {edited ? ` ${edited} ${edited === 1 ? "felt er rettet" : "felter er rettet"}, og de rettede værdier bruges i fakturatjek. Originalen er gemt.` : " Linjerne er godkendt som læst."}
+    </p>
+  );
+}
+
+export function ExtractPanel({ fileId, companyId, checked = "" }: { fileId: string; companyId: string; checked?: string }) {
+  const [state, setState] = useState<{ key: string; extract?: InvoiceExtract; check?: InvoiceCheck | null; error?: string } | null>(null);
+  const key = `${companyId}\n${fileId}\n${checked}`;
   useEffect(() => {
     let gone = false;
-    extractMailFile(fileId, companyId).then(
-      (extract) => { if (!gone) setState({ key, extract }); },
+    Promise.all([extractMailFile(fileId, companyId), checked ? fetchInvoiceCheck(fileId, companyId).catch(() => null) : null]).then(
+      ([extract, check]) => { if (!gone) setState({ key, extract, check }); },
       (error: unknown) => { if (!gone) setState({ key, error: (error as Error).message }); },
     );
     return () => { gone = true; };
-  }, [fileId, companyId, key]);
+  }, [fileId, companyId, checked, key]);
 
   const current = state?.key === key ? state : null;
   if (!current) {
@@ -37,6 +52,14 @@ export function ExtractPanel({ fileId, companyId }: { fileId: string; companyId:
       <section className="extract-panel">
         <p className="extract-status error" role="alert"><CircleAlert size={15} /> {current.error}</p>
       </section>
+    );
+  }
+  if (current.check) {
+    return (
+      <>
+        <CheckedNote check={current.check} />
+        <ExtractTable extract={checkedExtract(current.extract, current.check.lines)} />
+      </>
     );
   }
   return <ExtractTable extract={current.extract} />;

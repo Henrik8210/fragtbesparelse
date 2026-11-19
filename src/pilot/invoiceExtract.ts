@@ -410,7 +410,7 @@ export function lineTotalOre(line: ExtractLine): number {
   return line.amountOre + line.surcharges.reduce((sum, item) => sum + item.amountOre, 0);
 }
 
-function sumCheck(lines: ExtractLine[], subtotalOre: number | null, vatOre: number | null, totalOre: number | null): SumCheck {
+export function sumCheck(lines: ExtractLine[], subtotalOre: number | null, vatOre: number | null, totalOre: number | null): SumCheck {
   const lineSumOre = lines.reduce((sum, line) => sum + lineTotalOre(line), 0);
   const candidates: { against: SumCheck["against"]; target: number }[] = [];
   if (subtotalOre !== null) candidates.push({ against: "subtotal", target: subtotalOre });
@@ -429,7 +429,7 @@ function sumCheck(lines: ExtractLine[], subtotalOre: number | null, vatOre: numb
 }
 
 /** Invoice-level surcharges and fees are spread over the shipments by amount so each row carries its full price. */
-export function extractToInvoiceRows(extract: InvoiceExtract): InvoiceRow[] {
+export function extractToInvoiceRows(extract: Pick<InvoiceExtract, "lines" | "invoiceNumber" | "invoiceDate">): InvoiceRow[] {
   const shipments = extract.lines.filter((line) => line.kind === "shipment" || line.kind === "credit");
   if (shipments.length === 0) throw new Error("PDF'en har ingen forsendelseslinjer, der kan kontrolleres.");
   const sharedOre = extract.lines

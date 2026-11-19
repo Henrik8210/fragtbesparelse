@@ -126,6 +126,11 @@ export async function readInvoiceFile(id: string): Promise<{ filename: string; c
   return { filename: row.filename, companyId: row.company_id, content: asBuffer(row.content) };
 }
 
+export async function invoiceFileCompany(id: string): Promise<string | null> {
+  const rows = await postgresSql<{ company_id: string }>("select company_id from public.invoice_mail_files where id = $1", [id]);
+  return rows[0]?.company_id ?? null;
+}
+
 export type AcceptedMail =
   | { result: "stored"; id: string; companyId: string; postgres: boolean }
   | { result: "database"; message: string }

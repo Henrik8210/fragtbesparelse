@@ -12,9 +12,11 @@ import { ExtractTable } from "./ExtractPanel.tsx";
 import { extractMailFile, extractUpload } from "./extractClient.ts";
 import { MAX_FILE_BYTES, runAudit, type AuditInput, type AuditReport } from "./freight.ts";
 import { CONFIDENCE_LABELS, extractToInvoiceRows, sharedSurchargeOre, type InvoiceExtract } from "./invoiceExtract.ts";
+import { fetchInvoiceCheck } from "./checkClient.ts";
+import { checkedExtract, rowsFromLines, type InvoiceCheck } from "./invoiceCheck.ts";
 import { invoiceCsv, type PastSource } from "./past.ts";
 
-type Uploaded = { name: string; sheet: CsvSheet; mapping: Mapping; extract?: InvoiceExtract };
+type Uploaded = { name: string; sheet: CsvSheet; mapping: Mapping; extract?: InvoiceExtract; checked?: InvoiceCheck };
 
 export type { PastSource };
 
@@ -152,8 +154,14 @@ function extractSheet(extract: InvoiceExtract): CsvSheet {
   return parseCsv(invoiceCsv(extractToInvoiceRows(extract)));
 }
 
-async function mailSource(fileId: string, filename: string, companyId: string): Promise<{ csv: string } | { extract: InvoiceExtract }> {
-  if (/\.pdf$/i.test(filename)) return { extract: await extractMailFile(fileId, companyId) };
+/** A checked invoice is used with its checked lines. An unchecked one is used as read. */
+async function mailSource(fileId: string, filename: string, companyId: string): Promise<{ csv: string; checked?: InvoiceCheck } | { extract: InvoiceExtract; checked?: InvoiceCheck }> {
+  const check = await fetchInvoiceCheck(fileId, companyId).catch(() => null);
+  if (/\.pdf$/i.test(filename)) {
+    const extract = await extractMailFile(fileId, companyId);
+    return check ? { extract: checkedExtract(extract, check.lines), checked: check } : { extract };
+  }
+  if (check) return { csv: invoiceCsv(rowsFromLines(check.lines)), checked: check };
   const response = await fetch(
     `/api/invoice-mail/files/${encodeURIComponent(fileId)}?company=${encodeURIComponent(companyId)}`,
     { credentials: "same-origin" },
@@ -166,7 +174,7 @@ async function mailSource(fileId: string, filename: string, companyId: string): 
   return { csv: decodeCsv(bytes) };
 }
 
-function ExtractSummary({ extract }: { extract: InvoiceExtract }) {
+function ExtractSummary({ extract, checked }: { extract: InvoiceExtract; checked?: InvoiceCheck }) {
   const [open, setOpen] = useState(false);
   const shared = sharedSurchargeOre(extract);
   const kr = (ore: number) => (ore / 100).toLocaleString("da-DK", { style: "currency", currency: "DKK" });
@@ -174,7 +182,7 @@ function ExtractSummary({ extract }: { extract: InvoiceExtract }) {
     <div className="extract-summary">
       <p>
         <span className={`confidence ${extract.confidence}`}>{CONFIDENCE_LABELS[extract.confidence]}</span>
-        {" "}Læst fra PDF med Workers AI.{" "}
+        {" "}{checked ? `Læst fra PDF med Workers AI og kontrolleret af ${checked.checkedByName}. De kontrollerede værdier bruges.` : "Læst fra PDF med Workers AI."}{" "}
         {extract.check.status === "match" ? "Linjerne summer til fakturaens total." : extract.check.status === "mismatch" ? `Linjerne afviger ${kr(Math.abs(extract.check.differenceOre ?? 0))} fra totalen.` : "Ingen total at afstemme mod."}
         {shared ? ` Tillæg på fakturaniveau (${kr(shared)}) er fordelt på forsendelserne efter beløb.` : ""}
       </p>
@@ -228,10 +236,11 @@ function UploadCard({
       const loaded = source.csv !== undefined ? { csv: source.csv } : await mailSource(source.fileId ?? "", source.note, companyId);
       if (id !== uploadId.current) return;
       const extract = "extract" in loaded ? loaded.extract : undefined;
+      const checked = "checked" in loaded ? loaded.checked : undefined;
       const sheet = "extract" in loaded ? extractSheet(loaded.extract) : parseCsv(loaded.csv);
       if (!sheet.rows.length) throw new Error("Filen har ingen datalinjer.");
       const mapping = suggestMapping(kind, sheet.headers);
-      onChange({ name: source.name, sheet, mapping, extract });
+      onChange({ name: source.name, sheet, mapping, extract, checked });
       setPicked(source.id);
       setShowMapping(Boolean(missingFields(kind, mapping).length));
       onHint?.(extract?.carrier && !source.carrier ? { ...source, carrier: extract.carrier } : source);
@@ -363,7 +372,8 @@ function UploadCard({
       </div>
       ) : null}
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
-      {value?.extract ? <ExtractSummary extract={value.extract} /> : null}
+      {value?.extract ? <ExtractSummary extract={value.extract} checked={value.checked} /> : null}
+      {value?.checked && !value.extract ? <p className="extract-summary">Kontrolleret af {value.checked.checkedByName}. De kontrollerede værdier bruges.</p> : null}
       <div className="upload-footer">
         <button
           type="button"
