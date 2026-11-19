@@ -6,6 +6,7 @@ import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
+import { listNotices, markNoticeSeen } from "./notifications.ts";
 import { checkLinesSchema } from "../src/pilot/invoiceCheck.ts";
 import { closeJob, extractCacheMode, finishExtract, openJob, prepareExtract, restRunner, takeRun } from "./invoiceExtract.ts";
 import { EXTRACT_MODEL } from "../src/pilot/invoiceExtract.ts";
@@ -463,7 +464,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return;
       }
       try {
-        if (!(await hasRoom("select count(*)::int as n from notifications", [], 200))) {
+        if (!(await hasRoom("select count(*)::int as n from notifications where kind = 'demo'", [], 200))) {
           send(res, 429, { error: "limit" });
           return;
         }
@@ -608,57 +609,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     if (method === "GET" && path === "/api/notifications") {
-      if (user.role !== "admin") {
-        send(res, 403, { error: "forbidden" });
-        return;
-      }
-      try {
-        const rows = await sql<{ id: string; name: string; company: string; email: string; created_at: Date | string }>(
-          `select id, name, company, email, created_at
-           from notifications
-           where kind = 'demo' and seen_at is null
-           order by created_at desc
-           limit 20`,
-        );
-        send(res, 200, {
-          notifications: rows.map((row) => ({
-            id: row.id,
-            name: row.name,
-            company: row.company,
-            email: row.email,
-            createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
-          })),
-        });
-      } catch (error) {
-        if (missingTable(error)) {
-          send(res, 200, { notifications: [] });
-          return;
-        }
-        throw error;
-      }
+      const notifications = await listNotices(sql, user, { all: url.searchParams.get("all") === "1" });
+      send(res, 200, { notifications });
       return;
     }
 
     const seenNote = path.match(/^\/api\/notifications\/([^/]+)\/seen$/);
     if (seenNote && method === "POST") {
-      if (user.role !== "admin") {
-        send(res, 403, { error: "forbidden" });
-        return;
-      }
       const id = decodeURIComponent(seenNote[1]);
       if (!/^[0-9a-f-]{36}$/i.test(id)) {
         send(res, 400, { error: "id" });
         return;
       }
-      try {
-        await sql("update notifications set seen_at = now() where id = $1 and seen_at is null", [id]);
-      } catch (error) {
-        if (missingTable(error)) {
-          send(res, 200, { ok: true });
-          return;
-        }
-        throw error;
-      }
+      await markNoticeSeen(sql, user, id);
       send(res, 200, { ok: true });
       return;
     }
