@@ -7,6 +7,7 @@ import {
   AGREEMENT_CACHE_PREFIX, AGREEMENT_EXTRACT_VERSION, buildAgreementBatches, validateAgreementExtract,
   type AgreementExtract,
 } from "../src/pilot/agreementExtract.ts";
+import { readParts, type PartPlan, type PartReport } from "../src/pilot/agreementParts.ts";
 import { postgresSql, storesInPostgres } from "./db.ts";
 import { pdfText } from "./pdfText.ts";
 
@@ -18,19 +19,19 @@ type AnyExtract = InvoiceExtract | AgreementExtract;
 
 export type Prepared<K extends ExtractKind = "invoice"> =
   | { result: "cached"; extract: ExtractOf<K> }
-  | { result: "ready"; kind: K; sha256: string; filename: string; text: string; batches: AiInputs[]; truncated: boolean }
+  | { result: "ready"; kind: K; sha256: string; filename: string; text: string; batches: AiInputs[]; plans: PartPlan[]; truncated: boolean }
   | { result: "no-text" | "not-pdf" | "pdf" };
 
-/** `inputs` is the first batch, for a Durable Object that predates `batches`. */
-export type ExtractJob = { id: string; model: string; inputs: AiInputs; batches: AiInputs[] };
+/** `inputs` is the first batch, for a Durable Object that predates `batches`. `plans` lets it check and retry each part. */
+export type ExtractJob = { id: string; model: string; inputs: AiInputs; batches: AiInputs[]; plans: PartPlan[] };
 
 type Spec = {
   version: number;
   /** Agreement extracts share invoice_extracts; the prefix keeps their rows apart from an invoice with the same bytes. */
   prefix: string;
   /** One model call per batch. An invoice is one; a long agreement is read in page groups. */
-  build: (text: string) => { batches: AiInputs[]; truncated: boolean };
-  validate: (raw: unknown[], text: string, meta: { sha256: string; filename: string; truncated: boolean; usage: InvoiceExtract["usage"] }) => AnyExtract;
+  build: (text: string) => { batches: AiInputs[]; plans?: PartPlan[]; truncated: boolean };
+  validate: (raw: unknown[], text: string, meta: { sha256: string; filename: string; truncated: boolean; usage: InvoiceExtract["usage"]; parts?: PartReport[] }) => AnyExtract;
 };
 
 const SPECS: Record<ExtractKind, Spec> = {
@@ -93,14 +94,15 @@ export async function prepareExtract<K extends ExtractKind = "invoice">(
     return { result: "pdf" };
   }
   if (text.replace(/\s/g, "").length < 20) return { result: "no-text" };
-  const { batches, truncated } = SPECS[kind].build(text);
-  return { result: "ready", kind, sha256, filename, text, batches, truncated };
+  const { batches, plans = [], truncated } = SPECS[kind].build(text);
+  return { result: "ready", kind, sha256, filename, text, batches, plans, truncated };
 }
 
 export async function finishExtract<K extends ExtractKind>(
   companyId: string,
   prepared: Extract<Prepared<K>, { result: "ready" }>,
   output: unknown,
+  parts?: PartReport[],
 ): Promise<ExtractOf<K>> {
   const outputs = Array.isArray(output) ? output : [output];
   const extract = SPECS[prepared.kind].validate(outputs, prepared.text, {
@@ -108,6 +110,7 @@ export async function finishExtract<K extends ExtractKind>(
     filename: prepared.filename,
     truncated: prepared.truncated,
     usage: totalUsage(outputs),
+    parts,
   }) as ExtractOf<K>;
   await storeExtract(companyId, prepared.kind, extract);
   return extract;
@@ -124,49 +127,36 @@ function totalUsage(outputs: unknown[]): InvoiceExtract["usage"] {
 }
 
 /**
- * Runs every batch, a few at a time, in order. A batch that takes longer than `timeoutMs` gives `null`, which the
- * validator reports as a part that could not be read, so one stuck call does not hold the whole read.
+ * Runs every batch, a few at a time, in page order. A part that times out, fails or comes back holding too few of its
+ * own printed prices is read again (as two halves when it has a plan), so a lost part is retried instead of dropped.
  */
-export async function runBatches(
+export async function runParts(
   run: AiRun,
   batches: AiInputs[],
-  concurrency = 4,
+  plans: PartPlan[] = [],
   onProgress?: (done: number, total: number) => void,
   timeoutMs = BATCH_TIMEOUT_MS,
-): Promise<unknown[]> {
-  const outputs: unknown[] = new Array(batches.length);
-  let next = 0;
-  let done = 0;
-  const worker = async () => {
-    while (next < batches.length) {
-      const index = next++;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
-      try {
-        outputs[index] = await Promise.race([run(EXTRACT_MODEL, batches[index]), late]);
-      } finally {
-        clearTimeout(timer);
-      }
-      done += 1;
-      onProgress?.(done, batches.length);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
-  return outputs;
+  concurrency = 4,
+): Promise<{ outputs: unknown[]; reports: PartReport[] }> {
+  const { outputs, reports, errors } = await readParts((inputs) => run(EXTRACT_MODEL, inputs as AiInputs), batches, plans, { concurrency, timeoutMs, onProgress });
+  if (reports.every((report) => report.failed)) throw new Error(errors[0] ?? "Workers AI svarede ikke.");
+  return { outputs, reports };
 }
 
 /** Full run with an injected model call, used by the REST fallback and by tests. */
 export async function extractInvoice(companyId: string, filename: string, bytes: Uint8Array, run: AiRun, refresh = false) {
   const prepared = await prepareExtract(companyId, filename, bytes, refresh);
   if (prepared.result !== "ready") return prepared;
-  const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
+  const { outputs, reports } = await runParts(run, prepared.batches, prepared.plans);
+  const extract = await finishExtract(companyId, prepared, outputs, reports);
   return { result: "extracted" as const, extract };
 }
 
 export async function extractAgreement(companyId: string, filename: string, bytes: Uint8Array, run: AiRun, refresh = false) {
   const prepared = await prepareExtract(companyId, filename, bytes, refresh, "agreement");
   if (prepared.result !== "ready") return prepared;
-  const extract = await finishExtract(companyId, prepared, await runBatches(run, prepared.batches));
+  const { outputs, reports } = await runParts(run, prepared.batches, prepared.plans);
+  const extract = await finishExtract(companyId, prepared, outputs, reports);
   return { result: "extracted" as const, extract };
 }
 
@@ -198,15 +188,15 @@ export function openJob<K extends ExtractKind>(companyId: string, prepared: Extr
     truncated: prepared.truncated,
     expires: now + JOB_TTL_MS,
   });
-  return { id, model: EXTRACT_MODEL, inputs: prepared.batches[0], batches: prepared.batches };
+  return { id, model: EXTRACT_MODEL, inputs: prepared.batches[0], batches: prepared.batches, plans: prepared.plans };
 }
 
 /** `output` is one reply per batch, or a single reply from a Durable Object that predates `batches`. */
-export async function closeJob(id: string, output: unknown): Promise<AnyExtract | "missing"> {
+export async function closeJob(id: string, output: unknown, parts?: PartReport[]): Promise<AnyExtract | "missing"> {
   const job = jobs.get(id);
   jobs.delete(id);
   if (!job || job.expires < Date.now()) return "missing";
-  return finishExtract<ExtractKind>(job.companyId, { result: "ready", ...job, batches: [] }, output);
+  return finishExtract<ExtractKind>(job.companyId, { result: "ready", ...job, batches: [], plans: [] }, output, parts);
 }
 
 export function restRunner(): AiRun | null {

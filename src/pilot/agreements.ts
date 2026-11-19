@@ -103,7 +103,7 @@ export function agreementFromCsv(
   const mapping = suggestMapping("rates", sheet.headers);
   const missing = missingFields("rates", mapping);
   if (missing.length) {
-    throw new Error(`Filen mangler kolonnerne ${missing.map((field) => field.label.toLowerCase()).join(", ")}. Brug skabelonen.`);
+    throw new Error(`Filen mangler kolonnerne ${missing.map((field) => field.label.toLowerCase()).join(", ")}. Skabelonen kan hentes under Nyt fakturatjek.`);
   }
   return agreementFromRows(importRows("rates", sheet, mapping), fields, now);
 }

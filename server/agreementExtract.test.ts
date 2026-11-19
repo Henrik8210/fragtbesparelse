@@ -168,7 +168,7 @@ test("reads a 3PL agreement into items, a price grid, surcharges and conditions"
   assert.equal(done.result, "extracted");
   if (done.result !== "extracted") return;
   const extract = done.extract;
-  assert.equal(extract.version, 3);
+  assert.equal(extract.version, 4);
   assert.equal(extract.validFrom, "2027-03-01");
   assert.deepEqual(extract.items.map((item) => [item.unit, item.price]), [
     ["pr. palle pr. uge", 9.4], ["pr. hyldemeter pr. måned", 31.75], ["pr. ordre", 6.85], ["pr. ordrelinje", 1.92], ["pr. time", 412.5],
@@ -202,16 +202,92 @@ test("a long agreement is read in page groups and the replies are merged", async
   assert.deepEqual(extract.usage && [extract.usage.inputTokens, extract.usage.outputTokens], [30, 12]);
 });
 
-test("runBatches reports progress and turns a stuck part into an unread part", async () => {
-  const { runBatches } = await import("./invoiceExtract.ts");
+test("runParts reports progress, and retries a stuck part once", async () => {
+  const { runParts } = await import("./invoiceExtract.ts");
   const seen: string[] = [];
-  const outputs = await runBatches(
-    async (_model, inputs) => (inputs as { stuck?: boolean }).stuck ? new Promise(() => undefined) : { ok: true },
+  let stuck = 0;
+  const { outputs, reports } = await runParts(
+    async (_model, inputs) => (inputs as { stuck?: boolean }).stuck && stuck++ === 0 ? new Promise(() => undefined) : { ok: true },
     [{ stuck: false }, { stuck: true }, { stuck: false }] as never[],
-    2,
+    [],
     (done, total) => seen.push(`${done}/${total}`),
     50,
+    2,
   );
-  assert.deepEqual(outputs, [{ ok: true }, null, { ok: true }]);
+  assert.deepEqual(outputs, [{ ok: true }, { ok: true }, { ok: true }]);
+  assert.deepEqual(reports.map((report) => report.retried), [false, true, false]);
   assert.deepEqual(seen, ["1/3", "2/3", "3/3"]);
+});
+
+// Three pages: prose with a few prices, a page dense with grid cells, and price lines. The production read of a real
+// 17-page agreement lost its dense page this way: the reply parsed as a valid part with empty arrays.
+const DENSE_PAGES = [
+  ["Prisaftale for Kunde Handel", "Gyldig fra 01.01.2027 til 31.12.2027", "Lagerleje pr. uge  31,50  DKK", "Pluk pr. kolli  1,75  DKK", "Med venlig hilsen", "Nord Fragt A/S, Havnevej 1", "Side 1 af 3"].join("\n"),
+  [
+    ...["Nord", "Syd", "Vest", "Øst"].flatMap((region, at) => [
+      `Distribution til ${region}`,
+      "Pallepladser  Aarby  Bstrup  Cby  Dby",
+      ...Array.from({ length: 6 }, (_, row) => `${row + 1} ppl.  ${[0, 1, 2, 3].map((column) => `${100 + at * 37 + row * 11 + column},${String(10 + row + column * 7 + at).padStart(2, "0")}`).join("  ")}`),
+    ]),
+    "Side 2 af 3",
+  ].join("\n"),
+  ["Pallebytte pr. palle  9,86  DKK", "Bokstrailer pr. dag  697,74  DKK", "Side 3 af 3"].join("\n"),
+].join("\n\n");
+
+const unwrap = (output: unknown) => (output as { response?: unknown } | null)?.response ?? null;
+
+/** A model that returns every price line of its part as an item and every table row as a grid row. */
+function echoModel(lose: (text: string, call: number) => boolean) {
+  let calls = 0;
+  return async (_model: string, inputs: unknown) => {
+    calls += 1;
+    const text = String((inputs as { messages: { content: string }[] }).messages[1].content);
+    if (lose(text, calls)) return { response: { carrier: "NF", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], items: [], grids: [], surcharges: [], conditions: [] } };
+    const items = [...text.matchAll(/^(.+?)  (\d+,\d{2})  DKK$/gm)].map((match) => ({ category: "", description: match[1], unit: "", price: match[2], currency: "DKK", note: "" }));
+    const grids: unknown[] = [];
+    let grid: { name: string; columns: { label: string; detail: string }[]; rows: { label: string; cells: string[] }[] } | null = null;
+    for (const line of text.split("\n")) {
+      if (line.startsWith("Distribution til")) grids.push(grid = { name: line, columns: [], rows: [] });
+      else if (grid && line.startsWith("Pallepladser")) grid.columns = line.split("  ").slice(1).map((label) => ({ label, detail: "" }));
+      else if (grid && /ppl\./.test(line)) grid.rows.push({ label: line.split("  ")[0], cells: line.split("  ").slice(1) });
+    }
+    return {
+      response: {
+        carrier: "NF", title: "", validFrom: "01.01.2027", validTo: "31.12.2027", currency: "DKK", rates: [], items,
+        grids: grids.map((item) => ({ ...(item as object), category: "", unit: "", currency: "DKK", rowLabel: "Pallepladser", minimum: [], maximum: [], note: "" })),
+        surcharges: [], conditions: [],
+      },
+    };
+  };
+}
+
+test("a dense page that comes back empty is read again and nothing is lost", async () => {
+  const { runParts } = await import("./invoiceExtract.ts");
+  const { buildAgreementBatches, validateAgreementExtract } = await import("../src/pilot/agreementExtract.ts");
+  const { batches, plans } = buildAgreementBatches(DENSE_PAGES);
+  assert.ok(plans.filter((plan) => plan.pages[0] <= 2 && plan.pages[1] >= 2).length >= 2, "the dense page is split over parts");
+  assert.ok(plans.every((plan) => plan.prices.length <= 60));
+  const lostOnce = new Set<string>();
+  const model = echoModel((text) => {
+    if (!text.includes("Distribution til Syd") || text.includes("half") || lostOnce.has("syd")) return false;
+    lostOnce.add("syd");
+    return true;
+  });
+  const { outputs, reports } = await runParts(model, batches, plans, undefined, 1000, 4);
+  const extract = validateAgreementExtract(outputs.map(unwrap), DENSE_PAGES, { sha256: "x", filename: "aftale.pdf", parts: reports });
+  assert.ok(reports.some((report) => report.retried && !report.failed));
+  assert.equal(extract.coverage.captured, extract.coverage.printed, "every printed price is in the extract");
+  assert.equal(extract.grids.length, 4);
+  assert.equal(extract.carrier, "Nord Fragt", "an abbreviation in the reply becomes the company's printed name");
+  assert.deepEqual(extract.issues, []);
+});
+
+test("a dense page that stays empty is named in the review", async () => {
+  const { runParts } = await import("./invoiceExtract.ts");
+  const { buildAgreementBatches, validateAgreementExtract } = await import("../src/pilot/agreementExtract.ts");
+  const { batches, plans } = buildAgreementBatches(DENSE_PAGES);
+  const { outputs, reports } = await runParts(echoModel((text) => text.includes("ppl.")), batches, plans, undefined, 1000, 4);
+  const extract = validateAgreementExtract(outputs.map(unwrap), DENSE_PAGES, { sha256: "x", filename: "aftale.pdf", parts: reports });
+  assert.equal(extract.confidence, "low");
+  assert.ok(extract.issues.some((issue) => /^Side 1–2 blev kun delvist læst \(\d+ af \d+ priser\), også ved andet forsøg/.test(issue)), extract.issues.join(" | "));
 });

@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { headerField, limitMail, MailTooLarge, packMail, readMailBytes } from "./mailBytes.ts";
 import { confirmedMail, mailFailure, visibleDatabaseError } from "./mailResult.ts";
 import { REVISION, healthMatchesRevision } from "./revision.ts";
+import { readParts, type PartPlan, type PartReport } from "../src/pilot/agreementParts.ts";
 
 const PORT = 8080;
 const INACTIVITY_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -23,7 +24,7 @@ type Env = {
   FRAGTBLIK_ADMIN_PASSWORD?: string;
 };
 
-type ExtractJob = { id?: unknown; model?: unknown; inputs?: unknown; batches?: unknown };
+type ExtractJob = { id?: unknown; model?: unknown; inputs?: unknown; batches?: unknown; plans?: unknown };
 
 const AI_CONCURRENCY = 4;
 const MAX_BATCHES = 16;
@@ -38,35 +39,6 @@ const BATCH_TIMEOUT_MS = 150_000;
 function aiMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "Workers AI svarede ikke.";
   return `Workers AI: ${message}`.slice(0, 200);
-}
-
-/** A part that takes longer than `timeoutMs` gives null, which the container reports as a part it could not read. */
-async function runInParallel<T>(
-  items: T[],
-  run: (item: T) => Promise<unknown>,
-  concurrency: number,
-  timeoutMs: number,
-  onProgress?: (done: number, total: number) => void,
-): Promise<unknown[]> {
-  const outputs: unknown[] = new Array(items.length);
-  let next = 0;
-  let done = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
-      try {
-        outputs[index] = await Promise.race([run(items[index]), late]);
-      } finally {
-        clearTimeout(timer);
-      }
-      done += 1;
-      onProgress?.(done, items.length);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  return outputs;
 }
 
 export class FreightlyticsContainer extends DurableObject<Env> {
@@ -135,19 +107,26 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     const options = /^[\w-]{1,64}$/.test(gateway) ? { gateway: { id: gateway } } : undefined;
     // A long price agreement comes as several page groups; an invoice, or an older container, as one `inputs`.
     const batches = Array.isArray(job.batches) && job.batches.length ? job.batches.slice(0, MAX_BATCHES) : [job.inputs];
-    const finish = async (outputs: unknown[]): Promise<Response> => {
+    const plans = (Array.isArray(job.plans) ? job.plans.slice(0, batches.length) : []) as (PartPlan | undefined)[];
+    const finish = async ({ outputs, reports }: { outputs: unknown[]; reports: PartReport[] }): Promise<Response> => {
       const done = await port.fetch(new Request(`http://container${EXTRACT_DONE_PATH}`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-fragtblik-sync": token },
-        body: JSON.stringify({ job: job.id, output: outputs[0], outputs }),
+        body: JSON.stringify({ job: job.id, output: outputs[0], outputs, reports }),
       }));
       return new Response(done.body, {
         status: done.status,
         headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       });
     };
-    const runAll = (onProgress?: (done: number, total: number) => void) =>
-      runInParallel(batches, (inputs) => ai.run(model, inputs, options), AI_CONCURRENCY, BATCH_TIMEOUT_MS, onProgress);
+    // A part that times out, fails or holds too few of its own printed prices is read again, as two halves.
+    const runAll = async (onProgress?: (done: number, total: number) => void) => {
+      const read = await readParts((inputs) => ai.run(model, inputs, options), batches, plans, {
+        concurrency: AI_CONCURRENCY, timeoutMs: BATCH_TIMEOUT_MS, onProgress,
+      });
+      if (read.reports.every((report) => report.failed)) throw new Error(read.errors[0] ?? "Workers AI svarede ikke.");
+      return read;
+    };
 
     if (!/application\/x-ndjson/.test(forwarded.headers.get("accept") ?? "")) {
       try {
