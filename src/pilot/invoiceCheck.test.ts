@@ -17,7 +17,7 @@ I alt  223,50 kr`;
 const extract = validateExtract({
   carrier: "PostNord", invoiceNumber: "NL-2026-001", invoiceDate: "2026-11-16", currency: "DKK", subtotal: 0, vat: 0, total: 223.5,
   lines: [
-    { kind: "shipment", shipment: "", date: "", reference: "Linje 1", service: "Pakke", weightKg: 2, zone: "", origin: "DK", destination: "DK", amount: 80, surcharges: [{ label: "Miljø", amount: 5 }] },
+    { kind: "shipment", shipment: "", date: "", reference: "Linje 1", service: "Pakke", weightKg: 2, zone: "Taastrup til Aarhus", origin: "DK", destination: "DK", amount: 80, surcharges: [{ label: "Miljø", amount: 5 }] },
     { kind: "shipment", shipment: "", date: "", reference: "Linje 2", service: "Pakke", weightKg: 5, zone: "", origin: "DK", destination: "DK", amount: 120, surcharges: [] },
     { kind: "surcharge", shipment: "", date: "", reference: "Linje 3", service: "Braendstoftillaeg", weightKg: 0, zone: "", origin: "", destination: "", amount: 18.5, surcharges: [] },
   ],
@@ -52,7 +52,7 @@ describe("edits", () => {
     expect(lineChanges(original, original)).toEqual([]);
     expect(isFieldEdited(original, edited, 1, "amountOre")).toBe(true);
     expect(isFieldEdited(original, edited, 0, "amountOre")).toBe(false);
-    expect(lineChanges(original, original.slice(0, 2)).filter((change) => change.line === 2)).toHaveLength(7);
+    expect(lineChanges(original, original.slice(0, 2)).filter((change) => change.line === 2)).toHaveLength(8);
   });
 
   it("override the extract and are redone against the printed total", () => {
@@ -60,6 +60,7 @@ describe("edits", () => {
     expect(applied.lines[1]).toMatchObject({ weightKg: 4, amountOre: 11000, surcharges: [] });
     expect(applied.check).toMatchObject({ lineSumOre: 21350, targetOre: 22350, status: "mismatch" });
     expect(applied.carrier).toBe("PostNord");
+    expect(applied.lines[0].zone).toBe("Taastrup til Aarhus");
     expect(checkedExtract(extract, original).check.status).toBe("match");
   });
 

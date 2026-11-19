@@ -11,14 +11,15 @@ export type CheckLine = {
   reference: string;
   date: string;
   service: string;
+  zone: string;
   weightKg: number;
   amountOre: number;
   origin: string;
   destination: string;
 };
 
-export type CheckField = "kind" | "shipment" | "reference" | "date" | "service" | "weightKg" | "amountOre";
-export const CHECK_FIELDS: CheckField[] = ["kind", "shipment", "reference", "date", "service", "weightKg", "amountOre"];
+export type CheckField = "kind" | "shipment" | "reference" | "date" | "service" | "zone" | "weightKg" | "amountOre";
+export const CHECK_FIELDS: CheckField[] = ["kind", "shipment", "reference", "date", "service", "zone", "weightKg", "amountOre"];
 
 export type CheckChange = { line: number; field: CheckField; from: string | number; to: string | number };
 
@@ -55,6 +56,7 @@ export const checkLineSchema = z.object({
   reference: short(96),
   date: z.string().refine((value) => value === "" || realDate(value), "Datoen skal være ÅÅÅÅ-MM-DD."),
   service: short(64),
+  zone: short(40).default(""),
   weightKg: z.number().finite().min(0).max(1000),
   amountOre: z.number().int().min(-100_000_000).max(100_000_000),
   origin: z.string().regex(/^([A-Z]{2})?$/).default(""),
@@ -70,6 +72,7 @@ export function linesFromExtract(extract: Pick<InvoiceExtract, "lines">): CheckL
     reference: line.reference,
     date: line.date,
     service: line.service,
+    zone: line.zone,
     weightKg: line.weightKg,
     amountOre: lineTotalOre(line),
     origin: line.origin,
@@ -84,6 +87,7 @@ export function linesFromRows(rows: InvoiceRow[]): CheckLine[] {
     reference: "",
     date: row.date,
     service: row.service,
+    zone: "",
     weightKg: row.weight,
     amountOre: row.billedOre,
     origin: row.origin,
@@ -124,7 +128,7 @@ function asExtractLine(line: CheckLine): ExtractLine {
     reference: line.reference,
     service: line.service,
     weightKg: line.weightKg,
-    zone: "",
+    zone: line.zone ?? "",
     origin: line.origin,
     destination: line.destination,
     amountOre: line.amountOre,

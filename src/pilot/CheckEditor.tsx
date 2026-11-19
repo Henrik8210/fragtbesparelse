@@ -4,12 +4,12 @@ import { ApiError } from "../api.ts";
 import { fetchInvoiceCheck, saveInvoiceCheck, type CheckStore } from "./checkClient.ts";
 import { loadCheckSource, type CheckSource } from "./checkSource.ts";
 import {
-  isFieldEdited, kronerText, lineProblems, lineSumOre, parseKroner, parseWeight,
+  CHECK_FIELDS, isFieldEdited, kronerText, lineProblems, lineSumOre, parseKroner, parseWeight,
   type CheckField, type CheckLine, type InvoiceCheck,
 } from "./invoiceCheck.ts";
 import { CONFIDENCE_LABELS, type LineKind } from "./invoiceExtract.ts";
 
-type Draft = { kind: LineKind; shipment: string; reference: string; date: string; service: string; weight: string; amount: string; origin: string; destination: string };
+type Draft = { kind: LineKind; shipment: string; reference: string; date: string; service: string; zone: string; weight: string; amount: string; origin: string; destination: string };
 
 const KIND_OPTIONS: { id: LineKind; label: string }[] = [
   { id: "shipment", label: "Forsendelse" },
@@ -24,6 +24,7 @@ const toDraft = (line: CheckLine): Draft => ({
   reference: line.reference,
   date: line.date,
   service: line.service,
+  zone: line.zone,
   weight: line.weightKg ? String(line.weightKg).replace(".", ",") : "",
   amount: kronerText(line.amountOre),
   origin: line.origin,
@@ -40,6 +41,7 @@ function fromDraft(draft: Draft): CheckLine | null {
     reference: draft.reference.trim(),
     date: draft.date,
     service: draft.service.trim(),
+    zone: draft.zone.trim(),
     weightKg,
     amountOre,
     origin: draft.origin,
@@ -103,7 +105,7 @@ export function CheckEditor({ fileId, filename, companyId, carrier, onClose, onS
   const problems = valid ? lineProblems(lines, extract?.invoiceDate ?? "") : ["Ret de markerede vægte og beløb."];
   const sum = lineSumOre(parsed.filter((line): line is CheckLine => line !== null));
   const target = extract ? (extract.subtotalOre ?? (extract.totalOre !== null && extract.vatOre !== null ? extract.totalOre - extract.vatOre : extract.totalOre)) : null;
-  const editedCount = valid ? original.reduce((count, _line, index) => count + (["kind", "shipment", "reference", "date", "service", "weightKg", "amountOre"] as CheckField[])
+  const editedCount = valid ? original.reduce((count, _line, index) => count + CHECK_FIELDS
     .filter((field) => isFieldEdited(original, lines, index, field)).length, 0) : 0;
 
   function edit(index: number, field: keyof Draft, value: string) {
@@ -159,7 +161,7 @@ export function CheckEditor({ fileId, filename, companyId, carrier, onClose, onS
         <table className="check-table">
           <thead>
             <tr>
-              <th>#</th><th>Type</th><th>Forsendelse</th><th>Reference</th><th>Dato</th><th>Leveringsform</th><th className="num">Vægt kg</th><th className="num">Beløb kr.</th>
+              <th>#</th><th>Type</th><th>Forsendelse</th><th>Reference</th><th>Dato</th><th>Leveringsform</th><th>Rute</th><th className="num">Vægt kg</th><th className="num">Beløb kr.</th>
             </tr>
           </thead>
           <tbody>
@@ -175,8 +177,10 @@ export function CheckEditor({ fileId, filename, companyId, carrier, onClose, onS
                 <td {...cell(index, "reference")}><input value={draft.reference} maxLength={96} aria-label={`Reference, linje ${index + 1}`} onChange={(event) => edit(index, "reference", event.target.value)} /></td>
                 <td {...cell(index, "date")}>
                   <input type="date" value={draft.date} aria-label={`Dato, linje ${index + 1}`} onChange={(event) => edit(index, "date", event.target.value)} />
+                  {!draft.date && extract?.invoiceDate ? <small className="check-hint">Fakturadato bruges</small> : null}
                 </td>
                 <td {...cell(index, "service")}><input value={draft.service} maxLength={64} aria-label={`Leveringsform, linje ${index + 1}`} onChange={(event) => edit(index, "service", event.target.value)} /></td>
+                <td {...cell(index, "zone")}><input value={draft.zone} maxLength={40} aria-label={`Rute, linje ${index + 1}`} onChange={(event) => edit(index, "zone", event.target.value)} /></td>
                 <td {...cell(index, "weightKg")}>
                   <input className={parseWeight(draft.weight) === null ? "num invalid" : "num"} inputMode="decimal" value={draft.weight} aria-label={`Vægt, linje ${index + 1}`} onChange={(event) => edit(index, "weight", event.target.value)} />
                 </td>

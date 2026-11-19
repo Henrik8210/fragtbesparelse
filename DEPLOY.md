@@ -142,6 +142,30 @@ create table if not exists public.invoice_extracts (
 
 The same SQL is in `server/invoice-extract.sql`. Running the server outside Cloudflare has no binding, so a PDF answers "Workers AI er ikke tilgængelig her". Setting `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AI_TOKEN` (a Workers AI token) on that server uses the REST API instead.
 
+The validation only keeps a subtotal or VAT amount the PDF prints. Each line is matched to the PDF text line that carries its amount, and a reference, route, service, weight, or surcharge description the model left empty is taken from that line. `EXTRACT_VERSION` 2 reads a version 1 cache row again once.
+
+## Check faktura
+
+Each invoice on Fakturaer has a Check faktura button. It opens the invoice lines in an editor. Checked saves them as they are. Gem ændringer saves the edited values. The edited lines then replace the extract or the CSV rows in the viewer and in Nyt fakturatjek. The original lines, who checked, when, and each change are kept. An unchecked invoice is used as read. The app does not create the table. Without it, checks are kept in the running container until it restarts, and Fakturaer says so. Run this in the Supabase SQL editor to keep them:
+
+```sql
+create table if not exists public.invoice_checks (
+  company_id text not null references public.companies (id),
+  file_id text not null references public.invoice_mail_files (id) on delete cascade,
+  original jsonb not null,
+  lines jsonb not null,
+  changed boolean not null default false,
+  checked_by text not null,
+  checked_by_name text not null,
+  checked_at timestamptz not null default now(),
+  first_checked_at timestamptz not null default now(),
+  history jsonb not null default '[]'::jsonb,
+  primary key (company_id, file_id)
+);
+```
+
+The same SQL is in `server/invoice-check.sql`.
+
 ## What could not be done from here
 
 There is no Cloudflare login on this machine, so the zone was not read, the Worker was not deployed, and no DNS record was created. `DATABASE_URL` for the Cursor app was not copied. freightlytics.io needs its own database.

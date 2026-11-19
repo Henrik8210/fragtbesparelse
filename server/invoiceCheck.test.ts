@@ -6,7 +6,7 @@ delete process.env.DATABASE_URL;
 const { checkStore, listChecks, readCheck, saveCheck } = await import("./invoiceCheck.ts");
 
 const line: CheckLine = {
-  kind: "shipment", shipment: "", reference: "Linje 1", date: "2026-11-16", service: "Pakke", weightKg: 2, amountOre: 8500, origin: "DK", destination: "DK",
+  kind: "shipment", shipment: "", reference: "Linje 1", date: "2026-11-16", service: "Pakke", zone: "Taastrup til Aarhus", weightKg: 2, amountOre: 8500, origin: "DK", destination: "DK",
 };
 
 test("keeps checks in memory without the invoice_checks table and keeps the first original", async () => {
