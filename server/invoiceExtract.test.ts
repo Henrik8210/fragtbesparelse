@@ -8,7 +8,7 @@ delete process.env.CLOUDFLARE_AI_TOKEN;
 const { extractInvoice, prepareExtract, closeJob, openJob, takeRun } = await import("./invoiceExtract.ts");
 const { pdfText } = await import("./pdfText.ts");
 const {
-  EXTRACT_MODEL, extractToInvoiceRows, isoDate, parseModelOutput, sharedSurchargeOre, validateExtract,
+  EXTRACT_MODEL, extractToInvoiceRows, isoDate, parseModelOutput, printedAmounts, sharedSurchargeOre, validateExtract,
 } = await import("../src/pilot/invoiceExtract.ts");
 
 const PDF = readFileSync(new URL("./fixtures/nordhavn-living-testfaktura.pdf", import.meta.url));
@@ -103,6 +103,38 @@ test("flags an amount the PDF does not contain and a total that does not add up"
   assert.equal(done.extract.confidence, "low");
   assert.deepEqual(done.extract.lines[1].issues, ["Beløbet står ikke ordret i PDF'en."]);
   assert.ok(done.extract.issues.includes("Linjerne summer ikke til fakturaens total."));
+});
+
+// The reply Workers AI gave for the fixture in production on 19 Nov 2026: an invented subtotal, "Pakke" as the shipment, no route or descriptions.
+const LIVE_REPLY = {
+  carrier: "PostNord", invoiceNumber: "NL-2026-001", invoiceDate: "2026-11-16", currency: "DKK", subtotal: 205, vat: 0, total: 223.5,
+  lines: [
+    { kind: "shipment", shipment: "Pakke", date: "", reference: "", service: "", weightKg: 2, zone: "", origin: "", destination: "", amount: 85, surcharges: [] },
+    { kind: "shipment", shipment: "Pakke", date: "", reference: "", service: "", weightKg: 5, zone: "", origin: "", destination: "", amount: 120, surcharges: [] },
+    { kind: "surcharge", shipment: "", date: "", reference: "", service: "", weightKg: 0, zone: "", origin: "", destination: "", amount: 18.5, surcharges: [] },
+  ],
+};
+
+test("repairs the live reply for the test invoice from the PDF's own lines", async () => {
+  const extract = validateExtract(LIVE_REPLY, await pdfText(PDF), { sha256: "x", filename: "nordhavn-living-testfaktura.pdf" });
+  assert.deepEqual(extract.issues, [], "a subtotal the PDF does not print is dropped, and 223,50 kr is found");
+  assert.equal(extract.subtotalOre, null);
+  assert.equal(extract.totalOre, 22350);
+  assert.equal(extract.check.status, "match");
+  assert.equal(extract.confidence, "high");
+  assert.equal(extract.vatStated, false, "the test PDF says nothing about moms");
+  assert.deepEqual(extract.lines.map((line) => [line.kind, line.shipment, line.reference, line.service, line.zone, line.weightKg]), [
+    ["shipment", "", "Linje 1", "Pakke", "Taastrup til Aarhus", 2],
+    ["shipment", "", "Linje 2", "Pakke", "Taastrup til Odense", 5],
+    ["surcharge", "", "Linje 3", "Brændstoftillæg", "", 0],
+  ]);
+  assert.ok(extract.lines.every((line) => line.issues.length === 0));
+});
+
+test("finds printed amounts across pdf.js splits, kr. suffixes and thousand separators", () => {
+  const amounts = printedAmounts("I alt  223 ,50 kr.\nFragt 1 234,50 kr\nTotal 2,345.00 DKK\nGebyr 1.250 kr\nMoms\u00a0308,64");
+  for (const value of [22350, 123450, 234500, 125000, 30864]) assert.ok(amounts.has(value), String(value));
+  assert.equal(amounts.has(20500), false);
 });
 
 test("bridge job: the container opens a job and validates the output the Worker posts back", async () => {

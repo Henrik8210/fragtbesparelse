@@ -157,7 +157,8 @@ export async function cachedExtract(companyId: string, sha256: string): Promise<
       noteTableError(error);
     }
   }
-  return memory.get(key) ?? null;
+  const kept = memory.get(key);
+  return kept?.version === EXTRACT_VERSION ? kept : null;
 }
 
 async function storeExtract(companyId: string, extract: InvoiceExtract): Promise<void> {

@@ -61,27 +61,40 @@ export function ExtractTable({ extract }: { extract: InvoiceExtract }) {
       <div className="rate-scroll">
         <table className="rate-table extract-table">
           <thead>
-            <tr><th>Forsendelse</th><th>Dato</th><th>Service</th><th>Vægt / zone</th><th className="num">Beløb</th><th>Tillæg</th><th className="num">Linje i alt</th></tr>
+            <tr><th>Forsendelse</th><th>Dato</th><th>Service</th><th>Vægt / rute</th><th className="num">Beløb</th><th>Tillæg</th><th className="num">Linje i alt</th></tr>
           </thead>
           <tbody>
-            {extract.lines.map((line, index) => (
-              <tr key={index} className={line.issues.length ? "flagged" : undefined} title={line.issues.join(" ") || undefined}>
-                <td>
-                  {line.shipment || line.reference || `Linje ${index + 1}`}
-                  {line.shipment && line.reference ? <small>{line.reference}</small> : null}
-                  {KIND_LABELS[line.kind] ? <small>{KIND_LABELS[line.kind]}</small> : null}
-                </td>
-                <td>{line.date ? dateLabel(line.date) : "—"}</td>
-                <td>{line.service || "—"}</td>
-                <td>{[line.weightKg ? `${line.weightKg.toLocaleString("da-DK")} kg` : "", line.zone].filter(Boolean).join(" · ") || "—"}</td>
-                <td className="num">{money(line.amountOre)}</td>
-                <td>{line.surcharges.length ? line.surcharges.map((item) => `${item.label} ${money(item.amountOre)}`).join(", ") : "—"}</td>
-                <td className="num">
-                  {money(lineTotalOre(line))}
-                  {line.issues.length ? <small className="flag"><CircleAlert size={12} /> {line.issues[0]}</small> : null}
-                </td>
-              </tr>
-            ))}
+            {extract.lines.map((line, index) => {
+              const invoiceLevel = line.kind === "surcharge" || line.kind === "fee";
+              const surcharges = invoiceLevel
+                ? [{ label: line.service || KIND_LABELS[line.kind], amountOre: line.amountOre }, ...line.surcharges]
+                : line.surcharges;
+              return (
+                <tr key={index} className={line.issues.length ? "flagged" : undefined} title={line.issues.join(" ") || undefined}>
+                  <td>
+                    {line.shipment || line.reference || `Linje ${index + 1}`}
+                    {line.shipment && line.reference ? <small>{line.reference}</small> : null}
+                    {invoiceLevel
+                      ? <small>{line.kind === "fee" ? "Gebyr på hele fakturaen" : "Tillæg på hele fakturaen"}</small>
+                      : KIND_LABELS[line.kind] ? <small>{KIND_LABELS[line.kind]}</small> : null}
+                  </td>
+                  <td>
+                    {line.date ? dateLabel(line.date) : extract.invoiceDate ? dateLabel(extract.invoiceDate) : "—"}
+                    {!line.date && extract.invoiceDate ? <small>Fakturadato</small> : null}
+                  </td>
+                  <td>
+                    {invoiceLevel ? "—" : line.service || <span className="soft-hint" title="Fakturaen angiver ikke leveringsform for linjen.">Ikke angivet</span>}
+                  </td>
+                  <td>{[line.weightKg ? `${line.weightKg.toLocaleString("da-DK")} kg` : "", line.zone].filter(Boolean).join(" · ") || "—"}</td>
+                  <td className="num">{invoiceLevel ? "—" : money(line.amountOre)}</td>
+                  <td>{surcharges.length ? surcharges.map((item) => `${item.label} ${money(item.amountOre)}`).join(", ") : "—"}</td>
+                  <td className="num">
+                    {money(lineTotalOre(line))}
+                    {line.issues.length ? <small className="flag"><CircleAlert size={12} /> {line.issues[0]}</small> : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
           <tfoot>
             <tr>
@@ -107,7 +120,7 @@ export function ExtractTable({ extract }: { extract: InvoiceExtract }) {
       {extract.issues.filter((issue) => !/summer ikke|ingen total/.test(issue)).map((issue) => (
         <p key={issue} className="extract-issue"><CircleAlert size={13} /> {issue}</p>
       ))}
-      <p className="extract-note">Læst af Workers AI fra PDF'ens tekst. Kontrollér linjerne mod fakturaen. Beløb er ekskl. moms.</p>
+      <p className="extract-note">Læst af Workers AI fra PDF'ens tekst. Kontrollér linjerne mod fakturaen.{extract.vatStated ? " Beløb er ekskl. moms." : ""}</p>
     </section>
   );
 }
