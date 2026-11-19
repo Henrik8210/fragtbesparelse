@@ -50,7 +50,7 @@ jobs:
     needs: [check, worker]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     concurrency:
       group: deploy-production
       cancel-in-progress: false
@@ -79,10 +79,11 @@ jobs:
         run: npx --yes "$WRANGLER" deploy
       - name: Wait for the new revision on /health
         if: steps.secrets.outputs.ready == 'true'
+        timeout-minutes: 20
         run: |
           revision=$(sed -n 's/^export const REVISION = "\(.*\)";$/\1/p' deploy/revision.ts)
           expected="ok $revision"
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 90); do
             body=$(curl -fsS --max-time 30 "$HEALTH_URL" || true)
             echo "attempt $attempt: ${body:-no answer}"
             if [ "$body" = "$expected" ]; then
@@ -91,5 +92,5 @@ jobs:
             fi
             sleep 10
           done
-          echo "::error::$HEALTH_URL did not answer '$expected' within the wait."
+          echo "::error::$HEALTH_URL did not answer '$expected' within about 15 minutes. The deploy may still be rolling out; check $HEALTH_URL again in a few minutes before redeploying."
           exit 1

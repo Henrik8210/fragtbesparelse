@@ -46,7 +46,7 @@ The first deploy builds the image and can take several minutes. Wait a few minut
 3. GitHub → this repository → Settings → Secrets and variables → Actions → New repository secret. Add `CLOUDFLARE_API_TOKEN` with the token and `CLOUDFLARE_ACCOUNT_ID` with the account id.
 4. Optional: under Variables, set `HEALTH_URL` if the app is not reachable at `https://freightlytics.io/health` yet.
 
-After a deploy the job polls `/health` for up to five minutes until it answers `ok` plus the revision in `deploy/revision.ts`.
+After a deploy the job polls `/health` for about 15 minutes (90 tries, 10 seconds apart) until it answers `ok` plus the revision in `deploy/revision.ts`. Cloudflare can keep the old container for several minutes, so a timeout does not mean the deploy failed: the new revision may still be rolling out. Open `/health` again a few minutes later before redeploying.
 
 ## Cloudflare clicks
 
