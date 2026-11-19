@@ -1,15 +1,20 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
-  ArrowRight, ArrowUpRight, BarChart3, Bell, ChevronDown, ChevronRight, ClipboardCheck, Database, FileCheck2,
-  FileText, History, LayoutGrid, LockKeyhole, Mail, Menu, Package, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Settings, X,
+  ArrowRight, ArrowUpRight, BarChart3, Bell, Check, ChevronDown, ChevronRight, ClipboardCheck, Copy, Database, FileCheck2,
+  FileText, Funnel, History, LayoutGrid, LockKeyhole, Mail, Menu, Package, PanelLeftClose, PanelLeftOpen, Plus, Receipt, RefreshCw,
+  Settings, UploadCloud, X,
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
+import { agreementFromCsv, saveAgreements, loadAgreements, sampleAgreement, splitAgreements, todayIso, type Agreement } from "./agreements.ts";
 import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
-import { AuditFlow } from "./audit.tsx";
+import { AuditFlow, downloadCsv } from "./audit.tsx";
+import { carrierFromMail } from "./carrierName.ts";
+import { decodeCsv, importRows, parseCsv, suggestMapping } from "./csv.ts";
+import { DEMO_RATES } from "./demo.ts";
 import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
-  type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution,
+  type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution, type InvoiceRow, type RateRow,
 } from "./freight.ts";
 import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
@@ -100,16 +105,21 @@ function invoiceChoices(org: Org, checks: StoredAudit[], mails: MailRow[]): Past
   return [...fromChecks, ...fromMail];
 }
 
-function rateChoices(org: Org, checks: StoredAudit[]): PastSource[] {
-  const page = orgRateRows(org);
-  const agreement: PastSource[] = page.length ? [{
-    id: `agreement:${org.id}`,
-    name: org.carrier || "Prisaftale",
-    date: page[0]?.from || "",
-    carrier: org.carrier,
-    note: "Prisaftale",
-    csv: org.rates,
-  }] : [];
+function orgAgreements(org: Org, saved: Agreement[]): Agreement[] {
+  const sample = sampleAgreement(org.id, org.carrier, orgRateRows(org));
+  return [...(sample ? [sample] : []), ...saved.filter((item) => item.orgId === org.id)];
+}
+
+function rateChoices(org: Org, checks: StoredAudit[], agreements: Agreement[]): PastSource[] {
+  const { active, historic } = splitAgreements(agreements, todayIso());
+  const agreement: PastSource[] = [...active, ...historic].map((item) => ({
+    id: `agreement:${item.id}`,
+    name: item.sample ? org.carrier || "Prisaftale" : item.name,
+    date: item.from || item.createdAt,
+    carrier: item.carrier,
+    note: active.includes(item) ? "Aktiv prisaftale" : "Historisk prisaftale",
+    csv: item.sample ? org.rates : rateCsv(item.rows),
+  }));
   const fromChecks = checks.flatMap((check) => {
     if (check.id.startsWith("sample:")) return [];
     const stored = check.rates ?? [];
@@ -183,11 +193,13 @@ export function PilotApp() {
     const mails = cached ?? (libraryMail.orgId === org.id ? libraryMail.mails : []);
     return invoiceChoices(org, checks, mails);
   }, [admin, org, checks, libraryMail]);
-  const pastRates = useMemo(() => rateChoices(org, checks), [org, checks]);
+  const [savedAgreements, setSavedAgreements] = useState<Agreement[]>(() => loadAgreements());
+  const agreements = useMemo(() => orgAgreements(org, savedAgreements), [org, savedAgreements]);
+  const pastRates = useMemo(() => rateChoices(org, checks, agreements), [org, checks, agreements]);
   const inCheck = view === "check" || view === "report" || view === "inbox" || view === "agreements";
   const activeTab = inCheck ? "check" : view;
   const activeLabel = view === "report" ? "Rapport"
-    : view === "inbox" ? "Modtaget"
+    : view === "inbox" ? "Fakturaer"
     : view === "agreements" ? "Prisaftaler"
     : NAV.find((tab) => tab.id === activeTab)?.label;
   const peers = peerCount(org.id);
@@ -530,8 +542,8 @@ export function PilotApp() {
               </button>
               {id === "check" ? (
                 <div className="nav-sub">
-                  <button type="button" className={view === "inbox" ? "active" : ""} aria-current={view === "inbox" ? "page" : undefined} data-tip="Modtaget" onClick={() => navigate("inbox")}>
-                    <Mail size={15} /><span className="nav-label">Modtaget</span>
+                  <button type="button" className={view === "inbox" ? "active" : ""} aria-current={view === "inbox" ? "page" : undefined} data-tip="Fakturaer" onClick={() => navigate("inbox")}>
+                    <Receipt size={15} /><span className="nav-label">Fakturaer</span>
                   </button>
                   <button type="button" className={view === "agreements" ? "active" : ""} aria-current={view === "agreements" ? "page" : undefined} data-tip="Prisaftaler" onClick={() => navigate("agreements")}>
                     <FileText size={15} /><span className="nav-label">Prisaftaler</span>
@@ -616,8 +628,21 @@ export function PilotApp() {
           {view === "check" ? (
             <ChecksPage checks={checks} onStart={newAudit} onOpen={openReport} />
           ) : null}
-          {view === "inbox" ? <InboxView key={org.id} admin={admin} orgId={org.id} orgs={orgs} /> : null}
-          {view === "agreements" ? <AgreementsView org={org} /> : null}
+          {view === "inbox" ? <InvoicesView key={org.id} admin={admin} orgId={org.id} orgs={orgs} /> : null}
+          {view === "agreements" ? (
+            <AgreementsView
+              org={org}
+              agreements={agreements}
+              onChange={(next) => {
+                setSavedAgreements((current) => {
+                  const others = current.filter((item) => item.orgId !== org.id);
+                  const merged = [...others, ...next.filter((item) => !item.sample)];
+                  saveAgreements(merged);
+                  return merged;
+                });
+              }}
+            />
+          ) : null}
           {view === "report" && result ? (
             <ReportView
               key={reportKey}
@@ -655,29 +680,22 @@ export function PilotApp() {
   );
 }
 
-type MailFile = { id: string; filename: string; bytes: number };
+type MailFile = { id: string; filename: string; bytes: number; carrier?: string };
 type MailRow = { id: string; sender: string; subject: string; receivedAt: string; files: MailFile[] };
 
-const CARRIER_RULES: { name: string; pattern: RegExp }[] = [
-  { name: "PostNord", pattern: /post[\s-]?nord/i },
-  { name: "Danske Fragtmænd", pattern: /fragtm[aæ]nd|fragtmaend/i },
-  { name: "Schenker", pattern: /schenker/i },
-  { name: "GLS", pattern: /\bgls\b/i },
-  { name: "DHL", pattern: /\bdhl\b/i },
-  { name: "DSV", pattern: /\bdsv\b/i },
-  { name: "Bring", pattern: /\bbring\b/i },
-  { name: "DAO", pattern: /\bdao\b/i },
-  { name: "UPS", pattern: /\bups\b/i },
-];
+const isPdfName = (name: string) => name.toLowerCase().endsWith(".pdf");
 
-function carrierFromMail(mail: MailRow): string {
-  const quoted = mail.sender.match(/<([^>]+)>/)?.[1] ?? mail.sender;
-  const address = quoted.trim().toLowerCase();
-  const at = address.lastIndexOf("@");
-  const domain = at >= 0 ? address.slice(at + 1) : "";
-  const files = mail.files.map((file) => file.filename).join(" ");
-  const haystack = `${domain} ${mail.subject} ${files}`;
-  return CARRIER_RULES.find((rule) => rule.pattern.test(haystack))?.name ?? "";
+function invoiceFiles(mail: MailRow): MailFile[] {
+  return [...mail.files].sort((left, right) => Number(isPdfName(right.filename)) - Number(isPdfName(left.filename)));
+}
+
+async function copyText(value: string, field: HTMLInputElement | null) {
+  field?.select();
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    field?.focus();
+  }
 }
 
 function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
@@ -751,7 +769,7 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
       <section className="panel">
         <div className="section-heading">
           <h2>Fakturamail</h2>
-          <p>{loading || !problem ? (ready || loading ? "Mail til adressen lander under Modtaget." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op.") : "Indbakken kunne ikke læses."}</p>
+          <p>{loading || !problem ? (ready || loading ? "Mail til adressen lander under Fakturaer." : "Adressen kan kopieres. Vedhæftninger gemmes, når indbakken er sat op.") : "Indbakken kunne ikke læses."}</p>
         </div>
         <div className="mail-address" style={{ padding: "0 18px 18px" }}>
           {loading && !shownAddress ? <span className="bone address" /> : (
@@ -764,18 +782,23 @@ function SettingsView({ admin, orgId, orgs }: { admin: boolean; orgId: string; o
   );
 }
 
-function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
+function InvoicesView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs: { id: string; name: string }[] }) {
   const key = mailKey(admin, orgId);
   const cached = readMail(key);
   const [mails, setMails] = useState<MailRow[]>(cached?.mails ?? []);
+  const [address, setAddress] = useState(cached?.address ?? "");
   const [loading, setLoading] = useState(!cached);
   const [refreshing, setRefreshing] = useState(false);
   const [problem, setProblem] = useState(cached?.error ?? "");
   const [filter, setFilter] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<{ subject: string; files: MailFile[]; fileId: string } | null>(null);
   const [fetching, setFetching] = useState<{ fileId: string; percent: number | null } | null>(null);
   const reload = useRef<(manual: boolean) => void>(() => undefined);
+  const addressField = useRef<HTMLInputElement>(null);
   const ownerName = orgs.find((item) => item.id === orgId)?.name ?? "";
+  const shownAddress = address || `${orgId}@freightlytics.io`;
   useEffect(() => {
     setOpen(null);
     const epoch = cacheEpoch();
@@ -798,10 +821,11 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
         rememberMail(key, next);
         if (gone) return;
         setMails(next.mails);
+        setAddress(next.address);
         setProblem(next.error);
       } catch {
         if (gone || cacheEpoch() !== epoch || readMail(key)) return;
-        setProblem("Kunne ikke hente indbakken.");
+        setProblem("Kunne ikke hente fakturaerne.");
       } finally {
         if (!gone && cacheEpoch() === epoch) {
           setLoading(false);
@@ -812,6 +836,7 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
     const hit = readMail(key);
     if (hit) {
       setMails(hit.mails);
+      setAddress(hit.address);
       setProblem(hit.error);
       setLoading(false);
     }
@@ -841,6 +866,30 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
   });
   const openFile = open?.files.find((file) => file.id === open.fileId) ?? null;
 
+  function openMail(mail: MailRow) {
+    const files = invoiceFiles(mail);
+    setOpen({ subject: mail.subject, files, fileId: files[0]?.id ?? "" });
+  }
+
+  function added(mail: MailRow) {
+    setAdding(false);
+    setFilter("");
+    setMails((current) => {
+      const next = [mail, ...current.filter((item) => item.id !== mail.id)];
+      const previous = readMail(key);
+      rememberMail(key, { address: previous?.address ?? address, ready: true, error: "", mails: next });
+      return next;
+    });
+    setProblem("");
+    openMail(mail);
+  }
+
+  async function copyAddress() {
+    await copyText(shownAddress, addressField.current);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  }
+
   async function downloadOpen() {
     if (!openFile) return;
     const fileId = openFile.id;
@@ -867,48 +916,65 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
 
   return (
     <div className="content-flow">
-      <div className="page-intro">
-        <span className="eyebrow"><i /> FAKTURAMAIL</span>
-        <h1>Modtaget</h1>
-        <p>Fakturaer sendt til {ownerName || "organisationen"}. Listen opdateres af sig selv, mens siden er åben.</p>
+      <div className="page-intro split">
+        <div>
+          <span className="eyebrow"><i /> FAKTURAKONTROL</span>
+          <h1>Fakturaer</h1>
+          <p>Fakturaer til {ownerName || "organisationen"}, sendt til fakturamailen eller tilføjet her. Listen opdateres af sig selv, mens siden er åben.</p>
+        </div>
+        <button className="button primary" type="button" onClick={() => setAdding(true)}><Plus size={18} /> Tilføj faktura</button>
       </div>
+      <section className="panel mailbox-card" aria-label="Fakturamail">
+        <div className="mailbox-icon"><Mail size={20} /></div>
+        <div className="mailbox-body">
+          <span className="mailbox-label">Fakturamail</span>
+          <input
+            ref={addressField}
+            className="mailbox-address"
+            readOnly
+            value={shownAddress}
+            aria-label="Fakturamail"
+            spellCheck={false}
+            size={Math.max(16, shownAddress.length)}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <small>Bed transportøren sende fakturaen hertil eller sætte adressen på som CC. Vedhæftningen gemmes kun på {ownerName || "organisationen"}.</small>
+        </div>
+        <button className="button secondary" type="button" onClick={() => void copyAddress()}>
+          {copied ? <Check size={16} /> : <Copy size={16} />} {copied ? "Kopieret" : "Kopiér"}
+        </button>
+      </section>
       <section className="panel" aria-busy={loading}>
-        <div className="section-heading"><h2>Indbakke</h2><p>{loading ? "Henter" : `${shown.length} mails`}</p></div>
-        <div className="mail-tools">
-          <label>
-            Transportør
-            <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrér på transportør">
-              <option value="">Alle</option>
-              {carriers.map((name) => <option key={name} value={name}>{name}</option>)}
-              {unknown ? <option value="ukendt">Ukendt</option> : null}
-            </select>
-          </label>
-          <button className="button secondary" type="button" onClick={() => reload.current(true)} disabled={refreshing}>
-            <RefreshCw size={16} /> {refreshing ? "Opdaterer" : "Opdater"}
-          </button>
+        <div className="section-heading list-heading">
+          <div>
+            <h2>Alle fakturaer</h2>
+            <p>{loading ? "Henter" : `${shown.length} ${shown.length === 1 ? "faktura" : "fakturaer"}${filter ? ` · ${filter === "ukendt" ? "ukendt transportør" : filter}` : ""}`}</p>
+          </div>
+          <div className="list-tools">
+            <CarrierFilter value={filter} carriers={carriers} unknown={unknown} onChange={setFilter} />
+            <button className="tool-button" type="button" aria-label={refreshing ? "Opdaterer" : "Opdater"} data-tip="Opdater" onClick={() => reload.current(true)} disabled={refreshing}>
+              <RefreshCw size={16} className={refreshing ? "spin" : undefined} />
+            </button>
+          </div>
         </div>
         {loading ? <MailSkeleton /> : problem ? <p className="org-note" style={{ padding: "0 18px 16px" }}>{problem}</p> : shown.length === 0 ? (
-          <p className="quiet" style={{ padding: "0 18px 16px" }}>{mails.length === 0 ? "Ingen fakturamail endnu." : "Ingen mails for den transportør."}</p>
+          <p className="quiet" style={{ padding: "0 18px 16px" }}>{mails.length === 0 ? "Ingen fakturaer endnu. Send en til fakturamailen, eller tilføj den her." : "Ingen fakturaer for den transportør."}</p>
         ) : (
           <>
             <div className="mail-head"><span>Emne</span><span>Transportør</span><span className="mail-file">Fil</span></div>
             <ul className="mail-list">
               {shown.map((mail) => {
-                const pdfs = mail.files.filter((file) => file.filename.toLowerCase().endsWith(".pdf"));
+                const files = invoiceFiles(mail);
                 const carrier = carrierFromMail(mail);
                 return (
                   <li key={mail.id}>
-                    <button
-                      type="button"
-                      className="mail-row"
-                      onClick={() => setOpen({ subject: mail.subject, files: pdfs, fileId: pdfs[0]?.id ?? "" })}
-                    >
+                    <button type="button" className="mail-row" onClick={() => openMail(mail)}>
                       <span>
                         <strong>{mail.subject}</strong>
                         <small>{mail.sender} · {dateLabel(mail.receivedAt)}</small>
                       </span>
                       <span className="mail-carrier">{carrier || "—"}</span>
-                      <span className="mail-file">{pdfs[0]?.filename ?? "Ingen PDF"}</span>
+                      <span className="mail-file">{files[0]?.filename ?? "Ingen fil"}{files.length > 1 ? ` +${files.length - 1}` : ""}</span>
                     </button>
                   </li>
                 );
@@ -917,6 +983,7 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
           </>
         )}
       </section>
+      {adding ? <AddInvoiceModal orgId={orgId} onClose={() => setAdding(false)} onAdded={added} /> : null}
       {open ? (
         <Modal title={open.subject} wide onClose={() => setOpen(null)}>
           {open.files.length > 1 ? (
@@ -926,24 +993,211 @@ function InboxView({ admin, orgId, orgs }: { admin: boolean; orgId: string; orgs
               ))}
             </div>
           ) : null}
-          {open.fileId ? (
+          {openFile ? (
             <>
               <div className="invoice-toolbar">
-                {fetching?.fileId === open.fileId ? <DownloadProgress percent={fetching.percent} /> : null}
+                {fetching?.fileId === openFile.id ? <DownloadProgress percent={fetching.percent} /> : null}
                 <button
                   className="button secondary"
                   type="button"
                   onClick={() => void downloadOpen()}
-                  disabled={!openFile || (fetching?.fileId === open.fileId && fetching.percent !== -1 && fetching.percent !== 100)}
+                  disabled={fetching?.fileId === openFile.id && fetching.percent !== -1 && fetching.percent !== 100}
                 >Hent</button>
               </div>
-              <ExtractPanel fileId={open.fileId} companyId={orgId} />
-              <InvoicePages fileId={open.fileId} companyId={orgId} />
+              {isPdfName(openFile.filename) ? (
+                <>
+                  <ExtractPanel fileId={openFile.id} companyId={orgId} />
+                  <InvoicePages fileId={openFile.id} companyId={orgId} />
+                </>
+              ) : <SheetPreview key={openFile.id} file={openFile} companyId={orgId} />}
             </>
-          ) : <p>Denne mail har ingen PDF.</p>}
+          ) : <p>Denne faktura har ingen fil.</p>}
         </Modal>
       ) : null}
     </div>
+  );
+}
+
+function CarrierFilter({ value, carriers, unknown, onChange }: {
+  value: string;
+  carriers: string[];
+  unknown: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function close(event: PointerEvent) {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const options = [
+    { id: "", label: "Alle transportører" },
+    ...carriers.map((name) => ({ id: name, label: name })),
+    ...(unknown ? [{ id: "ukendt", label: "Ukendt transportør" }] : []),
+  ];
+  return (
+    <div className="filter-menu" ref={root}>
+      <button
+        type="button"
+        className={value ? "tool-button active" : "tool-button"}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={value ? `Filter: ${value === "ukendt" ? "ukendt transportør" : value}` : "Filtrér på transportør"}
+        data-tip="Filtrér"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Funnel size={16} />
+        {value ? <span className="tool-dot" /> : null}
+      </button>
+      {open ? (
+        <div className="filter-pop" role="menu" aria-label="Transportør">
+          <p className="filter-title">Transportør</p>
+          {options.map((option) => (
+            <button
+              key={option.id || "alle"}
+              type="button"
+              role="menuitemradio"
+              aria-checked={value === option.id}
+              onClick={() => { onChange(option.id); setOpen(false); }}
+            >
+              <span>{option.label}</span>
+              {value === option.id ? <Check size={15} /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const UPLOAD_ACCEPT = ".pdf,.csv,.tsv,.txt,.xml,.xls,.xlsx,application/pdf,text/csv,text/tab-separated-values,text/plain";
+
+function AddInvoiceModal({ orgId, onClose, onAdded }: { orgId: string; onClose: () => void; onAdded: (mail: MailRow) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  async function upload(file: File) {
+    setProblem("");
+    if (!/\.(pdf|csv|tsv|txt|xml|xls|xlsx)$/i.test(file.name)) {
+      setProblem("Vælg en PDF, CSV, TSV, TXT, XML eller Excel-fil.");
+      return;
+    }
+    if (file.size > 8_000_000) {
+      setProblem("Filen må fylde højst 8 MB.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const body = await api<{ mail: MailRow }>(
+        `/api/invoice-mail/upload?company=${encodeURIComponent(orgId)}&name=${encodeURIComponent(file.name.slice(0, 120))}`,
+        { method: "POST", body: file, headers: { "content-type": file.type || "application/octet-stream" } },
+      );
+      onAdded(body.mail);
+    } catch (error) {
+      const message = error instanceof ApiError && error.message !== error.code ? error.message : "";
+      setProblem(message || "Fakturaen blev ikke gemt. Prøv igen.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Tilføj faktura" onClose={() => { if (!busy) onClose(); }}>
+      <p>Fakturaen gemmes under Fakturaer som en modtaget mail. En PDF læses derefter af Workers AI. En CSV læses i browseren, når den åbnes.</p>
+      <div
+        className={`drop-zone add-drop ${dragging ? "dragging" : ""}`}
+        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          const file = event.dataTransfer.files[0];
+          if (file && !busy) void upload(file);
+        }}
+      >
+        <input
+          ref={input}
+          className="sr-only"
+          type="file"
+          tabIndex={-1}
+          accept={UPLOAD_ACCEPT}
+          aria-label="Vælg fakturafil"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) void upload(file);
+          }}
+        />
+        <div className="drop-icon"><UploadCloud size={23} /></div>
+        {busy ? <span role="status">Gemmer fakturaen…</span> : (
+          <>
+            <button type="button" className="text-button" onClick={() => input.current?.click()}>Vælg fil</button>
+            <span>eller slip den her · PDF, CSV, TSV, TXT, XML eller Excel · maks. 8 MB</span>
+          </>
+        )}
+      </div>
+      {problem ? <p className="org-note" role="alert">{problem}</p> : null}
+    </Modal>
+  );
+}
+
+function SheetPreview({ file, companyId }: { file: MailFile; companyId: string }) {
+  const [state, setState] = useState<{ rows?: InvoiceRow[]; error?: string } | null>(null);
+  const sheetFile = /\.(csv|tsv|txt)$/i.test(file.filename);
+  useEffect(() => {
+    if (!sheetFile) return;
+    let gone = false;
+    loadMailFile(file.id, companyId).promise
+      .then(async (blob) => {
+        const sheet = parseCsv(decodeCsv(await blob.arrayBuffer()));
+        const rows = importRows("invoice", sheet, suggestMapping("invoice", sheet.headers));
+        if (!gone) setState({ rows });
+      })
+      .catch((error: unknown) => {
+        if (!gone) setState({ error: (error as Error).message });
+      });
+    return () => { gone = true; };
+  }, [file.id, companyId, sheetFile]);
+  if (!sheetFile) return <p className="quiet">Filen vises ikke her. Hent den, eller gem den som CSV.</p>;
+  if (!state) return <p>Læser filen…</p>;
+  if (state.error || !state.rows) {
+    return <p className="org-note">Linjerne kunne ikke læses automatisk: {state.error} Vælg filen i Nyt fakturatjek for at tilknytte kolonnerne.</p>;
+  }
+  const total = state.rows.reduce((sum, row) => sum + row.billedOre, 0);
+  return (
+    <section className="extract-panel" aria-label="Fakturalinjer fra filen">
+      <div className="extract-head"><div><h3><FileText size={15} /> Fakturalinjer</h3><p>Læst i browseren fra {file.filename}</p></div></div>
+      <div className="rate-scroll">
+        <table className="rate-table extract-table">
+          <thead><tr><th>Forsendelse</th><th>Dato</th><th>Service</th><th>Vægt</th><th className="num">Beløb</th></tr></thead>
+          <tbody>
+            {state.rows.map((row, index) => (
+              <tr key={`${row.shipment}-${index}`}>
+                <td>{row.shipment}</td>
+                <td>{dateLabel(row.date)}</td>
+                <td>{row.service}</td>
+                <td>{row.weight.toLocaleString("da-DK")} kg</td>
+                <td className="num">{money(row.billedOre)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr><td colSpan={4}>Linjesum</td><td className="num">{money(total)}</td></tr></tfoot>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -1697,58 +1951,212 @@ function ChecksPage({ checks, onStart, onOpen }: {
   );
 }
 
-function AgreementsView({ org }: { org: Org }) {
-  const rows = useMemo(() => orgRateRows(org), [org]);
+function AgreementsView({ org, agreements, onChange }: { org: Org; agreements: Agreement[]; onChange: (next: Agreement[]) => void }) {
+  const [adding, setAdding] = useState(false);
+  const today = todayIso();
+  const { active, historic } = splitAgreements(agreements, today);
+  const [expanded, setExpanded] = useState<string>(() => active[0]?.id ?? "");
+
+  function setEnded(id: string, ended: boolean) {
+    onChange(agreements.map((item) => item.id === id ? { ...item, ended: ended ? new Date().toISOString() : undefined } : item));
+  }
+
+  function remove(id: string) {
+    onChange(agreements.filter((item) => item.id !== id));
+  }
+
+  const list = (items: Agreement[], state: "active" | "historic") => items.length === 0 ? (
+    <p className="quiet agreement-empty">{state === "active" ? `Ingen aktive prisaftaler for ${org.name}.` : "Ingen historiske prisaftaler."}</p>
+  ) : (
+    <ul className="agreement-list">
+      {items.map((item) => (
+        <AgreementRow
+          key={item.id}
+          agreement={item}
+          state={state}
+          open={expanded === item.id}
+          onToggle={() => setExpanded((current) => current === item.id ? "" : item.id)}
+          onEnd={() => setEnded(item.id, true)}
+          onRestore={() => setEnded(item.id, false)}
+          onRemove={() => remove(item.id)}
+        />
+      ))}
+    </ul>
+  );
+
   return (
     <div className="content-flow">
-      <div className="page-intro">
-        <span className="eyebrow"><i /> PRISAFTALER</span>
-        <h1>Prisaftaler</h1>
-        <p>Aftaler for {org.name}. De seks prøvefirmaer har en prøveaftale. En ny organisation starter uden.</p>
+      <div className="page-intro split">
+        <div>
+          <span className="eyebrow"><i /> FAKTURAKONTROL</span>
+          <h1>Prisaftaler</h1>
+          <p>Aftaler for {org.name}. En aftale bliver historisk, når den udløber, når en nyere aftale med samme transportør træder i kraft, eller når du afslutter den.</p>
+        </div>
+        <button className="button primary" type="button" onClick={() => setAdding(true)}><Plus size={18} /> Tilføj prisaftale</button>
       </div>
-      {rows.length === 0 ? (
-        <section className="panel">
-          <div className="empty-state">
-            <div className="empty-icon"><FileText size={24} /></div>
-            <strong>Ingen prisaftaler endnu</strong>
-            <p>Når en prisaftale er lagt ind for {org.name}, vises den her.</p>
-          </div>
-        </section>
-      ) : (
-        <section className="panel">
-          <div className="section-heading">
-            <h2>{org.carrier || "Prisaftale"}</h2>
-            <p>Prøveaftale · oktober 2026</p>
-          </div>
-          <div className="rate-scroll">
-            <table className="rate-table">
-              <thead>
-                <tr>
-                  <th>Leveringsform</th>
-                  <th>Maks. kg</th>
-                  <th>Grundpris</th>
-                  <th>Brændstof</th>
-                  <th>Fast tillæg</th>
-                  <th>Gyldig</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row, index) => (
-                  <tr key={`${row.service}-${row.maxWeight}-${index}`}>
-                    <td>{row.service}</td>
-                    <td>{row.maxWeight.toLocaleString("da-DK")}</td>
-                    <td>{money(row.baseOre)}</td>
-                    <td>{row.fuelPct.toLocaleString("da-DK")} %</td>
-                    <td>{money(row.fixedOre)}</td>
-                    <td>{row.from ? dateLabel(row.from) : "—"}{row.to ? ` – ${dateLabel(row.to)}` : ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+      <section className="panel">
+        <div className="section-heading"><h2><span className="state-dot active" aria-hidden="true" /> Aktive prisaftaler</h2><p>{active.length} {active.length === 1 ? "aftale" : "aftaler"} · bruges i nye fakturatjek</p></div>
+        {list(active, "active")}
+      </section>
+      <section className="panel">
+        <div className="section-heading"><h2><span className="state-dot historic" aria-hidden="true" /> Historiske prisaftaler</h2><p>{historic.length} {historic.length === 1 ? "aftale" : "aftaler"} · kan stadig vælges til ældre fakturaer</p></div>
+        {list(historic, "historic")}
+      </section>
+      {adding ? (
+        <AddAgreementModal
+          org={org}
+          onClose={() => setAdding(false)}
+          onAdded={(agreement) => {
+            onChange([...agreements, agreement]);
+            setExpanded(agreement.id);
+            setAdding(false);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function AgreementRow({ agreement, state, open, onToggle, onEnd, onRestore, onRemove }: {
+  agreement: Agreement;
+  state: "active" | "historic";
+  open: boolean;
+  onToggle: () => void;
+  onEnd: () => void;
+  onRestore: () => void;
+  onRemove: () => void;
+}) {
+  const period = agreement.from || agreement.to
+    ? `${agreement.from ? dateLabel(agreement.from) : "—"} – ${agreement.to ? dateLabel(agreement.to) : "løbende"}`
+    : "Ingen gyldighed angivet";
+  const meta = [agreement.carrier, period, `${agreement.rows.length} ${agreement.rows.length === 1 ? "pris" : "priser"}`, agreement.sample ? "Prøvedata" : ""].filter(Boolean).join(" · ");
+  return (
+    <li className="agreement-item">
+      <button type="button" className="agreement-row" aria-expanded={open} onClick={onToggle}>
+        <span className={`state-dot ${state}`} aria-label={state === "active" ? "Aktiv" : "Historisk"} />
+        <span className="agreement-name"><strong>{agreement.sample ? agreement.carrier || agreement.name : agreement.name}</strong><small>{meta}</small></span>
+        <ChevronDown size={16} className={open ? "rotate" : undefined} />
+      </button>
+      {open ? (
+        <div className="agreement-detail">
+          <RateTable rows={agreement.rows} />
+          {agreement.sample ? null : (
+            <div className="agreement-actions">
+              {agreement.ended ? (
+                <button type="button" className="text-button" onClick={onRestore}>Gør aktiv igen</button>
+              ) : state === "active" ? (
+                <button type="button" className="text-button" onClick={onEnd}>Afslut aftale</button>
+              ) : null}
+              <button type="button" className="text-button muted" onClick={onRemove}>Slet</button>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function RateTable({ rows }: { rows: RateRow[] }) {
+  return (
+    <div className="rate-scroll">
+      <table className="rate-table">
+        <thead>
+          <tr>
+            <th>Leveringsform</th>
+            <th>Maks. kg</th>
+            <th>Grundpris</th>
+            <th>Brændstof</th>
+            <th>Fast tillæg</th>
+            <th>Gyldig</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.service}-${row.maxWeight}-${index}`}>
+              <td>{row.service}</td>
+              <td>{row.maxWeight.toLocaleString("da-DK")}</td>
+              <td>{money(row.baseOre)}</td>
+              <td>{row.fuelPct.toLocaleString("da-DK")} %</td>
+              <td>{money(row.fixedOre)}</td>
+              <td>{row.from ? dateLabel(row.from) : "—"}{row.to ? ` – ${dateLabel(row.to)}` : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AddAgreementModal({ org, onClose, onAdded }: { org: Org; onClose: () => void; onAdded: (agreement: Agreement) => void }) {
+  const [name, setName] = useState("");
+  const [carrier, setCarrier] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [file, setFile] = useState<{ name: string; csv: string } | null>(null);
+  const [problem, setProblem] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+
+  async function pick(chosen: File) {
+    setProblem("");
+    if (!/\.(csv|tsv|txt)$/i.test(chosen.name)) {
+      setProblem("Vælg en CSV- eller TSV-fil. Hent skabelonen, hvis aftalen kun findes som PDF.");
+      return;
+    }
+    if (chosen.size > 1024 * 1024) {
+      setProblem("Filen må fylde højst 1 MB.");
+      return;
+    }
+    setFile({ name: chosen.name, csv: decodeCsv(await chosen.arrayBuffer()) });
+    if (!name.trim()) setName(chosen.name.replace(/\.[^.]+$/, "").slice(0, 100));
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!file) {
+      setProblem("Vælg prisaftalens fil.");
+      return;
+    }
+    try {
+      onAdded(agreementFromCsv(file.csv, { orgId: org.id, name, carrier, from, to }));
+    } catch (error) {
+      setProblem((error as Error).message);
+    }
+  }
+
+  return (
+    <Modal title="Tilføj prisaftale" onClose={onClose}>
+      <p>Prisaftalen gemmes i denne browser for {org.name} og kan vælges i Nyt fakturatjek. Én række pr. leveringsform og vægttrin.</p>
+      <form onSubmit={submit}>
+        <div className="file-pick">
+          <input
+            ref={input}
+            className="sr-only"
+            type="file"
+            tabIndex={-1}
+            accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
+            aria-label="Vælg prisaftalefil"
+            onChange={(event) => {
+              const chosen = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (chosen) void pick(chosen);
+            }}
+          />
+          <button type="button" className="button secondary" onClick={() => input.current?.click()}><UploadCloud size={16} /> {file ? "Skift fil" : "Vælg fil"}</button>
+          <span>{file ? file.name : "CSV eller TSV · maks. 1 MB"}</span>
+          <button type="button" className="text-button muted" onClick={() => downloadCsv("prisaftale-skabelon.csv", DEMO_RATES)}>Hent skabelon</button>
+        </div>
+        <label>Navn<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="F.eks. GLS 2027" /></label>
+        <label>Transportør<input value={carrier} onChange={(event) => setCarrier(event.target.value)} maxLength={70} list="agreement-carriers" placeholder="Transportørens navn" /></label>
+        <datalist id="agreement-carriers">{carrierProfiles.map((profile) => <option key={profile.name} value={profile.name} />)}</datalist>
+        <div className="date-pair">
+          <label>Gyldig fra<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+          <label>Gyldig til<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+        </div>
+        <p className="quiet">Tomme datoer hentes fra filens kolonner gyldig_fra og gyldig_til.</p>
+        {problem ? <p className="org-note" role="alert">{problem}</p> : null}
+        <button className="button primary" type="submit" disabled={!file}>Gem prisaftale</button>
+      </form>
+    </Modal>
   );
 }
 

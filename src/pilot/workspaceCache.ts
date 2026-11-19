@@ -1,7 +1,7 @@
 export type CachedUser = { role: string } | null;
 export type CachedCompany = { id: string; name: string; industry: string; place: string };
 export type CachedNotice = { id: string; name: string; company: string; email: string; createdAt: string };
-export type CachedMailFile = { id: string; filename: string; bytes: number };
+export type CachedMailFile = { id: string; filename: string; bytes: number; carrier?: string };
 export type CachedMail = {
   id: string;
   sender: string;
