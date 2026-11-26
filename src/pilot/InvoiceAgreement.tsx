@@ -33,6 +33,7 @@ export function InvoiceAgreement({ fileId, filename, companyId, carrier, checked
         } catch {
           dates = lines.filter((line) => line.kind === "shipment" || line.kind === "credit");
         }
+        if (!dates.length && invoiceDate) dates = [{ date: invoiceDate }];
         if (!gone) setRead({ key, dates, invoiceDate, carrier: source.extract?.carrier ?? "" });
       })
       .catch((error: unknown) => { if (!gone) setRead({ key, error: (error as Error).message }); });

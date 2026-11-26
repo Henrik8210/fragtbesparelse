@@ -18,5 +18,7 @@ describe("carrierFromMail", () => {
     expect(carrierFromMail({ sender: "faktura@gls.dk", subject: "Faktura", files: [{ filename: "a.pdf", carrier: "PostNord" }] })).toBe("GLS");
     expect(carrierFromMail({ sender: "Henrik <h@example.com>", subject: "Test", files: [{ filename: "nordhavn-living-testfaktura.pdf", carrier: "PostNord" }] })).toBe("PostNord");
     expect(carrierFromMail({ sender: "h@example.com", subject: "Test", files: [{ filename: "a.pdf" }] })).toBe("");
+    expect(carrierFromMail({ sender: "Uploadet af Henrik", subject: "", files: [{ filename: "frode-laursen-faktura-test-2026.pdf" }] })).toBe("Frode Laursen");
+    expect(carrierInDocument("Frode Laursen A/S\nLagerhotel Vejle")).toBe("Frode Laursen");
   });
 });

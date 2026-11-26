@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CircleAlert, Plus, Trash2 } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Check, ChevronDown, ChevronUp, CircleAlert, CircleCheck, Plus, Trash2 } from "lucide-react";
 import { ApiError } from "../api.ts";
 import { agreementFromRows, type Agreement } from "./agreements.ts";
 import {
@@ -11,19 +12,44 @@ import { kronerText, parseKroner, parseWeight } from "./invoiceCheck.ts";
 import { fromRate, parsePct, RATE_FIELD_LABELS, rateProblem, rateProblemText, type RateDraft, type RateField } from "./rateDraft.ts";
 import { CONFIDENCE_LABELS } from "./invoiceExtract.ts";
 import { agreementName } from "./agreementAuto.ts";
+import {
+  acceptIssue, canAccept, nextIssue, reviewIssues,
+  type ConditionDraft, type GridDraft, type ItemDraft, type ReviewDrafts, type ReviewIssue, type SurchargeDraft,
+} from "./reviewIssues.ts";
 
-type ItemDraft = { category: string; description: string; unit: string; price: string; currency: string; note: string; issues: string[] };
-type GridDraft = {
-  name: string; category: string; unit: string; currency: string; rowLabel: string; note: string;
-  columns: { label: string; detail: string }[];
-  rows: { label: string; cells: string[] }[];
-  minimum: string[];
-  maximum: string[];
-  unprinted: string[];
-  issues: string[];
-};
-type SurchargeDraft = { label: string; kind: SurchargeKind; value: string; unit: string; scope: string; note: string; issues: string[] };
-type ConditionDraft = { text: string; printed: boolean };
+/** Props that mark a row or cell as an issue: the key the navigator scrolls to and the text the tooltip shows. */
+function issueProps(issue: ReviewIssue | undefined, base?: string) {
+  if (!issue) return base ? { className: base } : {};
+  return {
+    className: [base, issue.blocking ? "issue-blocking" : "issue-flag"].filter(Boolean).join(" "),
+    "data-issue": issue.key,
+    "data-tip": issue.message,
+  };
+}
+
+/** One floating tooltip for the review, outside the scroll area so it is never clipped. */
+function useReviewTip() {
+  const [tip, setTip] = useState<{ text: string; left: number; top: number; below: boolean } | null>(null);
+  const shown = useRef<Element | null>(null);
+  const show = (target: EventTarget | null) => {
+    const element = target instanceof Element ? target.closest("[data-tip]") : null;
+    if (element === shown.current) return;
+    shown.current = element;
+    if (!element) return setTip(null);
+    const rect = element.getBoundingClientRect();
+    const below = rect.top < 90;
+    setTip({ text: element.getAttribute("data-tip") ?? "", left: Math.min(Math.max(rect.left + rect.width / 2, 140), window.innerWidth - 140), top: below ? rect.bottom + 6 : rect.top - 6, below });
+  };
+  const hide = () => {
+    shown.current = null;
+    setTip(null);
+  };
+  const node = tip ? createPortal(
+    <div className={`review-tip${tip.below ? " below" : ""}`} role="tooltip" style={{ left: tip.left, top: tip.top }}>{tip.text}</div>,
+    document.body,
+  ) : null;
+  return { show, hide, node };
+}
 
 const KIND_LABELS: Record<SurchargeKind, string> = { percent: "Procent", amount: "Beløb", agreed: "Skal aftales" };
 
@@ -121,9 +147,92 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
   const name = agreementName(carrier, from, to);
 
   const parsedRates = useMemo(() => rates.map(fromRate), [rates]);
-  const flagged = rates.filter((draft) => draft.issues.length).length + items.filter((item) => item.issues.length).length
-    + grids.reduce((sum, grid) => sum + grid.unprinted.length, 0) + surcharges.filter((item) => item.issues.length).length
-    + conditions.filter((item) => !item.printed).length;
+  const drafts: ReviewDrafts = { carrier, from, to, rates, items, grids, surcharges, conditions };
+  const issues = useMemo(
+    () => reviewIssues({ carrier, from, to, rates, items, grids, surcharges, conditions }),
+    [carrier, from, to, rates, items, grids, surcharges, conditions],
+  );
+  const issueByKey = useMemo(() => new Map(issues.map((issue) => [issue.key, issue])), [issues]);
+  const [current, setCurrent] = useState<string | null>(null);
+  const [scrollTo, setScrollTo] = useState(0);
+  const order = useRef<string[]>([]);
+  const area = useRef<HTMLDivElement>(null);
+  const tip = useReviewTip();
+  const currentIssue = current ? issueByKey.get(current) : undefined;
+  const fixed = Boolean(current && !currentIssue);
+  const position = currentIssue ? issues.indexOf(currentIssue) + 1 : 0;
+
+  useEffect(() => {
+    if (current && issueByKey.has(current)) order.current = issues.map((issue) => issue.key);
+  }, [issues, issueByKey, current]);
+
+  function go(step: 1 | -1) {
+    const target = nextIssue(issues, current, step, order.current);
+    setCurrent(target?.key ?? null);
+    setScrollTo((count) => count + 1);
+  }
+
+  function goTo(key: string) {
+    setCurrent(key);
+    setScrollTo((count) => count + 1);
+  }
+
+  function accept() {
+    if (!currentIssue || !canAccept(currentIssue)) return;
+    const patch = acceptIssue(drafts, currentIssue.key);
+    if (patch.rates) setRates(patch.rates);
+    if (patch.items) setItems(patch.items);
+    if (patch.grids) setGrids(patch.grids);
+    if (patch.surcharges) setSurcharges(patch.surcharges);
+    if (patch.conditions) setConditions(patch.conditions);
+    const rest = issues.filter((issue) => issue.key !== currentIssue.key);
+    const target = nextIssue(rest, currentIssue.key, 1, issues.map((issue) => issue.key));
+    setCurrent(target?.key ?? null);
+    setScrollTo((count) => count + 1);
+  }
+
+  useEffect(() => {
+    const root = area.current;
+    if (!root) return;
+    for (const element of root.querySelectorAll("[data-current]")) element.removeAttribute("data-current");
+    if (!current) return;
+    const element = root.querySelector(`[data-issue="${CSS.escape(current)}"]`);
+    element?.setAttribute("data-current", "");
+  });
+
+  useEffect(() => {
+    if (!scrollTo || !current) return;
+    const element = area.current?.querySelector(`[data-issue="${CSS.escape(current)}"]`);
+    if (!element) return;
+    const details = element.closest("details");
+    if (details && !details.open) details.open = true;
+    element.scrollIntoView({ block: "center", behavior: "smooth" });
+    const input = element.matches("input, textarea, select") ? element as HTMLElement : element.querySelector<HTMLElement>("input:not(:disabled), textarea, select");
+    input?.focus({ preventScroll: true });
+  }, [scrollTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Clicking into a flagged field makes it the current issue, without scrolling. */
+  function onFocusIn(event: React.FocusEvent) {
+    const key = (event.target as Element).closest("[data-issue]")?.getAttribute("data-issue");
+    if (key && key !== current) setCurrent(key);
+  }
+
+  /** After the current issue is fixed, leaving the field or pressing Enter moves on to the next one. */
+  function onFocusOut(event: React.FocusEvent) {
+    if (!fixed) return;
+    const next = event.relatedTarget as Element | null;
+    if (next && (next.closest(".review-nav") || next.closest("[data-issue]") || next.matches("input, textarea, select"))) return;
+    go(1);
+  }
+
+  function onKeyDown(event: React.KeyboardEvent) {
+    if (event.key !== "Enter" || !(event.target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    if (fixed || (currentIssue && !currentIssue.blocking)) {
+      if (currentIssue && canAccept(currentIssue)) accept();
+      else go(1);
+    }
+  }
   const cellCount = grids.reduce((sum, grid) => sum + grid.rows.length * grid.columns.length, 0);
   const counts = [
     rates.length ? `${rates.length} pakkepriser` : "",
@@ -149,6 +258,12 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
 
   async function save() {
     setProblem("");
+    const blocking = issues.find((issue) => issue.blocking);
+    if (blocking) {
+      setProblem(`${blocking.where}: ${blocking.message}`);
+      goTo(blocking.key);
+      return;
+    }
     const badRate = parsedRates.findIndex((rate) => rate === null);
     if (badRate >= 0) {
       const found = rateProblem(rates[badRate]);
@@ -198,21 +313,32 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
 
   const coverage = extract.coverage.printed ? Math.round((extract.coverage.captured / extract.coverage.printed) * 100) : null;
 
+  const blockingCount = issues.filter((issue) => issue.blocking).length;
+
   return (
-    <div className="check-editor agreement-review">
+    <div
+      className="check-editor agreement-review"
+      ref={area}
+      onFocus={onFocusIn}
+      onBlur={onFocusOut}
+      onKeyDown={onKeyDown}
+      onMouseOver={(event) => tip.show(event.target)}
+      onMouseLeave={tip.hide}
+      onScroll={tip.hide}
+    >
+      {tip.node}
       <div className="check-meta">
         <p>{[extract.carrier, extract.filename, counts.join(", ") || "ingen priser læst"].filter(Boolean).join(" · ")}</p>
         <div className="check-chips">
           <span className={`confidence ${extract.confidence}`}>{CONFIDENCE_LABELS[extract.confidence]}</span>
-          {coverage !== null ? <span className="check-chip" title="Priser med decimaler i PDF'ens tekst, som udtrækket indeholder">{extract.coverage.captured} af {extract.coverage.printed} priser fundet ({coverage} %)</span> : null}
-          {flagged ? <span className="check-chip warn"><CircleAlert size={13} /> {flagged} skal tjekkes</span> : null}
+          {coverage !== null ? <span className="check-chip" data-tip="Priser med decimaler i PDF'ens tekst, som udtrækket indeholder">{extract.coverage.captured} af {extract.coverage.printed} priser fundet ({coverage} %)</span> : null}
         </div>
       </div>
       <div className="review-fields">
-        <label>Transportør<input value={carrier} onChange={(event) => setCarrier(event.target.value)} maxLength={70} list="review-carriers" placeholder="Transportørens navn" /></label>
+        <label {...issueProps(issueByKey.get("carrier"))}>Transportør<input value={carrier} onChange={(event) => setCarrier(event.target.value)} maxLength={70} list="review-carriers" placeholder="Transportørens navn" /></label>
         <datalist id="review-carriers">{carriers.map((item) => <option key={item} value={item} />)}</datalist>
-        <label>Gyldig fra<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
-        <label>Gyldig til<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+        <label {...issueProps(issueByKey.get("from"))}>Gyldig fra<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+        <label {...issueProps(issueByKey.get("to"))}>Gyldig til<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
       </div>
       <p className="review-name">Navn: <strong>{name}</strong></p>
       {reasons.length ? (
@@ -223,7 +349,25 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
       ) : null}
       <datalist id="review-units">{UNIT_SUGGESTIONS.map((unit) => <option key={unit} value={unit} />)}</datalist>
       {!reasons.length && extract.issues.length ? <p className="check-problem" role="status"><CircleAlert size={14} /> {extract.issues.join(" ")}</p> : null}
-      <p className="review-note">Felter markeret med gult står ikke ordret i PDF'ens tekst. Tjek dem; aftalen kan gemmes med markeringer, når alle felter er udfyldt med gyldige tal.</p>
+      <div className={`review-nav${issues.length ? "" : " done"}`} role="status" aria-live="polite">
+        {issues.length ? (
+          <>
+            <span className="check-chip warn"><CircleAlert size={13} /> {issues.length} at tjekke{blockingCount ? ` · ${blockingCount} skal rettes` : ""}</span>
+            <p>
+              {currentIssue ? <><strong>{position} af {issues.length} · {currentIssue.where}:</strong> {currentIssue.message}</>
+                : fixed ? <><CircleCheck size={13} /> Rettet. Gå videre til næste punkt.</>
+                  : "Gult står ikke ordret i PDF'en og kan gemmes. Rødt skal rettes. Hold musen over et felt for at se, hvad der er galt."}
+            </p>
+            <div className="review-nav-actions">
+              <button type="button" className="text-button" onClick={() => go(-1)} aria-label="Forrige punkt"><ChevronUp size={14} /> Forrige</button>
+              {currentIssue && canAccept(currentIssue)
+                ? <button type="button" className="button secondary small" onClick={accept} data-tip="Fjern markeringen og gå til næste punkt"><Check size={14} /> Ser rigtigt ud</button>
+                : null}
+              <button type="button" className="button primary small" onClick={() => go(1)}>{current ? "Næste" : "Gå til første"} <ChevronDown size={14} /></button>
+            </div>
+          </>
+        ) : <p><CircleCheck size={13} /> {reasons.length ? "Ingen felter er markeret. Tjek punkterne ovenfor, og gem aftalen." : "Alle punkter er gennemgået. Aftalen kan gemmes."}</p>}
+      </div>
 
       <div className="check-scroll review-sections">
         {rates.length ? (
@@ -237,10 +381,11 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
               </thead>
               <tbody>
                 {rates.map((draft, index) => {
-                  const flag = draft.issues.length ? { className: "edited", title: draft.issues.join(" ") } : {};
+                  const flag = draft.issues.length ? { className: "edited" } : {};
+                  const issue = issueByKey.get(`rate:${index}`);
                   return (
-                    <tr key={index}>
-                      <td className="check-index" title={draft.issues.join(" ") || undefined}>{index + 1}{draft.issues.length ? <CircleAlert size={12} className="review-flag" /> : null}</td>
+                    <tr key={index} {...issueProps(issue)}>
+                      <td className="check-index">{index + 1}{issue ? <CircleAlert size={12} className="review-flag" /> : null}</td>
                       <td {...flag}><input className={draft.service.trim() ? undefined : "invalid"} value={draft.service} maxLength={64} ref={bindRate(index, "service")} aria-label={`${RATE_FIELD_LABELS.service}, række ${index + 1}`} onChange={(event) => editRate(index, "service", event.target.value)} /></td>
                       <td {...flag}><input value={draft.zone} maxLength={40} aria-label={`Zone, række ${index + 1}`} onChange={(event) => editRate(index, "zone", event.target.value)} /></td>
                       <td {...flag}><input className={parseWeight(draft.weight) ? "num" : "num invalid"} inputMode="decimal" value={draft.weight} ref={bindRate(index, "weight")} aria-label={`${RATE_FIELD_LABELS.weight}, række ${index + 1}`} onChange={(event) => editRate(index, "weight", event.target.value)} /></td>
@@ -266,12 +411,12 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
               </thead>
               <tbody>
                 {items.map((item, index) => (
-                  <tr key={index}>
-                    <td className="check-index" title={item.issues.join(" ") || undefined}>{item.issues.length ? <CircleAlert size={13} className="review-flag" /> : index + 1}</td>
+                  <tr key={index} {...issueProps(issueByKey.get(`item:${index}`))}>
+                    <td className="check-index">{index + 1}{issueByKey.has(`item:${index}`) ? <CircleAlert size={12} className="review-flag" /> : null}</td>
                     <td><input value={item.category} maxLength={80} aria-label={`Kategori, pris ${index + 1}`} onChange={(event) => editItem(index, "category", event.target.value)} /></td>
                     <td><input className={item.description.trim() ? undefined : "invalid"} value={item.description} maxLength={200} aria-label={`Beskrivelse, pris ${index + 1}`} onChange={(event) => editItem(index, "description", event.target.value)} /></td>
                     <td><input value={item.unit} maxLength={60} list="review-units" aria-label={`Enhed, pris ${index + 1}`} onChange={(event) => editItem(index, "unit", event.target.value)} /></td>
-                    <td className={item.issues.length ? "edited" : undefined} title={item.issues.join(" ") || undefined}><input className={bad(item.price) ? "num invalid" : "num"} inputMode="decimal" value={item.price} aria-label={`Pris ${index + 1}`} onChange={(event) => editItem(index, "price", event.target.value)} /></td>
+                    <td className={item.issues.length ? "edited" : undefined}><input className={bad(item.price) ? "num invalid" : "num"} inputMode="decimal" value={item.price} aria-label={`Pris ${index + 1}`} onChange={(event) => editItem(index, "price", event.target.value)} /></td>
                     <td><input className="short" value={item.currency} maxLength={8} aria-label={`Valuta, pris ${index + 1}`} onChange={(event) => editItem(index, "currency", event.target.value)} /></td>
                     <td><input value={item.note} maxLength={300} aria-label={`Note, pris ${index + 1}`} onChange={(event) => editItem(index, "note", event.target.value)} /></td>
                     <td><button type="button" className="icon-button" aria-label={`Fjern pris ${index + 1}`} onClick={() => setItems((current) => current.filter((_, at) => at !== index))}><Trash2 size={14} /></button></td>
@@ -289,6 +434,7 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
             <GridEditor
               key={gridIndex}
               grid={grid}
+              issueAt={(key) => issueByKey.get(`grid:${gridIndex}${key ? `:${key}` : ""}`)}
               onChange={(change) => editGrid(gridIndex, change)}
               onRemove={() => setGrids((current) => current.filter((_, at) => at !== gridIndex))}
             />
@@ -304,15 +450,15 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
               </thead>
               <tbody>
                 {surcharges.map((item, index) => (
-                  <tr key={index}>
-                    <td className="check-index" title={item.issues.join(" ") || undefined}>{item.issues.length ? <CircleAlert size={13} className="review-flag" /> : index + 1}</td>
+                  <tr key={index} {...issueProps(issueByKey.get(`surcharge:${index}`))}>
+                    <td className="check-index">{index + 1}{issueByKey.has(`surcharge:${index}`) ? <CircleAlert size={12} className="review-flag" /> : null}</td>
                     <td><input className={item.label.trim() ? undefined : "invalid"} value={item.label} maxLength={120} aria-label={`Tillæg ${index + 1}`} onChange={(event) => editSurcharge(index, { label: event.target.value })} /></td>
                     <td>
                       <select value={item.kind} aria-label={`Type, tillæg ${index + 1}`} onChange={(event) => editSurcharge(index, { kind: event.target.value as SurchargeKind, ...(event.target.value === "agreed" ? { value: "" } : {}) })}>
                         {SURCHARGE_KINDS.map((kind) => <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>)}
                       </select>
                     </td>
-                    <td className={item.issues.length ? "edited" : undefined} title={item.issues.join(" ") || undefined}>
+                    <td className={item.issues.length ? "edited" : undefined}>
                       <input
                         className={item.kind !== "agreed" && (bad(item.value) || !item.value.trim()) ? "num invalid" : "num"}
                         inputMode="decimal"
@@ -339,7 +485,7 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
           <h3>Betingelser <small>{conditions.length}</small></h3>
           <ol className="review-conditions">
             {conditions.map((item, index) => (
-              <li key={index} className={item.printed ? undefined : "edited"} title={item.printed ? undefined : "Teksten står ikke ordret i PDF'en."}>
+              <li key={index} {...issueProps(issueByKey.get(`condition:${index}`), item.printed ? undefined : "edited")}>
                 <textarea
                   value={item.text}
                   maxLength={1000}
@@ -381,8 +527,13 @@ function shiftRows(keys: string[], removed: number): string[] {
   });
 }
 
-function GridEditor({ grid, onChange, onRemove }: { grid: GridDraft; onChange: (change: (grid: GridDraft) => GridDraft) => void; onRemove: () => void }) {
-  const unprinted = new Set(grid.unprinted);
+function GridEditor({ grid, issueAt, onChange, onRemove }: {
+  grid: GridDraft;
+  /** The issue on a cell ("row:column", "min:column", "max:column"), or on the whole grid for "". */
+  issueAt: (key: string) => ReviewIssue | undefined;
+  onChange: (change: (grid: GridDraft) => GridDraft) => void;
+  onRemove: () => void;
+}) {
   const clear = (key: string) => grid.unprinted.filter((item) => item !== key);
   const setCell = (row: number, column: number, value: string) => onChange((current) => ({
     ...current,
@@ -395,12 +546,17 @@ function GridEditor({ grid, onChange, onRemove }: { grid: GridDraft; onChange: (
     return { ...current, [which]: line, unprinted: clear(`${which === "minimum" ? "min" : "max"}:${column}`) };
   });
   const cellClass = (value: string) => bad(value) ? "num invalid" : "num";
-  const flagged = (key: string) => unprinted.has(key) ? { className: "edited", title: "Tallet står ikke ordret i PDF'en." } : {};
+  const flagged = (key: string) => {
+    const issue = issueAt(key);
+    return issueProps(issue, issue && !issue.blocking ? "edited" : undefined);
+  };
+  // Opened once for a flagged grid; accepting its last flag must not fold it away under the reader.
+  const [open] = useState(() => grid.issues.length > 0 || grid.unprinted.length > 0);
   const field = (key: "name" | "category" | "unit" | "currency" | "rowLabel" | "note") =>
     (event: { target: { value: string } }) => onChange((current) => ({ ...current, [key]: event.target.value }));
 
   return (
-    <details className="review-grid" open={grid.unprinted.length > 0 || grid.issues.length > 0}>
+    <details {...issueProps(issueAt(""), "review-grid")} open={open}>
       <summary>
         <strong>{grid.name || "Prisgitter"}</strong>
         <small>{[grid.category, grid.unit, `${grid.rows.length} × ${grid.columns.length}`].filter(Boolean).join(" · ")}</small>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { datedAudit, lastValidDay, matchDate, matchInvoice, periodLabel, type DatedAgreement } from "./agreementDating.ts";
+import { datedAudit, lastValidDay, matchable, matchDate, matchInvoice, periodLabel, TERMS_ONLY_REASON, type DatedAgreement } from "./agreementDating.ts";
 import type { InvoiceRow, RateRow } from "./freight.ts";
 
 const rate = (baseOre: number, from = "", to = ""): RateRow => ({ service: "Pakkeshop", maxWeight: 5, baseOre, fuelPct: 0, fixedOre: 0, from, to });
@@ -65,9 +65,24 @@ describe("matching an invoice", () => {
     expect(match.used).toEqual([{ agreementId: "a2025", lines: 1 }]);
   });
 
-  it("skips agreements without parcel prices", () => {
-    const terms = agreement("3pl", "2025-01-01", "2026-12-31", 0, { rows: [] });
-    expect(matchInvoice([line("1", "2025-06-01", 4000)], { carrier: "GLS", agreements: [terms] }).missing).toEqual({ "no-agreement": 1 });
+  it("skips agreements with no prices at all", () => {
+    const empty = agreement("3pl", "2025-01-01", "2026-12-31", 0, { rows: [] });
+    expect(matchInvoice([line("1", "2025-06-01", 4000)], { carrier: "GLS", agreements: [empty] }).missing).toEqual({ "no-agreement": 1 });
+  });
+
+  it("matches a 3PL agreement that has only format 2 terms, and leaves its lines for review", () => {
+    const terms = agreement("3pl", "2026-01-01", "2026-12-31", 0, {
+      carrier: "Lagerhus",
+      rows: [],
+      terms: { items: [{ category: "Lager", description: "Indlagring pr. palle", unit: "pr. palle", price: 30.68, currency: "DKK", note: "" }], grids: [], surcharges: [], conditions: [] },
+    });
+    const invoice = [line("1", "2026-10-02", 97122)];
+    const match = matchInvoice(invoice, { carrier: "Lagerhus A/S", agreements: [terms] });
+    expect(match.used).toEqual([{ agreementId: "3pl", lines: 1 }]);
+    expect(matchable(terms)).toBe(true);
+    const report = datedAudit(invoice, match, [terms]);
+    expect(report.lines[0]).toMatchObject({ status: "review", reason: TERMS_ONLY_REASON });
+    expect(matchInvoice(invoice, { carrier: "Lagerhus", agreements: [terms], override: "3pl" }).override).toBe("3pl");
   });
 
   it("falls back to the invoice date for a line without one", () => {

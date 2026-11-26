@@ -131,6 +131,44 @@ test("repairs the live reply for the test invoice from the PDF's own lines", asy
   assert.ok(extract.lines.every((line) => line.issues.length === 0));
 });
 
+const LAGER_TEXT = [
+  "Lagerhus Test A/S",
+  "Fakturanr.  9000123",
+  "Fakturadato  31.10.2026",
+  "Dato  Ordre/ref.  Beskrivelse  Antal  Enhed  Á-pris  Beløb DKK",
+  "01.10.2026  IND-2610  Indlagring af palleteret gods, EUR 1/1 palle  10  pll  30,00  300,00",
+  "31.10.2026  LAG-2610  Lagerleje, pr. EUR-palle pr. uge  1.000  pll-uge  8,40  8.400,00",
+  "Distribution (pr. EUR-palleplads)",
+  "02.10.2026  4500803  Jylland/Fyn A – Butik, 5260 Odense (2-3 ppl)  2  ppl  760  245,21  490,42",
+  "28.10.2026  4500866  Tyskland – Hamburg, DE-20539 (16-20 ppl)  18  ppl  9240  121,24  2.182,32",
+  "31.10.2026  OLIE-2610  Olietillæg af fragtbeløb  2.672,74  DKK  20,00%  534,55",
+  "Subtotal ekskl. moms  11.907,29",
+  "Moms 25%  2.976,82",
+  "I alt DKK at betale  14.884,11",
+].join("\n");
+
+test("reads a 3PL invoice's lines from the text layer when the model returns none", () => {
+  const header = { carrier: "Lagerhus Test A/S", invoiceNumber: "9000123", invoiceDate: "2026-10-31", currency: "DKK", subtotal: 11907.29, vat: 2976.82, total: 14884.11, unmapped: [] };
+  const extract = validateExtract({ ...header, lines: [] }, LAGER_TEXT, { sha256: "lager", filename: "lager.pdf" });
+  assert.equal(extract.lines.length, 5);
+  assert.equal(extract.check.status, "match");
+  assert.equal(extract.confidence, "medium");
+  assert.match(extract.issues[0], /læst direkte fra PDF'ens tabel/);
+  const [storage, rent, odense, hamburg, oil] = extract.lines;
+  assert.deepEqual(
+    { kind: storage.kind, date: storage.date, reference: storage.reference, quantity: storage.quantity, unit: storage.unit, unitPriceOre: storage.unitPriceOre, amountOre: storage.amountOre },
+    { kind: "shipment", date: "2026-10-01", reference: "IND-2610", quantity: 10, unit: "pll", unitPriceOre: 3000, amountOre: 30000 },
+  );
+  assert.equal(rent.quantity, 1000);
+  assert.deepEqual([odense.shipment, odense.weightKg, odense.zone, odense.destination], ["4500803", 760, "Jylland/Fyn A", "DK"]);
+  assert.deepEqual([hamburg.weightKg, hamburg.destination], [0, "DE"]);
+  assert.deepEqual([oil.kind, oil.percent, oil.quantity], ["surcharge", 20, 2672.74]);
+  assert.equal(extractToInvoiceRows(extract).length, 4);
+
+  const kept = validateExtract({ ...header, lines: extract.lines.map((line) => ({ ...line, amount: line.amountOre / 100 })) }, LAGER_TEXT, { sha256: "lager", filename: "lager.pdf" });
+  assert.ok(!kept.issues.some((issue) => /tabel/.test(issue)), "a model reply that sums is kept");
+});
+
 test("finds printed amounts across pdf.js splits, kr. suffixes and thousand separators", () => {
   const amounts = printedAmounts("I alt  223 ,50 kr.\nFragt 1 234,50 kr\nTotal 2,345.00 DKK\nGebyr 1.250 kr\nMoms\u00a0308,64");
   for (const value of [22350, 123450, 234500, 125000, 30864]) assert.ok(amounts.has(value), String(value));
