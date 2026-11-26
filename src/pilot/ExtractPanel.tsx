@@ -11,6 +11,12 @@ const dateLabel = (value: string) =>
   new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Copenhagen" })
     .format(new Date(`${value}T12:00:00Z`));
 
+function quantityLabel(line: InvoiceExtract["lines"][number]): string {
+  const count = `${(line.quantity ?? 0).toLocaleString("da-DK")} ${line.unit ?? ""}`.trim();
+  if (line.percent !== undefined) return `${line.percent.toLocaleString("da-DK")} % af ${count}`;
+  return line.unitPriceOre !== undefined ? `${count} à ${(line.unitPriceOre / 100).toLocaleString("da-DK", { minimumFractionDigits: 2 })}` : count;
+}
+
 const KIND_LABELS = { shipment: "", credit: "Kreditering", surcharge: "Tillæg", fee: "Gebyr" } as const;
 const AGAINST_LABELS = { subtotal: "Subtotal ekskl. moms", "total-vat": "I alt minus moms", total: "Faktura i alt", none: "" } as const;
 
@@ -108,7 +114,10 @@ export function ExtractTable({ extract }: { extract: InvoiceExtract }) {
                   <td>
                     {invoiceLevel ? "—" : line.service || <span className="soft-hint" title="Fakturaen angiver ikke leveringsform for linjen.">Ikke angivet</span>}
                   </td>
-                  <td>{[line.weightKg ? `${line.weightKg.toLocaleString("da-DK")} kg` : "", line.zone].filter(Boolean).join(" · ") || "—"}</td>
+                  <td>
+                    {[line.weightKg ? `${line.weightKg.toLocaleString("da-DK")} kg` : "", line.zone].filter(Boolean).join(" · ") || (line.quantity === undefined ? "—" : "")}
+                    {line.quantity !== undefined ? <small>{quantityLabel(line)}</small> : null}
+                  </td>
                   <td className="num">{invoiceLevel ? "—" : money(line.amountOre)}</td>
                   <td>{surcharges.length ? surcharges.map((item) => `${item.label} ${money(item.amountOre)}`).join(", ") : "—"}</td>
                   <td className="num">

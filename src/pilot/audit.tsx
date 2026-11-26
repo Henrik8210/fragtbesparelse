@@ -15,7 +15,7 @@ import { CONFIDENCE_LABELS, extractToInvoiceRows, sharedSurchargeOre, type Invoi
 import { fetchInvoiceCheck } from "./checkClient.ts";
 import { checkedExtract, rowsFromLines, type InvoiceCheck } from "./invoiceCheck.ts";
 import { invoiceCsv, type PastSource } from "./past.ts";
-import { datedAudit, matchInvoice } from "./agreementDating.ts";
+import { datedAudit, matchable, matchInvoice } from "./agreementDating.ts";
 import { AgreementMatch } from "./AgreementMatch.tsx";
 import type { Agreement } from "./agreements.ts";
 import { useAgreementChoice } from "./useAgreementChoice.ts";
@@ -55,7 +55,7 @@ export function AuditFlow({
   const [localChoice, setLocalChoice] = useState("");
   const saved = useAgreementChoice(companyId, invoice?.fileId ?? "");
   const choice = invoice?.fileId ? saved.choice?.agreementId ?? "" : localChoice;
-  const dated = !rates && agreements.some((item) => item.rows.length);
+  const dated = !rates && agreements.some(matchable);
   const invoiceRows = useMemo(() => {
     if (!invoice) return null;
     try { return importRows("invoice", invoice.sheet, invoice.mapping); } catch { return null; }
@@ -139,7 +139,7 @@ export function AuditFlow({
             value={rates}
             past={pastRates}
             companyId={companyId}
-            optional={agreements.some((item) => item.rows.length)}
+            optional={agreements.some(matchable)}
             onChange={(file) => { setRates(file); setError(""); }}
           />
         </div>

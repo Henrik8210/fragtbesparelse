@@ -1,8 +1,16 @@
+import { hasTerms } from "./agreementFormat.ts";
 import type { Agreement } from "./agreements.ts";
 import { normalizedText, runAudit, type AuditLine, type AuditReport, type AuditSummary, type InvoiceRow, type RateRow } from "./freight.ts";
 
 /** The fields of an agreement that decide whether it was valid on a date. */
-export type DatedAgreement = Pick<Agreement, "id" | "name" | "carrier" | "from" | "to" | "rows"> & Partial<Pick<Agreement, "ended" | "sample">>;
+export type DatedAgreement = Pick<Agreement, "id" | "name" | "carrier" | "from" | "to" | "rows"> & Partial<Pick<Agreement, "ended" | "sample" | "terms">>;
+
+/** An agreement an invoice can be matched to: parcel rate rows, or format 2 terms (price items, grids, surcharges). */
+export function matchable(agreement: DatedAgreement): boolean {
+  return agreement.rows.length > 0 || hasTerms(agreement.terms);
+}
+
+export const TERMS_ONLY_REASON = "Prisaftalen har ingen pakkepriser. Lager-, palle- og tillægspriser sammenlignes ikke endnu.";
 
 /**
  * Why a line has no agreement:
@@ -67,9 +75,9 @@ export function sameCarrier(left: string, right: string): boolean {
   return Boolean(a && b) && (a === b || a.startsWith(b) || b.startsWith(a));
 }
 
-/** Agreements with parcel prices for the carrier, historic ones included. With no carrier on the invoice, all of them. */
+/** Agreements with prices for the carrier, historic ones included. With no carrier on the invoice, all of them. */
 export function candidates<T extends DatedAgreement>(agreements: T[], carrier: string): T[] {
-  const priced = agreements.filter((item) => item.rows.length > 0);
+  const priced = agreements.filter(matchable);
   return carrier.trim() ? priced.filter((item) => sameCarrier(item.carrier, carrier)) : priced;
 }
 
@@ -99,7 +107,7 @@ export function matchInvoice(
   options: { invoiceDate?: string; carrier: string; agreements: DatedAgreement[]; override?: string | null },
 ): InvoiceMatch {
   const pool = candidates(options.agreements, options.carrier);
-  const chosen = options.override ? options.agreements.find((item) => item.id === options.override && item.rows.length) ?? null : null;
+  const chosen = options.override ? options.agreements.find((item) => item.id === options.override && matchable(item)) ?? null : null;
   const matches = lines.map((line): LineMatch => {
     const date = line.date || options.invoiceDate || "";
     if (chosen) return date ? { kind: "matched", date, agreementId: chosen.id, overlap: [], manual: true } : { kind: "none", date, reason: "no-date" };
@@ -167,6 +175,12 @@ export function datedAudit(invoice: InvoiceRow[], match: InvoiceMatch, agreement
   for (const row of invoice) repeated.set(row.shipment, (repeated.get(row.shipment) ?? 0) + 1);
   for (const [id, indexes] of groups) {
     const agreement = byId.get(id) as DatedAgreement;
+    if (!agreement.rows.length) {
+      for (const index of indexes) {
+        lines[index] = { ...invoice[index], key: String(index + 1), status: "review", expectedOre: null, differenceOre: null, reason: TERMS_ONLY_REASON, rate: null };
+      }
+      continue;
+    }
     const rows = match.override === id ? chosenRows(agreement) : agreement.rows;
     const report = runAudit(indexes.map((index) => invoice[index]), rows);
     report.lines.forEach((line, position) => {

@@ -3,7 +3,7 @@ import { invoiceRowSchema, type InvoiceRow } from "./freight.ts";
 import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
 
 export const EXTRACT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-export const EXTRACT_VERSION = 3;
+export const EXTRACT_VERSION = 4;
 export const MAX_PROMPT_CHARS = 36_000;
 export const MAX_EXTRACT_LINES = 400;
 const SUM_TOLERANCE_ORE = 100;
@@ -33,6 +33,12 @@ export type ExtractLine = {
   amountOre: number;
   surcharges: { label: string; amountOre: number }[];
   issues: string[];
+  /** Quantity, unit and unit price as printed on a 3PL line ("186 pll à 30,68"). Older extracts lack them. */
+  quantity?: number;
+  unit?: string;
+  unitPriceOre?: number;
+  /** A percentage surcharge's rate, with the base in quantity and unit "DKK". */
+  percent?: number;
 };
 
 export type SumCheck = {
@@ -136,7 +142,7 @@ const SYSTEM_PROMPT = `You read Danish and Nordic freight invoices and return th
 Rules:
 - Copy values exactly as printed. Never invent shipments, amounts, weights or dates. Use "" or 0 when a value is not printed.
 - Amounts are plain numbers with "." as decimal separator. Danish "1.234,56 kr" is 1234.56.
-- One entry per invoice line. A shipment or parcel line is kind "shipment". A credit note line is kind "credit" with a negative amount.
+- One entry per invoice line. Every priced line is an entry, also warehouse and 3PL lines such as storage, handling, picking, pallets, order fees, hourly work and pallet distribution. A shipment, parcel or such service line is kind "shipment". A credit note line is kind "credit" with a negative amount.
 - Surcharges printed on the same line as a shipment go in that line's surcharges array. A surcharge printed as its own line for the whole invoice (for example brændstoftillæg, fuel, vejafgift, miljøtillæg) is kind "surcharge" with its amount in amount. Administration or invoice fees are kind "fee".
 - shipment is only a tracking or consignment number. A product word such as "Pakke" or "Parcel" goes in service. A line number such as "Linje 1" goes in reference.
 - A route such as "Taastrup til Aarhus" goes in zone. For a surcharge or fee line, put its description in service.
@@ -157,7 +163,7 @@ export function buildExtractRequest(pdfText: string): { inputs: AiInputs; trunca
         { role: "user", content: `Invoice text extracted from the PDF:\n\n${body}` },
       ],
       response_format: { type: "json_schema", json_schema: EXTRACT_JSON_SCHEMA },
-      max_tokens: 6000,
+      max_tokens: 8000,
       temperature: 0,
     },
   };
@@ -348,6 +354,73 @@ function sourceFill(source: string): SourceFill {
   };
 }
 
+const DANISH_NUMBER = /^-?\d{1,3}(?:\.\d{3})*(?:,\d+)?$|^-?\d+(?:,\d+)?$/;
+const MONEY_CELL = /^-?\d{1,3}(?:\.\d{3})*,\d{2}$|^-?\d+,\d{2}$/;
+const PERCENT_CELL = /^(\d+(?:,\d+)?) ?%$/;
+const LINE_START = /^(\d{1,2}[./-]\d{1,2}[./-]\d{4})$/;
+const FUEL = /\b(?:olie|br(?:æ|ae)ndstof|fuel|diesel)/i;
+const FOREIGN_POSTCODE = /\b(SE|DE|NO|FI|NL|PL|EE|LV|LT)-\d{4,5}\b/;
+const WEIGHT_UNITS = /^(?:ppl|pll|læs|kolli|palle|paller|stk|forsendelse)$/i;
+
+const danishNumber = (cell: string) => Number(cell.replaceAll(".", "").replace(",", "."));
+
+/**
+ * Dated table rows read straight from the text layer, as on a 3PL invoice: date, reference, description, then
+ * quantity, unit, optional weight, unit price (or base and percent) and the line amount in the last cell.
+ * pdfText joins cells with two spaces, so a cell is a run of text between double spaces.
+ */
+export function printedLines(pdfText: string): ExtractLine[] {
+  const found: ExtractLine[] = [];
+  for (const raw of pdfText.split(/\r?\n/)) {
+    const cells = raw.replace(SPACES, " ").trim().split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
+    if (cells.length < 4 || !LINE_START.test(cells[0]) || !MONEY_CELL.test(cells.at(-1) ?? "")) continue;
+    const date = isoDate(cells[0]);
+    if (!date) continue;
+    const amountOre = ore(danishNumber(cells.at(-1) as string));
+    let rest = cells.slice(1, -1);
+    const reference = rest.length >= 2 && !/\s/.test(rest[0]) && /\d/.test(rest[0]) ? rest[0] : "";
+    if (reference) rest = rest.slice(1);
+    const descriptionCells: string[] = [];
+    while (rest.length && !DANISH_NUMBER.test(rest[0]) && !PERCENT_CELL.test(rest[0])) descriptionCells.push(rest.shift() as string);
+    const description = descriptionCells.join(" ");
+    if (!description) continue;
+    const numbers = rest.filter((cell) => DANISH_NUMBER.test(cell)).map(danishNumber);
+    const unit = rest.find((cell) => !DANISH_NUMBER.test(cell) && !PERCENT_CELL.test(cell)) ?? "";
+    const percentCell = rest.map((cell) => PERCENT_CELL.exec(cell)).find(Boolean);
+    const fuel = FUEL.test(description);
+    const kind: LineKind = amountOre < 0 ? "credit" : fuel ? "surcharge" : "shipment";
+    const line: ExtractLine = {
+      kind,
+      shipment: reference && kind === "shipment" && /^\d{5,}$/.test(reference) ? reference : "",
+      date,
+      reference,
+      service: description.slice(0, 64),
+      weightKg: 0,
+      zone: "",
+      origin: "DK",
+      destination: FOREIGN_POSTCODE.exec(description)?.[1] ?? "DK",
+      amountOre,
+      surcharges: [],
+      issues: [],
+    };
+    if (percentCell && numbers.length >= 1) {
+      line.quantity = numbers[0];
+      line.unit = unit || "DKK";
+      line.percent = danishNumber(percentCell[1]);
+    } else if (numbers.length >= 2) {
+      line.quantity = numbers[0];
+      line.unit = unit;
+      line.unitPriceOre = ore(numbers.at(-1) as number);
+      // Invoice rows and checks hold parcel weights up to 1000 kg; a heavier pallet weight is left out, as on the model path.
+      if (numbers.length >= 3 && WEIGHT_UNITS.test(unit) && numbers[1] > 0 && numbers[1] <= 1000) line.weightKg = numbers[1];
+    }
+    const zone = /^([^–,(]+?) – /.exec(description)?.[1] ?? "";
+    if (zone && WEIGHT_UNITS.test(line.unit ?? "")) line.zone = zone.slice(0, 40);
+    found.push(line);
+  }
+  return found;
+}
+
 export type ExtractMeta = { sha256: string; filename: string; truncated?: boolean; usage?: InvoiceExtract["usage"]; now?: Date };
 
 export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta): InvoiceExtract {
@@ -360,7 +433,7 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
   const used = new Set<number>();
   const issues: string[] = [];
 
-  const lines: ExtractLine[] = data.lines.slice(0, MAX_EXTRACT_LINES).map((line) => {
+  const modelLines: ExtractLine[] = data.lines.slice(0, MAX_EXTRACT_LINES).map((line) => {
     const lineIssues: string[] = [];
     const amountOre = ore(line.amount);
     const kind: LineKind = line.kind === "shipment" && amountOre < 0 ? "credit" : line.kind;
@@ -412,7 +485,18 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
   const subtotalOre = data.subtotal > 0 && printed(ore(data.subtotal)) ? ore(data.subtotal) : null;
   const vatOre = data.vat > 0 && printed(ore(data.vat)) ? ore(data.vat) : null;
   const totalOre = data.total !== 0 ? ore(data.total) : null;
-  const check = sumCheck(lines, subtotalOre, vatOre, totalOre);
+  // When the model's lines miss the printed total but the dated table rows on the text layer meet it, the rows win.
+  let lines = modelLines;
+  let check = sumCheck(lines, subtotalOre, vatOre, totalOre);
+  if (check.status !== "match") {
+    const table = printedLines(pdfText).slice(0, MAX_EXTRACT_LINES);
+    const tableCheck = sumCheck(table, subtotalOre, vatOre, totalOre);
+    if (table.length >= 2 && tableCheck.status === "match") {
+      lines = table;
+      check = tableCheck;
+      issues.push(`Workers AI læste ${modelLines.length} af ${table.length} linjer. Linjerne er læst direkte fra PDF'ens tabel og summer til totalen.`);
+    }
+  }
   const shipments = lines.filter((line) => line.kind === "shipment" || line.kind === "credit");
   if (shipments.length === 0) issues.push("Der blev ikke fundet forsendelseslinjer.");
   if (check.status === "mismatch") issues.push("Linjerne summer ikke til fakturaens total.");
@@ -424,7 +508,7 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
   const lineIssues = lines.some((line) => line.issues.length > 0);
   const confidence: Confidence = check.status !== "match" || shipments.length === 0 || meta.truncated || !totalPrinted
     ? "low"
-    : lineIssues || data.lines.length > MAX_EXTRACT_LINES ? "medium" : "high";
+    : lineIssues || lines !== modelLines || data.lines.length > MAX_EXTRACT_LINES ? "medium" : "high";
 
   return {
     version: EXTRACT_VERSION,

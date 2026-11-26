@@ -8,6 +8,7 @@ const CARRIER_RULES: { name: string; pattern: RegExp }[] = [
   { name: "Bring", pattern: /\bbring\b/i },
   { name: "DAO", pattern: /\bdao\b/i },
   { name: "UPS", pattern: /\bups\b/i },
+  { name: "Frode Laursen", pattern: /\bfrode[\s_-]*laursen/i },
 ];
 
 const LABELED = /(?:transport(?:ø|o|oe)r|fragtf(?:ø|o|oe)rer|carrier|leverand(?:ø|o|oe)r)\s*[:-]\s*([^\n\r]{2,60})/i;
