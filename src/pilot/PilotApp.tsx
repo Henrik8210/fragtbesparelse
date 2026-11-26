@@ -2475,7 +2475,8 @@ function AddAgreementModal({ org, initialCarrier = "", onClose, onAdded }: { org
     }
     if (turn !== picked.current) return;
     setReading(null);
-    if (!extract.carrier && initialCarrier) extract = { ...extract, carrier: initialCarrier };
+    const fallbackCarrier = carrierIn(chosen.name) || initialCarrier;
+    if (!extract.carrier && fallbackCarrier) extract = { ...extract, carrier: fallbackCarrier };
     const reasons = reviewReasons(extract);
     if (reasons.length) {
       setReview({ extract, reasons });

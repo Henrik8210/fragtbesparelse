@@ -320,6 +320,23 @@ small { font-size: .8rem; }
 .review-conditions li { display: flex; gap: 6px; align-items: flex-start; }
 .review-conditions textarea { flex: 1; min-height: 32px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: .82rem; resize: vertical; }
 .review-conditions li.edited textarea { background: #fff7e6; border-color: #f1d49b; }
+.review-nav { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 10px; border: 1px solid #f1d49b; border-radius: 10px; background: #fffaf0; font-size: .76rem; }
+.review-nav p { flex: 1 1 240px; display: flex; align-items: center; gap: 5px; margin: 0; color: #5c4a1c; line-height: 1.35; }
+.review-nav p strong { font-weight: 700; color: var(--ink); white-space: nowrap; }
+.review-nav.done { border-color: #bfe3d2; background: var(--green-light); }
+.review-nav.done p { color: var(--green); }
+.review-nav-actions { display: flex; align-items: center; gap: 6px; }
+.review-nav .text-button { font-size: .76rem; }
+.button.small { min-height: 28px; padding: 3px 9px; font-size: .74rem; gap: 4px; border-radius: 7px; }
+.agreement-review [data-issue].issue-blocking > td:first-child, .agreement-review td.issue-blocking { box-shadow: inset 3px 0 0 #d98a6b; }
+.agreement-review [data-issue].issue-flag > td:first-child { box-shadow: inset 3px 0 0 #e9c46a; }
+.agreement-review [data-current] { outline: 2px solid #40b995; outline-offset: -2px; background: #eefaf5; transition: background .3s ease; }
+.agreement-review label[data-current], .agreement-review details[data-current] { border-radius: 8px; outline-offset: 2px; }
+.agreement-review [data-current] input, .agreement-review [data-current] textarea { background: #fff; }
+.agreement-review label.issue-flag input { background: #fff7e6; border-color: #f1d49b; }
+.agreement-review label.issue-blocking input { border-color: #d98a6b; background: #fff1ec; }
+.review-tip { position: fixed; z-index: 1000; max-width: 280px; transform: translate(-50%, -100%); padding: 6px 9px; border-radius: 7px; background: var(--dark); color: #fff; font-size: .72rem; line-height: 1.35; pointer-events: none; box-shadow: 0 6px 18px rgba(17, 39, 41, .22); }
+.review-tip.below { transform: translate(-50%, 0); }
 .agreement-terms { display: grid; gap: 8px; margin-top: 8px; }
 .terms-grid > summary { padding: 8px 12px; cursor: pointer; font-size: .86rem; }
 .terms-grid > summary small, .terms-note { color: var(--muted); }
