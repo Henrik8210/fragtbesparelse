@@ -3,7 +3,7 @@ import { agreementFromRows } from "./agreements.ts";
 import { readContent } from "./agreementFormat.ts";
 import {
   AGREEMENT_CHUNK_CHARS, AGREEMENT_MAX_CHUNKS, agreementChunks, agreementRatesToRows, buildAgreementBatches, cellValue,
-  extractTerms, issuingCarrier, printedPrices, rateService, validateAgreementExtract,
+  extractTerms, issuingCarrier, printedGrids, printedPrices, rateService, validateAgreementExtract,
 } from "./agreementExtract.ts";
 import { runAudit } from "./freight.ts";
 
@@ -87,10 +87,11 @@ describe("validateAgreementExtract", () => {
     }), GRID_TEXT, { sha256: "x", filename: "se.pdf" });
     const [read] = extract.grids;
     expect(read.rows[0].cells).toEqual([1250, 1410.5, 1890.25]);
+    expect(read.rows[1].cells).toEqual([980.4, 1105, 1512.75]);
     expect(read.minimum).toEqual([1250, 1410.5, 1890.25]);
     expect(read.maximum).toEqual([]);
-    expect(read.unprinted).toEqual(["1:1"]);
-    expect(read.issues).toEqual(["1 af 9 tal står ikke ordret i PDF'en."]);
+    expect(read.unprinted).toEqual([]);
+    expect(read.issues).toEqual([]);
     expect(extract.surcharges.map((item) => [item.kind, item.value, item.issues])).toEqual([["percent", 21.5, []], ["agreed", null, []]]);
     expect(extract.rates).toEqual([]);
     expect(extract.conditions).toEqual([{ text: "Fakturering sker månedsvis bagud.", printed: true }, { text: "Betaling netto 8 dage.", printed: false }]);
@@ -98,14 +99,30 @@ describe("validateAgreementExtract", () => {
     expect(extract.confidence).toBe("medium");
   });
 
+  it("flags only the cells that are not printed when no printed table holds the grid", () => {
+    const prose = GRID_TEXT.replace(/ {2,}/g, " / ");
+    const [read] = validateAgreementExtract(reply([], {
+      surcharges: [],
+      grids: [grid([["1.250,00", "1.410,50", "1.890,25"], ["980,40", "1.150,00", "1.512,75"]])],
+    }), prose, { sha256: "x", filename: "se.pdf" }).grids;
+    expect(read.unprinted).toEqual(["1:1"]);
+    expect(read.issues).toEqual(["1 af 9 tal står ikke ordret i PDF'en."]);
+  });
+
+  it("takes a reworded condition as the sentence printed in the PDF", () => {
+    const extract = validateAgreementExtract(reply([], { surcharges: [], conditions: ["Fakturering sker bagud månedsvis."] }), GRID_TEXT, { sha256: "x", filename: "se.pdf" });
+    expect(extract.conditions).toEqual([{ text: "Fakturering sker månedsvis bagud.", printed: true }]);
+  });
+
   it("reports how many printed prices the extract holds", () => {
     const partial = validateAgreementExtract(reply([], {
       surcharges: [],
       grids: [grid([["1.250,00", "", ""]], { minimum: [] })],
     }), `${GRID_TEXT}\n${Array.from({ length: 10 }, (_, index) => `Ekstra ${index + 10},25`).join("\n")}`, { sha256: "x", filename: "f.pdf" });
-    expect(partial.coverage.captured).toBe(1);
+    // The grid's one cell brings the printed table, six prices; the ten "Ekstra" numbers stay out.
+    expect(partial.coverage.captured).toBe(6);
     expect(partial.coverage.printed).toBeGreaterThan(10);
-    expect(partial.issues.some((issue) => /Kun 1 af \d+ priser/.test(issue))).toBe(true);
+    expect(partial.issues.some((issue) => /Kun 6 af \d+ priser/.test(issue))).toBe(true);
     expect(partial.confidence).toBe("low");
   });
 
@@ -243,7 +260,8 @@ describe("a reply that misses lines and shifts a wrapped header", () => {
     expect(read.columns).toEqual([
       { label: "Aarby", detail: "DE-10000" }, { label: "Bstrup", detail: "DE-20000" }, { label: "Nedre Vang", detail: "DE-30000" },
     ]);
-    expect(read.rows[0].cells).toEqual([700.1, 455.2, 440.3]);
+    expect(read.minimum).toEqual([700.1, 455.2, 440.3]);
+    expect(read.rows).toEqual([{ label: "1-5 pallepladser", cells: [250.4, 170.5, 160.6] }]);
     expect(read.issues).toEqual([]);
   });
 
@@ -253,9 +271,36 @@ describe("a reply that misses lines and shifts a wrapped header", () => {
     expect(extract.coverage.captured).toBe(extract.coverage.printed);
   });
 
-  it("flags a column without prices", () => {
-    const empty = validateAgreementExtract([{ ...raw, grids: [{ ...raw.grids[0], columns: raw.grids[0].columns.slice(1), rows: raw.grids[0].rows.map((row) => ({ ...row, cells: [...row.cells.slice(0, 3), null] })) }] }], ISSUED_TEXT.replace(/^(?:Destination|Postnr\.).*\n/gm, ""), { sha256: "x", filename: "x.pdf" });
+  it("flags a column without prices when no printed table holds the grid", () => {
+    const prose = ISSUED_TEXT.replace(/^(?:Destination|Postnr\.).*\n/gm, "").replace(/ {2,}/g, " ");
+    const empty = validateAgreementExtract([{ ...raw, grids: [{ ...raw.grids[0], columns: raw.grids[0].columns.slice(1), rows: raw.grids[0].rows.map((row) => ({ ...row, cells: [...row.cells.slice(0, 3), null] })) }] }], prose, { sha256: "x", filename: "x.pdf" });
     expect(empty.grids[0].issues.join(" ")).toMatch(/«Vang» har ingen priser/);
+  });
+
+  it("drops a column the model added when the printed table has none", () => {
+    const wide = validateAgreementExtract([{ ...raw, grids: [{ ...raw.grids[0], columns: raw.grids[0].columns.slice(1), rows: raw.grids[0].rows.map((row) => ({ ...row, cells: [...row.cells.slice(0, 3), null] })) }] }], ISSUED_TEXT.replace(/^(?:Destination|Postnr\.).*\n/gm, ""), { sha256: "x", filename: "x.pdf" });
+    expect(wide.grids[0].columns).toHaveLength(3);
+    expect(wide.grids[0].issues.join(" ")).not.toMatch(/ingen priser/);
+  });
+});
+
+describe("printedGrids", () => {
+  it("reads a table with its title, header, detail line and minimum straight from the text", () => {
+    expect(printedGrids(ISSUED_TEXT)).toEqual([{
+      name: "Distribution til Tyskland", category: "", unit: "", currency: "DKK", rowLabel: "Destination",
+      columns: [{ label: "Aarby", detail: "DE-10000" }, { label: "Bstrup", detail: "DE-20000" }, { label: "Nedre Vang", detail: "DE-30000" }],
+      rows: [{ label: "1-5 pallepladser", cells: [250.4, 170.5, 160.6] }],
+      minimum: [700.1, 455.2, 440.3], maximum: [], note: "", unprinted: [], issues: [],
+    }]);
+  });
+
+  it("leaves single price lines and prose alone", () => {
+    expect(printedGrids("Lagerleje pr. uge  31,50  DKK\nPluk pr. kolli  1,75  DKK\nVentetid koster 580,00 kr. pr. time")).toEqual([]);
+  });
+
+  it("leaves the prices it reads out of a part's own count, so a dropped table is not a short read", () => {
+    const { plans } = buildAgreementBatches(`${ISSUED_TEXT}\nTillæg ved levering efter kl. 16 udgør 125,00 kr.`);
+    expect(plans.flatMap((plan) => plan.prices)).toEqual([12500]);
   });
 });
 

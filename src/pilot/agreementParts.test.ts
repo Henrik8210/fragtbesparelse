@@ -32,6 +32,21 @@ describe("part checks", () => {
     const { outputs, reports } = await readParts(async (inputs) => inputs === "half" ? { response: { items: [] } } : full,
       ["whole"], [{ pages: [1, 1], prices, halves: ["half", "half"] }], { concurrency: 1, timeoutMs: 1000 });
     expect(outputs).toEqual([full]);
-    expect(reports[0]).toMatchObject({ retried: true, captured: 5, expected: 10 });
+    expect(reports[0]).toMatchObject({ retried: true, captured: 5, expected: 10, outputs: 1 });
+  });
+
+  it("uses a part's cached replies without calling the model, and says how many outputs each part has", async () => {
+    const cached = [{ response: { items: [{ price: 1.5 }] } }, { response: { items: [{ price: 2.5 }] } }];
+    const calls: unknown[] = [];
+    const { outputs, reports } = await readParts(async (inputs) => {
+      calls.push(inputs);
+      return { response: { items: [] } };
+    }, ["one", "two"], [
+      { pages: [1, 1], prices: [150, 250], halves: [], cached },
+      { pages: [2, 2], prices: [], halves: [] },
+    ], { concurrency: 2, timeoutMs: 1000 });
+    expect(calls).toEqual(["two"]);
+    expect(outputs).toEqual([...cached, { response: { items: [] } }]);
+    expect(reports.map((report) => [report.outputs, report.cached ?? false, report.captured])).toEqual([[2, true, 2], [1, false, 0]]);
   });
 });

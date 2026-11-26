@@ -38,7 +38,7 @@ describe("reviewReasons", () => {
 
   it("names what could not be read", () => {
     expect(reviewReasons(extract({ carrier: "", validTo: "" }))).toEqual(["Transportøren stod ikke i PDF'en.", "Slutdatoen stod ikke i PDF'en."]);
-    const wrong = extract({ items: [{ category: "Lager", description: "Lagerleje", unit: "pr. uge", price: "39,50", currency: "DKK", note: "" }] });
+    const wrong = extract({ items: [{ category: "Lager", description: "Håndtering", unit: "pr. uge", price: "39,50", currency: "DKK", note: "" }] });
     expect(reviewReasons(wrong).join(" ")).toMatch(/skal tjekkes/);
   });
 });

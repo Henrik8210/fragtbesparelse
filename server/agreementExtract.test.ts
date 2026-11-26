@@ -168,19 +168,19 @@ test("reads a 3PL agreement into items, a price grid, surcharges and conditions"
   assert.equal(done.result, "extracted");
   if (done.result !== "extracted") return;
   const extract = done.extract;
-  assert.equal(extract.version, 5);
+  assert.equal(extract.version, 6);
   assert.equal(extract.validFrom, "2027-03-01");
   assert.deepEqual(extract.items.map((item) => [item.unit, item.price]), [
     ["pr. palle pr. uge", 9.4], ["pr. hyldemeter pr. måned", 31.75], ["pr. ordre", 6.85], ["pr. ordrelinje", 1.92], ["pr. time", 412.5],
   ]);
   const grid = extract.grids[0];
-  assert.deepEqual(grid.rows[2].cells, [401.6, 503.57, 987.45]);
+  assert.deepEqual(grid.rows[2].cells, [401.6, 503.75, 987.45], "the misread cell comes from the printed table");
   assert.deepEqual(grid.maximum, [4210, 5120.5, 9875]);
-  assert.deepEqual(grid.unprinted, ["2:1"], "only the misread cell is flagged");
+  assert.deepEqual(grid.unprinted, []);
   assert.deepEqual(extract.surcharges.map((item) => [item.kind, item.value]), [["percent", 18.4], ["percent", 12], ["agreed", null]]);
   assert.ok(extract.conditions.every((item) => item.printed));
-  assert.deepEqual(extract.coverage, { printed: 18, captured: 17 });
-  assert.equal(extract.confidence, "medium");
+  assert.deepEqual(extract.coverage, { printed: 18, captured: 18 });
+  assert.equal(extract.confidence, "high");
   assert.equal(extract.usage?.inputTokens, 1200);
 });
 
@@ -261,33 +261,89 @@ function echoModel(lose: (text: string, call: number) => boolean) {
   };
 }
 
-test("a dense page that comes back empty is read again and nothing is lost", async () => {
+test("a dense page of tables the model drops is read from the text layer, without a retry", async () => {
   const { runParts } = await import("./invoiceExtract.ts");
   const { buildAgreementBatches, validateAgreementExtract } = await import("../src/pilot/agreementExtract.ts");
   const { batches, plans } = buildAgreementBatches(DENSE_PAGES);
   assert.ok(plans.filter((plan) => plan.pages[0] <= 2 && plan.pages[1] >= 2).length >= 2, "the dense page is split over parts");
   assert.ok(plans.every((plan) => plan.prices.length <= 60));
-  const lostOnce = new Set<string>();
-  const model = echoModel((text) => {
-    if (!text.includes("Distribution til Syd") || text.includes("half") || lostOnce.has("syd")) return false;
-    lostOnce.add("syd");
-    return true;
-  });
+  const model = echoModel((text) => text.includes("Distribution til Syd"));
   const { outputs, reports } = await runParts(model, batches, plans, undefined, 1000, 4);
   const extract = validateAgreementExtract(outputs.map(unwrap), DENSE_PAGES, { sha256: "x", filename: "aftale.pdf", parts: reports });
-  assert.ok(reports.some((report) => report.retried && !report.failed));
+  assert.ok(reports.every((report) => !report.retried && !report.failed));
   assert.equal(extract.coverage.captured, extract.coverage.printed, "every printed price is in the extract");
-  assert.equal(extract.grids.length, 4);
+  assert.deepEqual(extract.grids.map((grid) => grid.name), ["Distribution til Nord", "Distribution til Syd", "Distribution til Vest", "Distribution til Øst"]);
+  assert.ok(extract.grids.every((grid) => grid.unprinted.length === 0 && grid.issues.length === 0));
   assert.equal(extract.carrier, "Nord Fragt", "an abbreviation in the reply becomes the company's printed name");
   assert.deepEqual(extract.issues, []);
 });
 
-test("a dense page that stays empty is named in the review", async () => {
+// Prices in running text are not a table, so only the model reads them; losing that page is retried and then named.
+const PROSE_PAGES = [
+  DENSE_PAGES.split("\n\n")[0],
+  Array.from({ length: 10 }, (_, at) => `Ventetid ud over ${at + 1} timer koster ${500 + at * 13},${String(at * 7 + 10).padStart(2, "0")} kr. pr. time ved levering.`).join("\n"),
+].join("\n\n");
+
+test("a page of prices in running text that comes back empty is read again and nothing is lost", async () => {
   const { runParts } = await import("./invoiceExtract.ts");
   const { buildAgreementBatches, validateAgreementExtract } = await import("../src/pilot/agreementExtract.ts");
-  const { batches, plans } = buildAgreementBatches(DENSE_PAGES);
-  const { outputs, reports } = await runParts(echoModel((text) => text.includes("ppl.")), batches, plans, undefined, 1000, 4);
-  const extract = validateAgreementExtract(outputs.map(unwrap), DENSE_PAGES, { sha256: "x", filename: "aftale.pdf", parts: reports });
+  const { batches, plans } = buildAgreementBatches(PROSE_PAGES);
+  let lost = false;
+  const model = proseModel((text) => {
+    if (lost || !text.includes("Ventetid") || text.includes("half")) return false;
+    lost = true;
+    return true;
+  });
+  const { outputs, reports } = await runParts(model, batches, plans, undefined, 1000, 4);
+  const extract = validateAgreementExtract(outputs.map(unwrap), PROSE_PAGES, { sha256: "x", filename: "aftale.pdf", parts: reports });
+  assert.ok(reports.some((report) => report.retried && !report.failed));
+  assert.deepEqual(extract.issues, []);
+});
+
+test("a page of prices in running text that stays empty is named in the review", async () => {
+  const { runParts } = await import("./invoiceExtract.ts");
+  const { buildAgreementBatches, validateAgreementExtract } = await import("../src/pilot/agreementExtract.ts");
+  const { batches, plans } = buildAgreementBatches(PROSE_PAGES);
+  const { outputs, reports } = await runParts(proseModel((text) => text.includes("Ventetid")), batches, plans, undefined, 1000, 4);
+  const extract = validateAgreementExtract(outputs.map(unwrap), PROSE_PAGES, { sha256: "x", filename: "aftale.pdf", parts: reports });
   assert.equal(extract.confidence, "low");
-  assert.ok(extract.issues.some((issue) => /^Side 1–2 blev kun delvist læst \(\d+ af \d+ priser\), også ved andet forsøg/.test(issue)), extract.issues.join(" | "));
+  assert.ok(extract.issues.some((issue) => /blev kun delvist læst \(\d+ af \d+ priser\), også ved andet forsøg/.test(issue)), extract.issues.join(" | "));
+});
+
+/** Reads "Ventetid … koster 513,17 kr. pr. time" sentences as surcharges, and price lines as items. */
+function proseModel(lose: (text: string) => boolean) {
+  const echo = echoModel(() => false);
+  return async (model: string, inputs: unknown) => {
+    const text = String((inputs as { messages: { content: string }[] }).messages[1].content);
+    const reply = await echo(model, inputs) as { response: { surcharges: unknown[] } };
+    reply.response.surcharges = lose(text) ? [] : [...text.matchAll(/^(Ventetid .+?) koster (\d+,\d{2}) kr\. (pr\. time)/gm)]
+      .map((match) => ({ label: match[1], kind: "amount", value: match[2], unit: match[3], scope: "", note: "" }));
+    return reply;
+  };
+}
+
+test("a part with the same text is answered from the part cache, in another PDF and through the job", async () => {
+  const company = "skive-plate-works";
+  const first = mockAi(reply3pl());
+  const read = await extractAgreement(company, "a.pdf", PDF_3PL, first.run);
+  if (read.result !== "extracted") return assert.fail(read.result);
+  assert.ok(first.calls.length >= 1);
+  // Other bytes, same text: a resaved copy, or a copy with only page groups in common.
+  const copy = Buffer.concat([PDF_3PL, Buffer.from("\n")]);
+  const second = mockAi({ response: { carrier: "", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], items: [], grids: [], surcharges: [], conditions: [] } });
+  const again = await extractAgreement(company, "b.pdf", copy, second.run);
+  if (again.result !== "extracted") return assert.fail(again.result);
+  assert.equal(second.calls.length, 0, "every part came from the cache");
+  assert.deepEqual({ ...again.extract, sha256: "", filename: "", createdAt: "", usage: null }, { ...read.extract, sha256: "", filename: "", createdAt: "", usage: null });
+  assert.equal(again.extract.usage, null, "a cached part costs no tokens");
+
+  const prepared = await prepareExtract(company, "c.pdf", Buffer.concat([copy, Buffer.from("\n")]), false, "agreement");
+  if (prepared.result !== "ready") return assert.fail(prepared.result);
+  assert.ok(openJob(company, prepared).plans.every((plan) => plan.cached?.length), "the Durable Object gets the cached replies with the job");
+  const fresh = await prepareExtract(company, "c.pdf", copy, true, "agreement");
+  if (fresh.result !== "ready") return assert.fail(fresh.result);
+  assert.ok(fresh.plans.every((plan) => !plan.cached), "Læs igen reads every part again");
+  const other = await prepareExtract("esbjerg-rig-supply", "c.pdf", copy, false, "agreement");
+  if (other.result !== "ready") return assert.fail(other.result);
+  assert.ok(other.plans.every((plan) => !plan.cached), "the cache is per company");
 });

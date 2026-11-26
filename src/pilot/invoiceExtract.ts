@@ -83,7 +83,11 @@ export type AiInputs = {
   response_format: { type: "json_schema"; json_schema: Record<string, unknown> };
   max_tokens: number;
   temperature: number;
+  /** Fixed, so the same request samples the same way; Workers AI accepts 1 to 9999999999. */
+  seed: number;
 };
+
+export const EXTRACT_SEED = 1;
 
 const text = { type: "string" } as const;
 const number = { type: "number" } as const;
@@ -165,6 +169,7 @@ export function buildExtractRequest(pdfText: string): { inputs: AiInputs; trunca
       response_format: { type: "json_schema", json_schema: EXTRACT_JSON_SCHEMA },
       max_tokens: 8000,
       temperature: 0,
+      seed: EXTRACT_SEED,
     },
   };
 }
