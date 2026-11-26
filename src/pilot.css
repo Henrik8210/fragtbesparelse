@@ -286,7 +286,8 @@ small { font-size: .8rem; }
 .agreement-review .check-table td:nth-child(2) input { min-width: 140px; }
 .agreement-review .check-table td:nth-child(3) input { min-width: 90px; }
 .agreement-review .check-table input.num { min-width: 84px; }
-.agreement-review .review-flag { color: #b78105; vertical-align: middle; }
+.agreement-review .review-flag { color: #b78105; vertical-align: middle; margin-left: 3px; }
+.agreement-review .check-table .check-index { width: 40px; white-space: nowrap; }
 @media (max-width: 720px) { .review-fields { grid-template-columns: 1fr 1fr; } }
 .review-sections { display: grid; gap: 4px; max-height: min(58dvh, 620px); border: 0; border-radius: 0; }
 .review-section { display: grid; gap: 6px; padding: 10px 0 14px; border-top: 1px solid var(--line); }

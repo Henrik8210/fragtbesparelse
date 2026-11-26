@@ -168,7 +168,7 @@ test("reads a 3PL agreement into items, a price grid, surcharges and conditions"
   assert.equal(done.result, "extracted");
   if (done.result !== "extracted") return;
   const extract = done.extract;
-  assert.equal(extract.version, 4);
+  assert.equal(extract.version, 5);
   assert.equal(extract.validFrom, "2027-03-01");
   assert.deepEqual(extract.items.map((item) => [item.unit, item.price]), [
     ["pr. palle pr. uge", 9.4], ["pr. hyldemeter pr. måned", 31.75], ["pr. ordre", 6.85], ["pr. ordrelinje", 1.92], ["pr. time", 412.5],

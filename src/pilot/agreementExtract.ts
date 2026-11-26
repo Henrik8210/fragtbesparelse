@@ -8,7 +8,7 @@ import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
 import { EXTRACT_MODEL, isoDate, printedAmounts, type AiInputs, type Confidence } from "./invoiceExtract.ts";
 import { lostPartIssues, PART_MIN_PRICES, printedOre, type PartPlan, type PartReport } from "./agreementParts.ts";
 
-export const AGREEMENT_EXTRACT_VERSION = 4;
+export const AGREEMENT_EXTRACT_VERSION = 5;
 export const AGREEMENT_CACHE_PREFIX = "agreement:";
 export const AGREEMENT_NO_TEXT = "PDF'en er kun et billede (fx en scannet side) og har intet tekstlag, så priserne kan ikke læses. Brug en PDF med tekst, eller tilføj prisaftalen som CSV.";
 /** Text per model call. A 3PL rate sheet has hundreds of numbers, more than one reply can hold, so pages are read in groups. */
@@ -189,13 +189,13 @@ Rules:
 - Copy every number exactly as printed, in Danish notation, e.g. "1.234,50". Never compute, convert or invent a price.
 - The carrier is the supplier that issues the agreement and does the work. The customer is who it is for: in "Rateblad for X", "Prisaftale for X" or "Tilbud til X", X is the customer, never the carrier.
 - Every line with a description and one price, e.g. "Pluk pr. kolli  1,57  DKK", is an item. Return every such line; never skip, merge or summarise them. A row inside a table is part of that grid, never an item.
-- The carrier is the full company name as printed (e.g. "Nordfragt A/S" becomes "Nordfragt"), never an abbreviation used in headings.
+- The carrier is the full company name exactly as printed in this document without its legal suffix (A/S, ApS, AB), never an abbreviation used in headings. Return "" when no company name is printed in this part.
 - A surcharge whose percentages are listed in bullets under it is percent, one surcharge per bullet, with the value printed there.
 - A price per hour, day, order or unit followed by DKK is an item or an amount, never a percent.
 - A single price with a description and a unit is an item. A table with tiers down the side and regions, receiver types, destinations, zones or islands across the top is a grid; return every cell.
 - The first cell of a grid's header row (Destination, Postnr., Ø Navn, Zone) names the row-label column. It is not a price column. Each column has one value per row, in printed order.
 - In a grid, rows labelled Minimum or Maksimum go in minimum and maximum, not in rows. A second header line (receiver type, Postnr., postcodes) goes in the column detail.
-- Parcel prices by weight step (service and max kg) are rates.
+- Parcel prices by weight step (service and max kg) are rates. A table with tiers in pallets (ppl, pll), loading metres (ldm), FTL or colli is a grid, never rates.
 - Fuel (olietillæg, brændstof), refrigeration (køletillæg), ETS, toll and dangerous goods supplements are surcharges. "Skal aftales" or "aftales separat" is kind "agreed" with value "".
 - Bullet points under headings like Forudsætninger and Generelle forudsætninger are conditions. Copy them as printed.
 - Only use what is in this part of the document. Return empty arrays for what is not in it.`;
@@ -403,7 +403,8 @@ const initials = (name: string) => name.split(/[\s&-]+/).filter(Boolean).map((wo
 /**
  * The issuing company. The model's answers count, except one that names the customer; then the company with a
  * legal suffix (A/S, ApS, AB …) named most often in the text, again not the customer. An answer that is that company's
- * initials or the start of its name ("NF" for Nord Fragt A/S) becomes the full name.
+ * initials or the start of its name ("NF" for Nord Fragt A/S) becomes the full name. An answer whose first word the
+ * text does not print, and that is not such a short form, does not count.
  */
 export function issuingCarrier(answers: string[], pdfText: string): string {
   const customer = squash(agreementCustomer(pdfText));
@@ -429,11 +430,18 @@ export function issuingCarrier(answers: string[], pdfText: string): string {
     });
     return found?.name ?? answer;
   };
+  const words = ` ${text.toLowerCase().replace(/[^\p{L}\p{N}&]+/gu, " ")} `;
+  const printed = (name: string) => {
+    const lead = name.toLowerCase().replace(/[^\p{L}\p{N}&]+/gu, " ").trim().split(" ")[0] ?? "";
+    return lead.length > 0 && words.includes(` ${lead} `);
+  };
   const votes = new Map<string, { name: string; count: number }>();
   for (const answer of answers) {
     const name = baseName(answer);
     if (!name || isCustomer(name)) continue;
     const full = fullName(name);
+    // A name the PDF does not print (one the model brought along) is not the issuer.
+    if (full === name && !printed(name)) continue;
     const key = squash(full);
     votes.set(key, { name: votes.get(key)?.name ?? full, count: (votes.get(key)?.count ?? 0) + 1 });
   }
@@ -565,6 +573,64 @@ export function alignToPrintedHeader(grid: ExtractGrid, pdfText: string): Extrac
   return grid;
 }
 
+const NOT_WEIGHT = /\b(?:ppl|pll|paller?|pallepladser?|ldm|ftl|ltl|colli|kolli|stk|m3|cbm)\b/i;
+const WEIGHT = /\bkg\b/i;
+
+/**
+ * Rates the model read from a table whose tiers are pallets, loading metres or FTL ("0 – 3 ppl  2.025,14  2.935,04 …")
+ * are not parcel prices by weight. They become that table as a grid, rebuilt from the printed lines, and leave the rates.
+ */
+export function palletRates(rates: AgreementRate[], pdfText: string, currency: string): { rates: AgreementRate[]; grids: ExtractGrid[] } {
+  const lines = pdfText.normalize("NFKC").replace(/[\u00a0\u2007\u2009\u202f]/g, " ").split("\n");
+  const rows = lines.map(cellsOf);
+  const tierAt = (price: string) => rows.flatMap((cells, at) => cells.slice(1).includes(price) ? [at] : []);
+  const moved = new Map<string, { service: string; zones: string[]; at: Set<number>; rates: AgreementRate[] }>();
+  const kept: AgreementRate[] = [];
+  for (const rate of rates) {
+    const found = rate.baseOre > 0 ? tierAt(danishNumber(rate.baseOre / 100)) : [];
+    const pallet = found.length > 0 && found.some((at) => NOT_WEIGHT.test(rows[at][0])) && !found.some((at) => WEIGHT.test(rows[at][0]));
+    if (!pallet) {
+      kept.push(rate);
+      continue;
+    }
+    const key = squash(rate.service) || "prisgitter";
+    const group = moved.get(key) ?? { service: rate.service || "Prisgitter", zones: [], at: new Set<number>(), rates: [] };
+    if (rate.zone && !group.zones.includes(rate.zone)) group.zones.push(rate.zone);
+    for (const at of found) if (NOT_WEIGHT.test(rows[at][0])) group.at.add(at);
+    group.rates.push(rate);
+    moved.set(key, group);
+  }
+  const grids: ExtractGrid[] = [];
+  for (const group of moved.values()) {
+    const first = Math.min(...group.at);
+    const width = rows[first].length;
+    // The table runs on from its first tier while lines keep the same number of cells, so tiers the model skipped come along.
+    let last = first;
+    while (last + 1 < rows.length && rows[last + 1].length === width && printedOre(lines[last + 1]).size) last += 1;
+    const header = rows.slice(Math.max(0, first - 3), first).reverse().find((cells) => cells.length === width && !printedOre(cells.join(" ")).size);
+    const columns = header ? header.slice(1) : group.zones;
+    if (columns.length !== width - 1) {
+      kept.push(...group.rates);
+      continue;
+    }
+    grids.push({
+      name: group.service.slice(0, 80),
+      category: "",
+      unit: "",
+      currency,
+      rowLabel: header?.[0] ?? "",
+      columns: columns.map((label) => ({ label: label.slice(0, 80), detail: "" })),
+      rows: rows.slice(first, last + 1).map((cells) => ({ label: cells[0].slice(0, 80), cells: cells.slice(1).map(cellValue) })),
+      minimum: [],
+      maximum: [],
+      note: "",
+      unprinted: [],
+      issues: [],
+    });
+  }
+  return { rates: kept, grids };
+}
+
 function danishNumber(value: number): string {
   return new Intl.NumberFormat("da-DK", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true }).format(value);
 }
@@ -603,7 +669,7 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
 
   // A rate with no price and no weight that only repeats a grid's name is the grid read twice.
   const gridNames = new Set(parts.flatMap((part) => part.grids.map((grid) => squash(grid.name))).filter(Boolean));
-  const rates: AgreementRate[] = parts.flatMap((part) => part.rates)
+  const readRates: AgreementRate[] = parts.flatMap((part) => part.rates)
     .filter((rate) => ore(rate.price) > 0 || rate.maxWeightKg > 0 || !gridNames.has(squash(rate.service)))
     .slice(0, MAX_RATES).map((rate) => {
     const rowIssues: string[] = [];
@@ -619,6 +685,9 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     if (ownFuel && !printed(ownFuel)) rowIssues.push("Brændstofprocenten står ikke ordret i PDF'en.");
     return { service: rate.service, zone: rate.zone, maxWeight, baseOre, fuelPct: ownFuel, fixedOre: ownFixedOre, issues: rowIssues };
   });
+  const readGridNames = new Set(parts.flatMap((part) => part.grids.map((grid) => squash(grid.name))));
+  const { rates, grids: palletGrids } = palletRates(readRates, pdfText, currency);
+  const tableGrids = palletGrids.filter((grid) => !readGridNames.has(squash(grid.name)));
 
   const items: ExtractItem[] = parts.flatMap((part) => part.items).filter((item) => item.description).slice(0, MAX_ITEMS).map((item) => {
     const price = cellValue(item.price);
@@ -639,6 +708,7 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
 
   const heldPrices = new Set<number>([
     ...rates.map((rate) => rate.baseOre),
+    ...tableGrids.flatMap((grid) => grid.rows.flatMap((row) => row.cells)).flatMap((value) => value === null ? [] : [ore(value)]),
     ...items.flatMap((item) => item.price === null ? [] : [ore(item.price)]),
     ...parts.flatMap((part) => [...part.grids.flatMap((grid) => [...grid.rows.flatMap((row) => row.cells), ...grid.minimum, ...grid.maximum]),
       ...part.surcharges.map((item) => item.value)]).flatMap((value) => {
@@ -693,7 +763,7 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     for (const { column, index } of empty) issues.push(`Kolonnen «${column.label || index + 1}» har ingen priser. Kontrollér kolonnerne.`);
     if (grid.columns.some((column) => !column.label.trim() || isHeaderCell(column.label, grid))) issues.push("En kolonne mangler sit navn.");
     return { ...grid, issues };
-  });
+  }).concat(tableGrids).slice(0, MAX_GRIDS);
 
   const surcharges: ExtractSurcharge[] = parts.flatMap((part) => part.surcharges).filter((item) => item.label && !VAT.test(item.label)).slice(0, MAX_SURCHARGES).map((item) => {
     const value = cellValue(item.value);

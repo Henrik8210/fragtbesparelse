@@ -3,7 +3,7 @@ import { agreementFromRows } from "./agreements.ts";
 import { readContent } from "./agreementFormat.ts";
 import {
   AGREEMENT_CHUNK_CHARS, AGREEMENT_MAX_CHUNKS, agreementChunks, agreementRatesToRows, buildAgreementBatches, cellValue,
-  extractTerms, printedPrices, rateService, validateAgreementExtract,
+  extractTerms, issuingCarrier, printedPrices, rateService, validateAgreementExtract,
 } from "./agreementExtract.ts";
 import { runAudit } from "./freight.ts";
 
@@ -25,7 +25,8 @@ const reply = (rates: unknown[], extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-const GRID_TEXT = `Distribution Sverige pr. palleplads
+const GRID_TEXT = `Prisblad DAO
+Distribution Sverige pr. palleplads
 Pallepladser  Syd  Midt  Nord
 1  1.250,00  1.410,50  1.890,25
 2-4  980,40  1.105,00  1.512,75
@@ -295,5 +296,61 @@ Olietillæg reguleres månedligt.`;
   it("does not take a reply that is not an agreement object as an empty part", () => {
     const wrapped = validateAgreementExtract([{ response: {} }, reply([])], TEXT, { sha256: "x", filename: "x.pdf" });
     expect(wrapped.issues).toContain("1 af 2 dele af PDF'en kunne ikke læses.");
+  });
+});
+
+const PALLET_TEXT = `Prisaftale fra Vest Logistik A/S
+Rateblad for Kunde Handel
+Hasteleverancer
+Raterne er angivet i DKK for levering samme dag.
+Område  Zone 1  Zone 2  Øer
+0 – 3 ppl  1.025,14  1.935,04  3.303,29
+3,1 – 15 ppl  702,61  1.151,08  2.341,20
+15,1 ppl - FTL  437,13  733,57  1.531,15
+Ab lager gælder Zone 1 satser.
+Med venlig hilsen
+Vest Logistik A/S`;
+
+describe("a pallet table read as parcel rates, and a carrier the PDF does not print", () => {
+  const prices: Record<string, string[]> = { "Zone 1": ["1.025,14", "702,61", "437,13"], "Zone 2": ["1.935,04", "1.151,08", "733,57"], "Øer": ["3.303,29", "2.341,20", "1.531,15"] };
+  const rates = Object.entries(prices).flatMap(([zone, column]) => column.map((price, tier) => ({
+    service: "Hasteleverancer", zone, maxWeightKg: [3, 15, 0][tier], price, fuelPercent: 0, fixedSurcharge: 0,
+  })));
+  const part = (carrier: string, extra: Record<string, unknown> = {}) => ({
+    carrier, title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], items: [], grids: [], surcharges: [], conditions: [], ...extra,
+  });
+  const extract = validateAgreementExtract([part("Nordfragt", { rates: rates.slice(0, 7) }), part("Nordfragt"), part("VL")], PALLET_TEXT, { sha256: "x", filename: "x.pdf" });
+
+  it("moves the rows out of the parcel rates into the printed table, tiers the model skipped included", () => {
+    expect(extract.rates).toEqual([]);
+    expect(extract.grids).toHaveLength(1);
+    expect(extract.grids[0]).toMatchObject({
+      name: "Hasteleverancer", rowLabel: "Område",
+      columns: [{ label: "Zone 1", detail: "" }, { label: "Zone 2", detail: "" }, { label: "Øer", detail: "" }],
+      rows: [
+        { label: "0 – 3 ppl", cells: [1025.14, 1935.04, 3303.29] },
+        { label: "3,1 – 15 ppl", cells: [702.61, 1151.08, 2341.2] },
+        { label: "15,1 ppl - FTL", cells: [437.13, 733.57, 1531.15] },
+      ],
+    });
+    expect(extract.coverage.captured).toBe(extract.coverage.printed);
+  });
+
+  it("keeps a parcel rate by weight", () => {
+    const text = `Pakker\nVægt  Zone 1\n0 - 5 kg  41,25\n5 - 10 kg  48,00`;
+    const read = validateAgreementExtract([part("", { rates: [{ service: "Pakker", zone: "Zone 1", maxWeightKg: 5, price: "41,25", fuelPercent: 0, fixedSurcharge: 0 }] })], text, { sha256: "x", filename: "x.pdf" });
+    expect(read.rates).toHaveLength(1);
+    expect(read.grids).toEqual([]);
+  });
+
+  it("does not take a carrier name the PDF does not print", () => {
+    expect(extract.carrier).toBe("Vest Logistik");
+    expect(issuingCarrier(["Nordfragt"], PALLET_TEXT)).toBe("Vest Logistik");
+  });
+
+  it("names no company as an example in the prompt", () => {
+    const { batches } = buildAgreementBatches(PALLET_TEXT);
+    const prompt = JSON.stringify(batches[0]);
+    expect(prompt).not.toMatch(/Nordfragt/i);
   });
 });
