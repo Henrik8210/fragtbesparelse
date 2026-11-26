@@ -18,7 +18,7 @@ export function updatePriceAgreement(companyId: string, id: string, patch: Agree
   return api(`/api/price-agreements/${encodeURIComponent(id)}${query(companyId)}`, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
-export function deletePriceAgreement(companyId: string, id: string): Promise<{ deleted: string; store: AgreementStore }> {
+export function deletePriceAgreement(companyId: string, id: string): Promise<{ deleted: string; store: AgreementStore; clearedChoices: string[] }> {
   return api(`/api/price-agreements/${encodeURIComponent(id)}${query(companyId)}`, { method: "DELETE" });
 }
 

@@ -6,7 +6,8 @@ import {
 } from "lucide-react";
 import { ApiError, api } from "../api.ts";
 import { carrierProfiles } from "../data/carriers.ts";
-import { agreementFromCsv, agreementFromRows, sampleAgreement, splitAgreements, todayIso, type Agreement } from "./agreements.ts";
+import { agreementFromCsv, agreementFromRows, companyAgreements, splitAgreements, todayIso, type Agreement } from "./agreements.ts";
+import { forgetAgreementChoices } from "./choiceClient.ts";
 import { createPriceAgreement, deletePriceAgreement, listPriceAgreements, migrateBrowserAgreements, updatePriceAgreement, type AgreementStore } from "./agreementClient.ts";
 import { extractOriginalRows, recordToAgreement, type AgreementCreate, type AgreementPatch } from "./agreementRecord.ts";
 import { MOBILE_NAV, useDrawer, useMedia, useRail } from "./AppNav.tsx";
@@ -25,7 +26,7 @@ import {
   BENCHMARK_SERVICES, WEIGHT_BANDS, serviceKey,
   type AuditIndexEntry, type AuditInput, type AuditReport, type Contribution, type InvoiceRow, type RateRow,
 } from "./freight.ts";
-import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, orgRateRows, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
+import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, ORGS, peerCount, saveOrgId, type Org } from "./orgs.ts";
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
 import { loadMailFile, saveBlob } from "./mailFiles.ts";
 import { CheckedNote, ExtractPanel } from "./ExtractPanel.tsx";
@@ -118,11 +119,6 @@ function invoiceChoices(org: Org, checks: StoredAudit[], mails: MailRow[]): Past
   return [...fromChecks, ...fromMail];
 }
 
-function orgAgreements(org: Org, saved: Agreement[]): Agreement[] {
-  const sample = sampleAgreement(org.id, org.carrier, orgRateRows(org));
-  return [...(sample ? [sample] : []), ...saved.filter((item) => item.orgId === org.id)];
-}
-
 /** Rate files from earlier checks. Saved agreements are matched on the invoice dates instead. */
 function rateChoices(checks: StoredAudit[]): PastSource[] {
   const fromChecks = checks.flatMap((check) => {
@@ -200,7 +196,7 @@ export function PilotApp() {
     return invoiceChoices(org, checks, mails);
   }, [admin, org, checks, libraryMail]);
   const [savedAgreements, setSavedAgreements] = useState<{ orgId: string; items: Agreement[]; store: AgreementStore | ""; error: string }>({ orgId: "", items: [], store: "", error: "" });
-  const agreements = useMemo(() => orgAgreements(org, savedAgreements.orgId === org.id ? savedAgreements.items : []), [org, savedAgreements]);
+  const agreements = useMemo(() => companyAgreements(org.id, savedAgreements.orgId === org.id ? savedAgreements.items : []), [org.id, savedAgreements]);
   const pastRates = useMemo(() => rateChoices(checks), [checks]);
   const [addingAgreement, setAddingAgreement] = useState<{ carrier: string } | null>(null);
   const inCheck = view === "check" || view === "report" || view === "inbox" || view === "agreements";
@@ -303,6 +299,7 @@ export function PilotApp() {
 
   const removeAgreement = useCallback(async (id: string) => {
     await deletePriceAgreement(org.id, id);
+    forgetAgreementChoices(org.id, id);
     setSavedAgreements((current) => ({ ...current, items: current.items.filter((item) => item.id !== id) }));
   }, [org.id]);
 
@@ -2270,9 +2267,22 @@ function AgreementsView({ org, agreements, store, loadError, onCreate, onPatch, 
     onPatch(id, { ended: ended ? new Date().toISOString() : null }).catch(fail);
   }
 
-  function remove(id: string) {
+  const [deleting, setDeleting] = useState<{ agreement: Agreement; state: "active" | "historic" } | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  async function confirmRemove() {
+    if (!deleting) return;
     setProblem("");
-    onRemove(id).catch(fail);
+    setRemoving(true);
+    try {
+      await onRemove(deleting.agreement.id);
+      setDeleting(null);
+    } catch (error) {
+      setDeleting(null);
+      fail(error);
+    } finally {
+      setRemoving(false);
+    }
   }
 
   const list = (items: Agreement[], state: "active" | "historic") => items.length === 0 ? (
@@ -2288,7 +2298,7 @@ function AgreementsView({ org, agreements, store, loadError, onCreate, onPatch, 
           onToggle={() => setExpanded((current) => current === item.id ? "" : item.id)}
           onEnd={() => setEnded(item.id, true)}
           onRestore={() => setEnded(item.id, false)}
-          onRemove={() => remove(item.id)}
+          onRemove={() => { setProblem(""); setDeleting({ agreement: item, state }); }}
         />
       ))}
     </ul>
@@ -2325,6 +2335,19 @@ function AgreementsView({ org, agreements, store, loadError, onCreate, onPatch, 
           }}
         />
       ) : null}
+      {deleting ? (
+        <Modal title="Slet prisaftale" compact onClose={() => { if (!removing) setDeleting(null); }}>
+          <p>
+            Vil du slette <strong>{deleting.agreement.name}</strong> for {org.name}?
+            {deleting.state === "active" ? " Aftalen er aktiv og bruges i nye fakturatjek." : ""}
+          </p>
+          <p className="quiet">Aftalen kan ikke gendannes. Fakturaer, hvor den er valgt manuelt, matches igen automatisk efter dato.</p>
+          <div className="confirm-actions">
+            <button type="button" className="button secondary" disabled={removing} onClick={() => setDeleting(null)}>Annuller</button>
+            <button type="button" className="button primary danger" disabled={removing} onClick={() => void confirmRemove()}>{removing ? "Sletter…" : "Slet prisaftale"}</button>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -2343,28 +2366,26 @@ function AgreementRow({ agreement, state, open, onToggle, onEnd, onRestore, onRe
     : "Ingen gyldighed angivet";
   const terms = agreement.terms;
   const size = agreement.rows.length + (terms ? terms.items.length + terms.grids.length + terms.surcharges.length : 0);
-  const meta = [agreement.carrier, period, `${size} ${size === 1 ? "pris" : "priser"}`, agreement.source === "pdf" ? "Læst fra PDF" : "", agreement.changed ? "Rettet efter indlæsning" : "", agreement.createdByName ? `Tilføjet af ${agreement.createdByName}` : "", agreement.sample ? "Prøvedata" : ""].filter(Boolean).join(" · ");
+  const meta = [agreement.carrier, period, `${size} ${size === 1 ? "pris" : "priser"}`, agreement.source === "pdf" ? "Læst fra PDF" : "", agreement.changed ? "Rettet efter indlæsning" : "", agreement.createdByName ? `Tilføjet af ${agreement.createdByName}` : ""].filter(Boolean).join(" · ");
   return (
     <li className="agreement-item">
       <button type="button" className="agreement-row" aria-expanded={open} onClick={onToggle}>
         <span className={`state-dot ${state}`} aria-label={state === "active" ? "Aktiv" : "Historisk"} />
-        <span className="agreement-name"><strong>{agreement.sample ? agreement.carrier || agreement.name : agreement.name}</strong><small>{meta}</small></span>
+        <span className="agreement-name"><strong>{agreement.name}</strong><small>{meta}</small></span>
         <ChevronDown size={16} className={open ? "rotate" : undefined} />
       </button>
       {open ? (
         <div className="agreement-detail">
           {agreement.rows.length ? <RateTable rows={agreement.rows} /> : null}
           {terms ? <AgreementTermsView terms={terms} /> : null}
-          {agreement.sample ? null : (
-            <div className="agreement-actions">
-              {agreement.ended ? (
-                <button type="button" className="text-button" onClick={onRestore}>Gør aktiv igen</button>
-              ) : state === "active" ? (
-                <button type="button" className="text-button" onClick={onEnd}>Afslut aftale</button>
-              ) : null}
-              <button type="button" className="text-button muted" onClick={onRemove}>Slet</button>
-            </div>
-          )}
+          <div className="agreement-actions">
+            {agreement.ended ? (
+              <button type="button" className="text-button" onClick={onRestore}>Gør aktiv igen</button>
+            ) : state === "active" ? (
+              <button type="button" className="text-button" onClick={onEnd}>Afslut aftale</button>
+            ) : null}
+            <button type="button" className="text-button muted" onClick={onRemove}>Slet</button>
+          </div>
         </div>
       ) : null}
     </li>

@@ -50,19 +50,12 @@ export function rowSpan(rows: RateRow[]): { from: string; to: string } {
   return { from: froms[0] ?? "", to: tos.length && tos.every(Boolean) ? [...tos].sort().at(-1) ?? "" : "" };
 }
 
-export function sampleAgreement(orgId: string, carrier: string, rows: RateRow[]): Agreement | null {
-  if (!rows.length) return null;
-  const span = rowSpan(rows);
-  return {
-    id: `sample:${orgId}`,
-    orgId,
-    name: "Prøveaftale",
-    carrier,
-    ...span,
-    rows,
-    createdAt: span.from ? `${span.from}T00:00:00.000Z` : "",
-    sample: true,
-  };
+/**
+ * The agreements Prisaftaler shows for one company: only rows read from price_agreements. A sample company's
+ * October rate file is not an agreement, so nothing is listed that the table does not hold.
+ */
+export function companyAgreements(orgId: string, saved: Agreement[]): Agreement[] {
+  return saved.filter((item) => item.orgId === orgId && !item.sample);
 }
 
 function sameCarrier(left: Agreement, right: Agreement) {

@@ -31,3 +31,10 @@ export async function setChoice(companyId: string, fileId: string, agreementId: 
   lists.set(companyId, Promise.resolve(next));
   return saved;
 }
+
+/** After an agreement is deleted, its choices are gone on the server; drop them here so those invoices match on their dates. */
+export function forgetAgreementChoices(companyId: string, agreementId: string) {
+  const hit = lists.get(companyId);
+  if (!hit) return;
+  lists.set(companyId, hit.then((current) => new Map([...current].filter(([, choice]) => choice.agreementId !== agreementId))));
+}
