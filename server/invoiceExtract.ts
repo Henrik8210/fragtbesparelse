@@ -7,7 +7,7 @@ import {
   AGREEMENT_CACHE_PREFIX, AGREEMENT_EXTRACT_VERSION, buildAgreementBatches, validateAgreementExtract,
   type AgreementExtract,
 } from "../src/pilot/agreementExtract.ts";
-import { readParts, type PartPlan, type PartReport } from "../src/pilot/agreementParts.ts";
+import { partShort, readParts, type PartPlan, type PartReport } from "../src/pilot/agreementParts.ts";
 import { postgresSql, storesInPostgres } from "./db.ts";
 import { pdfText } from "./pdfText.ts";
 
@@ -19,7 +19,7 @@ type AnyExtract = InvoiceExtract | AgreementExtract;
 
 export type Prepared<K extends ExtractKind = "invoice"> =
   | { result: "cached"; extract: ExtractOf<K> }
-  | { result: "ready"; kind: K; sha256: string; filename: string; text: string; batches: AiInputs[]; plans: PartPlan[]; truncated: boolean }
+  | { result: "ready"; kind: K; sha256: string; filename: string; text: string; batches: AiInputs[]; plans: PartPlan[]; truncated: boolean; partKeys: string[] }
   | { result: "no-text" | "not-pdf" | "pdf" };
 
 /** `inputs` is the first batch, for a Durable Object that predates `batches`. `plans` lets it check and retry each part. */
@@ -64,7 +64,11 @@ const JOB_TTL_MS = 15 * 60 * 1000;
 export const BATCH_TIMEOUT_MS = 150_000;
 const MEMORY_KEEP = 300;
 const memory = new Map<string, AnyExtract>();
-const jobs = new Map<string, { kind: ExtractKind; companyId: string; sha256: string; filename: string; text: string; truncated: boolean; expires: number }>();
+const jobs = new Map<string, { kind: ExtractKind; companyId: string; sha256: string; filename: string; text: string; truncated: boolean; partKeys: string[]; expires: number }>();
+/** Agreement parts by request hash: a page group with the same text gets the same reply, in any PDF of that company. */
+export const PART_CACHE_PREFIX = "agreement-part:";
+const PART_MEMORY_KEEP = 600;
+const partMemory = new Map<string, unknown[]>();
 
 export function sha256Of(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -95,7 +99,18 @@ export async function prepareExtract<K extends ExtractKind = "invoice">(
   }
   if (text.replace(/\s/g, "").length < 20) return { result: "no-text" };
   const { batches, plans = [], truncated } = SPECS[kind].build(text);
-  return { result: "ready", kind, sha256, filename, text, batches, plans, truncated };
+  const partKeys = kind === "agreement" ? batches.map(partKey) : [];
+  if (!refresh) {
+    await Promise.all(partKeys.map(async (key, index) => {
+      const cached = plans[index] ? await cachedPart(companyId, key) : null;
+      if (cached) plans[index] = { ...plans[index], cached };
+    }));
+  }
+  return { result: "ready", kind, sha256, filename, text, batches, plans, truncated, partKeys };
+}
+
+export function partKey(batch: AiInputs): string {
+  return createHash("sha256").update(`${EXTRACT_MODEL}\n${AGREEMENT_EXTRACT_VERSION}\n${JSON.stringify(batch)}`).digest("hex");
 }
 
 export async function finishExtract<K extends ExtractKind>(
@@ -113,6 +128,7 @@ export async function finishExtract<K extends ExtractKind>(
     parts,
   }) as ExtractOf<K>;
   await storeExtract(companyId, prepared.kind, extract);
+  await storeParts(companyId, prepared.partKeys, outputs, parts);
   return extract;
 }
 
@@ -186,6 +202,7 @@ export function openJob<K extends ExtractKind>(companyId: string, prepared: Extr
     filename: prepared.filename,
     text: prepared.text,
     truncated: prepared.truncated,
+    partKeys: prepared.partKeys,
     expires: now + JOB_TTL_MS,
   });
   return { id, model: EXTRACT_MODEL, inputs: prepared.batches[0], batches: prepared.batches, plans: prepared.plans };
@@ -282,5 +299,59 @@ async function storeExtract(companyId: string, kind: ExtractKind, extract: AnyEx
   } catch (error) {
     // The table is optional. The in-process copy above still answers repeat requests.
     noteTableError(error);
+  }
+}
+
+async function cachedPart(companyId: string, key: string): Promise<unknown[] | null> {
+  if (tableUsable()) {
+    try {
+      const rows = await postgresSql<{ extract: unknown }>(
+        "select extract from public.invoice_extracts where company_id = $1 and content_sha256 = $2 and version = $3",
+        [companyId, PART_CACHE_PREFIX + key, AGREEMENT_EXTRACT_VERSION],
+      );
+      const value = rows[0]?.extract;
+      const parsed = (typeof value === "string" ? JSON.parse(value) : value) as { outputs?: unknown } | undefined;
+      if (Array.isArray(parsed?.outputs) && parsed.outputs.length) return parsed.outputs;
+    } catch (error) {
+      noteTableError(error);
+    }
+  }
+  return partMemory.get(`${companyId}\n${key}`) ?? null;
+}
+
+/**
+ * Keeps each part's replies under its request hash. Only a part read in full counts: a failed or short read, or one
+ * that came from this cache, is not stored, so a bad reply is read again next time instead of being repeated.
+ */
+async function storeParts(companyId: string, keys: string[], outputs: unknown[], reports?: PartReport[]): Promise<void> {
+  if (!keys.length || !reports || reports.length !== keys.length || reports.some((report) => typeof report.outputs !== "number")) return;
+  let at = 0;
+  for (const [index, report] of reports.entries()) {
+    const own = outputs.slice(at, at + (report.outputs ?? 0));
+    at += report.outputs ?? 0;
+    if (report.failed || report.cached || partShort(report.captured, report.expected) || !own.length || own.some((output) => !output)) continue;
+    // Token usage stays with the read that paid for it.
+    const kept = own.map((output) => output && typeof output === "object" && "response" in output ? { response: (output as { response: unknown }).response } : output);
+    const memoryKey = `${companyId}\n${keys[index]}`;
+    partMemory.delete(memoryKey);
+    partMemory.set(memoryKey, kept);
+    while (partMemory.size > PART_MEMORY_KEEP) {
+      const oldest = partMemory.keys().next().value;
+      if (oldest === undefined) break;
+      partMemory.delete(oldest);
+    }
+    if (!tableUsable()) continue;
+    try {
+      await postgresSql(
+        `insert into public.invoice_extracts (company_id, content_sha256, version, model, confidence, extract)
+         values ($1, $2, $3, $4, 'part', $5::jsonb)
+         on conflict (company_id, content_sha256) do update
+         set version = excluded.version, model = excluded.model, confidence = excluded.confidence,
+             extract = excluded.extract, created_at = now()`,
+        [companyId, PART_CACHE_PREFIX + keys[index], AGREEMENT_EXTRACT_VERSION, EXTRACT_MODEL, JSON.stringify({ outputs: kept })],
+      );
+    } catch (error) {
+      noteTableError(error);
+    }
   }
 }

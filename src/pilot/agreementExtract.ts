@@ -5,10 +5,10 @@ import {
 } from "./agreementFormat.ts";
 import { MAX_RATES, rateRowSchema, type RateRow } from "./freight.ts";
 import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
-import { EXTRACT_MODEL, isoDate, printedAmounts, type AiInputs, type Confidence } from "./invoiceExtract.ts";
+import { EXTRACT_MODEL, EXTRACT_SEED, isoDate, printedAmounts, type AiInputs, type Confidence } from "./invoiceExtract.ts";
 import { lostPartIssues, PART_MIN_PRICES, printedOre, type PartPlan, type PartReport } from "./agreementParts.ts";
 
-export const AGREEMENT_EXTRACT_VERSION = 5;
+export const AGREEMENT_EXTRACT_VERSION = 6;
 export const AGREEMENT_CACHE_PREFIX = "agreement:";
 export const AGREEMENT_NO_TEXT = "PDF'en er kun et billede (fx en scannet side) og har intet tekstlag, så priserne kan ikke læses. Brug en PDF med tekst, eller tilføj prisaftalen som CSV.";
 /** Text per model call. A 3PL rate sheet has hundreds of numbers, more than one reply can hold, so pages are read in groups. */
@@ -307,6 +307,7 @@ function agreementRequest(text: string, label: string): AiInputs {
     response_format: { type: "json_schema", json_schema: AGREEMENT_JSON_SCHEMA },
     max_tokens: 7000,
     temperature: 0,
+    seed: EXTRACT_SEED,
   };
 }
 
@@ -318,9 +319,11 @@ export function buildAgreementBatches(pdfText: string): { batches: AiInputs[]; p
     batches: parts.map((part, index) => agreementRequest(part.text, label(index))),
     plans: parts.map((part, index) => {
       const split = halves(part.text);
+      // Tables and "description  price  DKK" lines are read from the text itself, so only the rest must come from the model.
+      const own = new Set([...printedGrids(part.text).flatMap(gridValues), ...printedPriceLines(part.text).map((line) => ore(line.price))]);
       return {
         pages: part.pages,
-        prices: [...printedOre(part.text)],
+        prices: [...printedOre(part.text)].filter((price) => !own.has(price)),
         halves: split ? split.map((text, half) => agreementRequest(text, `${label(index)}, ${half ? "second" : "first"} half`)) : [],
       };
     }),
@@ -528,6 +531,144 @@ export function listedPercents(label: string, pdfText: string): { value: number;
 
 const cellsOf = (line: string) => line.trim().split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
 
+const MONEY_CELL = /^(?:\d{1,3}(?:\.\d{3})+|\d+),\d{1,2}$/;
+const LIMIT_ROW = /^(minimum|min\.?|maks(?:imum)?\.?|max(?:imum)?\.?)(?:\s|$)/i;
+const NOT_TITLE = /^(?:raterne|priserne|alle priser|gældende|rateblad)\b/i;
+
+/** A table row: a label, then only prices ("2-3 pallepladser  184,81  245,21 …"). */
+function valueRow(cells: string[]): boolean {
+  return cells.length >= 2 && !MONEY_CELL.test(cells[0]) && /\p{L}|\d/u.test(cells[0]) && cells.slice(1).every((cell) => MONEY_CELL.test(cell));
+}
+
+/**
+ * Price tables read straight from the text layer: a run of rows with the same number of prices, the header line
+ * above them (with or without a row-label cell), a second header line as column detail, and Minimum or Maksimum
+ * rows as limits. Every cell is printed by construction, so a model grid that matches one takes its cells from here.
+ */
+export function printedGrids(pdfText: string, currency = "DKK"): ExtractGrid[] {
+  const lines = pdfText.normalize("NFKC").replace(/[\u00a0\u2007\u2009\u202f]/g, " ").split("\n");
+  const rows = lines.map(cellsOf);
+  const grids: ExtractGrid[] = [];
+  let index = 0;
+  while (index < rows.length) {
+    if (!valueRow(rows[index])) {
+      index += 1;
+      continue;
+    }
+    const width = rows[index].length;
+    let end = index;
+    while (end + 1 < rows.length && valueRow(rows[end + 1]) && rows[end + 1].length === width) end += 1;
+    const body = rows.slice(index, end + 1);
+    const priced = body.filter((cells) => !LIMIT_ROW.test(cells[0]));
+    if (body.length >= 2 && priced.length >= 1) {
+      // Header lines sit right above the rows; a wrapped tail ("2652") may come between. One cell never heads one column.
+      const fits = (cells: string[]) => cells.length === width || (cells.length === width - 1 && width > 2);
+      const headers: { cells: string[]; at: number }[] = [];
+      for (let at = index - 1, skipped = 0; at >= Math.max(0, index - 5); at -= 1) {
+        const cells = rows[at];
+        const usable = cells.length > 0 && !cells.some((cell) => MONEY_CELL.test(cell)) && !NOT_TITLE.test(lines[at].trim());
+        if (usable && fits(cells) && headers.length < 2) headers.unshift({ cells, at });
+        else if (headers.length || skipped++ >= 2) break;
+      }
+      const top = headers[0];
+      const detail = headers[1];
+      const names = (line?: { cells: string[] }) => !line ? [] : line.cells.length === width ? line.cells.slice(1) : line.cells;
+      const labels = names(top);
+      const details = names(detail);
+      const titleAt = (top?.at ?? index) - 1;
+      const title = lines.slice(Math.max(0, titleAt - 3), titleAt + 1).reverse().map((line) => line.trim())
+        .find((line) => /^\p{L}/u.test(line) && line.length >= 4 && !/\s{2,}/.test(line) && !NOT_TITLE.test(line) && !printedOre(line).size) ?? "";
+      const values = (cells: string[]) => cells.slice(1).map((cell) => cellValue(cell));
+      grids.push({
+        name: title.replace(/:$/, "").slice(0, 80) || grids[grids.length - 1]?.name || "Prisgitter",
+        category: "",
+        unit: "",
+        currency,
+        rowLabel: top && top.cells.length === width ? top.cells[0].slice(0, 60) : "",
+        columns: Array.from({ length: width - 1 }, (_, column) => ({ label: (labels[column] ?? `Kolonne ${column + 1}`).slice(0, 80), detail: (details[column] ?? "").slice(0, 80) })),
+        rows: priced.map((cells) => ({ label: cells[0].slice(0, 80), cells: values(cells) })),
+        minimum: values(body.find((cells) => /^min/i.test(cells[0])) ?? []),
+        maximum: values(body.find((cells) => /^ma(?:ks|x)/i.test(cells[0])) ?? []),
+        note: "",
+        unprinted: [],
+        issues: [],
+      });
+    }
+    index = end + 1;
+  }
+  return grids;
+}
+
+const gridValues = (grid: Pick<ExtractGrid, "rows" | "minimum" | "maximum">) =>
+  [...grid.rows.flatMap((row) => row.cells), ...grid.minimum, ...grid.maximum].flatMap((value) => value === null || value === undefined ? [] : [ore(value)]);
+
+/**
+ * The printed table a model grid was read from: the one holding most of its values, when that is at least half of them.
+ * A misread or skipped cell then comes from the text instead of being flagged.
+ */
+export function matchPrintedGrid(grid: Pick<ExtractGrid, "rows" | "minimum" | "maximum">, printed: ExtractGrid[], taken: Set<number>): number {
+  const own = gridValues(grid);
+  if (own.length < 2) return -1;
+  let best = -1;
+  let bestHits = 0;
+  printed.forEach((candidate, at) => {
+    if (taken.has(at)) return;
+    const values = new Set(gridValues(candidate));
+    const hits = own.filter((value) => values.has(value)).length;
+    if (hits > bestHits) {
+      best = at;
+      bestHits = hits;
+    }
+  });
+  return bestHits * 2 >= own.length ? best : -1;
+}
+
+const wordsOf = (text: string) => new Set(text.toLowerCase().normalize("NFKC").split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 1));
+
+/** Lines of running text, alone and joined with the next, as candidates for a condition the model reworded. */
+export function printedSentences(pdfText: string): string[] {
+  const lines = pdfText.normalize("NFKC").split("\n").map((line) => line.replace(/^[\s\u2022\u25e6\uf0b7\uf0a7\u25aa•◦-]+/, "").trim())
+    .filter((line) => line.length >= 12 && !/\s{2,}/.test(line));
+  return lines.flatMap((line, index) => index + 1 < lines.length ? [line, `${line} ${lines[index + 1]}`] : [line]);
+}
+
+/** The printed sentence sharing at least 70 % of its words with the condition, both ways; else empty. */
+export function closestSentence(condition: string, sentences: string[]): string {
+  const own = wordsOf(condition);
+  if (own.size < 3) return "";
+  let best = "";
+  let bestScore = 0;
+  for (const sentence of sentences) {
+    const words = wordsOf(sentence);
+    let shared = 0;
+    for (const word of own) if (words.has(word)) shared += 1;
+    const score = Math.min(shared / own.size, shared / words.size);
+    if (score > bestScore) {
+      best = sentence;
+      bestScore = score;
+    }
+  }
+  return bestScore >= 0.7 ? best.slice(0, 500) : "";
+}
+
+/** The printed table's title, cells, rows and column names; the model's category, unit and note, which the table does not hold. */
+function fromPrintedGrid(grid: ExtractGrid, table: ExtractGrid): ExtractGrid {
+  const named = table.columns.every((column) => !/^Kolonne \d+$/.test(column.label));
+  const columns = named ? table.columns : table.columns.map((column, index) => grid.columns[index] ?? column);
+  return {
+    ...table,
+    name: table.name === "Prisgitter" ? grid.name || table.name : table.name,
+    category: grid.category,
+    unit: grid.unit,
+    currency: grid.currency || table.currency,
+    rowLabel: table.rowLabel || grid.rowLabel,
+    columns,
+    note: grid.note,
+    unprinted: [],
+    issues: [],
+  };
+}
+
 /**
  * Takes a grid's column names from the header line printed above its first row ("Destination  Aarby  Bstrup …"), with
  * the Postnr. line under it as the column detail, when that header has as many names as the row has prices.
@@ -688,10 +829,22 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
   const readGridNames = new Set(parts.flatMap((part) => part.grids.map((grid) => squash(grid.name))));
   const { rates, grids: palletGrids } = palletRates(readRates, pdfText, currency);
   const tableGrids = palletGrids.filter((grid) => !readGridNames.has(squash(grid.name)));
+  const tables = printedGrids(pdfText, currency);
+  const printedLines = printedPriceLines(pdfText);
 
   const items: ExtractItem[] = parts.flatMap((part) => part.items).filter((item) => item.description).slice(0, MAX_ITEMS).map((item) => {
-    const price = cellValue(item.price);
-    const agreed = price === null && typeof item.price === "string" && AGREED.test(item.price);
+    const read = cellValue(item.price);
+    // A line printed once with this description gives the price, so a misread digit is corrected instead of flagged.
+    const key = squash(item.description);
+    const whole = squash(`${item.description} ${item.unit}`);
+    // "Manuel booking, pr. ordre" as one description is the printed line "Manuel booking" with its unit "pr. ordre".
+    const same = key.length >= 4 ? printedLines.filter((line) => {
+      const printedKey = squash(line.description);
+      const printedWhole = squash(`${line.description} ${line.unit}`);
+      return (printedKey === key && (!item.unit || !line.unit || squash(line.unit) === squash(item.unit))) || printedWhole === key || printedWhole === whole;
+    }) : [];
+    const agreed = read === null && typeof item.price === "string" && AGREED.test(item.price);
+    const price = same.length === 1 && !agreed ? same[0].price : read;
     const itemIssues: string[] = [];
     if (price === null && !agreed) itemIssues.push("Prisen mangler.");
     else if (price !== null && !printed(price)) itemIssues.push("Prisen står ikke ordret i PDF'en.");
@@ -723,7 +876,7 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
     items.push({ ...line, note: "", issues: [] });
   }
 
-  const grids: ExtractGrid[] = parts.flatMap((part) => part.grids).filter((grid) => grid.columns.length && grid.rows.length).slice(0, MAX_GRIDS).map((grid) => {
+  const modelGrids: ExtractGrid[] = parts.flatMap((part) => part.grids).filter((grid) => grid.columns.length && grid.rows.length).slice(0, MAX_GRIDS).map((grid) => {
     const width = Math.min(grid.columns.length, MAX_GRID_COLUMNS);
     const unprinted: string[] = [];
     const line = (values: unknown[], key: (column: number) => string) => Array.from({ length: width }, (_, column) => {
@@ -756,14 +909,31 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
       unprinted,
       issues: gridIssues,
     });
-  }).map((grid) => alignToPrintedHeader(grid, pdfText)).map((grid) => {
+  }).map((grid) => alignToPrintedHeader(grid, pdfText)).concat(tableGrids);
+  // Each grid the model read becomes the printed table it came from, so its cells, rows and columns are the same on every
+  // read; a second copy of a table (two parts both reading it) is dropped. Printed tables the model left out are added.
+  const used = new Set<number>();
+  const snapped = modelGrids.flatMap((grid) => {
+    const at = matchPrintedGrid(grid, tables, new Set());
+    if (at < 0) return [grid];
+    if (used.has(at)) return [];
+    used.add(at);
+    return [fromPrintedGrid(grid, tables[at])];
+  });
+  const otherPrices = new Set([...rates.map((rate) => rate.baseOre), ...items.flatMap((item) => item.price === null ? [] : [ore(item.price)])]);
+  const left = tables.filter((table, at) => {
+    if (used.has(at)) return false;
+    const values = gridValues(table);
+    return values.filter((value) => otherPrices.has(value)).length * 2 < values.length;
+  });
+  const grids: ExtractGrid[] = [...snapped, ...left].slice(0, MAX_GRIDS).map((grid) => {
     const empty = grid.columns.map((column, index) => ({ column, index })).filter(({ index }) =>
       [...grid.rows.map((row) => row.cells), grid.minimum, grid.maximum].every((line) => line[index] === null || line[index] === undefined));
     const issues = [...grid.issues];
     for (const { column, index } of empty) issues.push(`Kolonnen «${column.label || index + 1}» har ingen priser. Kontrollér kolonnerne.`);
     if (grid.columns.some((column) => !column.label.trim() || isHeaderCell(column.label, grid))) issues.push("En kolonne mangler sit navn.");
     return { ...grid, issues };
-  }).concat(tableGrids).slice(0, MAX_GRIDS);
+  });
 
   const surcharges: ExtractSurcharge[] = parts.flatMap((part) => part.surcharges).filter((item) => item.label && !VAT.test(item.label)).slice(0, MAX_SURCHARGES).map((item) => {
     const value = cellValue(item.value);
@@ -777,12 +947,12 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
   });
 
   // A grid row the model also returned as an item ("Minimum 1.007,01" under the grid's own name) is the grid read twice.
-  const gridValues = new Map(grids.map((grid) => [squash(grid.name), new Set(
+  const gridSets = new Map(grids.map((grid) => [squash(grid.name), new Set(
     [...grid.rows.flatMap((row) => row.cells), ...grid.minimum, ...grid.maximum].flatMap((value) => value === null ? [] : [ore(value)]),
   )]));
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    const values = gridValues.get(squash(item.category));
+    const values = gridSets.get(squash(item.category));
     if (values && item.price !== null && values.has(ore(item.price))) items.splice(index, 1);
   }
 
@@ -813,15 +983,19 @@ export function validateAgreementExtract(rawOutput: unknown, pdfText: string, me
 
   const source = squash(pdfText);
   const seen = new Set<string>();
-  const conditions: ExtractCondition[] = parts.flatMap((part) => part.conditions).filter((condition) => {
+  const sentences = printedSentences(pdfText);
+  const conditions: ExtractCondition[] = parts.flatMap((part) => part.conditions).map((condition) => {
     const key = squash(condition);
+    if (source.includes(key) || source.includes(key.slice(0, 40))) return { text: condition, printed: true };
+    // A condition the model reworded is the printed sentence it came from, when nearly the same words are there.
+    const near = closestSentence(condition, sentences);
+    return near ? { text: near, printed: true } : { text: condition, printed: false };
+  }).filter((condition) => {
+    const key = squash(condition.text);
     if (key.length < 4 || seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, MAX_CONDITIONS).map((condition) => {
-    const key = squash(condition);
-    return { text: condition, printed: source.includes(key) || source.includes(key.slice(0, 40)) };
-  });
+  }).slice(0, MAX_CONDITIONS);
 
   if (rates.length && currency !== "DKK") issues.push(`Pakkepriserne står i ${currency}, ikke DKK.`);
   if (meta.truncated) issues.push("Aftalen er lang. Kun den første del af teksten blev læst.");

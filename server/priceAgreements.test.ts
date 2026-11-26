@@ -129,7 +129,8 @@ test("a 3PL agreement with only terms is stored, and edits to a grid cell count 
   const read = extractTerms(done.extract);
   const same = await createAgreement("kolding-table-co", input({ rows: [], terms: read, source: "pdf", extractSha256: done.extract.sha256 }), henrik);
   expect(same.agreement).toMatchObject({ rows: [], changed: false, formatVersion: 2 });
-  expect(same.agreement.terms.grids[0].minimum).toEqual([612.4, 748.9]);
+  // The printed table has a third column the reply left out; it comes from the text.
+  expect(same.agreement.terms.grids[0].minimum).toEqual([612.4, 748.9, 1394.2]);
   const edited = structuredClone(read);
   edited.grids[0].rows[0].cells[1] = 750;
   const changed = await createAgreement("kolding-table-co", input({ rows: [], terms: edited, source: "pdf", extractSha256: done.extract.sha256 }), henrik);

@@ -12,9 +12,12 @@ export type PartPlan = {
   prices: number[];
   /** The part split in two, each a complete model request, read when the whole part comes back short. */
   halves: unknown[];
+  /** The replies an earlier read kept for this exact request; used as they are, without calling the model. */
+  cached?: unknown[];
 };
 
-export type PartReport = { pages: [number, number]; expected: number; captured: number; retried: boolean; failed: boolean };
+/** `outputs` is how many of the flat outputs, in order, belong to this part. */
+export type PartReport = { pages: [number, number]; expected: number; captured: number; retried: boolean; failed: boolean; outputs?: number; cached?: boolean };
 
 export type AiCall = (inputs: unknown) => Promise<unknown>;
 
@@ -112,6 +115,15 @@ export async function readParts(
       const index = next++;
       const plan = plans[index];
       const prices = plan?.prices ?? [];
+      if (plan?.cached?.length) {
+        const held = new Set<number>();
+        for (const output of plan.cached) for (const value of heldOre(output)) held.add(value);
+        const captured = prices.filter((price) => held.has(price)).length;
+        results[index] = { outputs: plan.cached, report: { pages: plan.pages, expected: prices.length, captured, retried: false, failed: false, outputs: plan.cached.length, cached: true } };
+        done += 1;
+        options.onProgress?.(done, batches.length);
+        continue;
+      }
       const first = await timed(call, batches[index], options.timeoutMs, errors);
       let outputs = [first];
       let captured = partCaptured(first, prices);
@@ -133,7 +145,7 @@ export async function readParts(
         captured = partCaptured(again, prices);
       }
       const failed = outputs.every((output) => !output);
-      results[index] = { outputs, report: { pages: plan?.pages ?? [0, 0], expected: prices.length, captured, retried, failed } };
+      results[index] = { outputs, report: { pages: plan?.pages ?? [0, 0], expected: prices.length, captured, retried, failed, outputs: outputs.length } };
       done += 1;
       options.onProgress?.(done, batches.length);
     }

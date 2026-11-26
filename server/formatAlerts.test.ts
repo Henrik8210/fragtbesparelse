@@ -216,7 +216,7 @@ describe("format change notices", () => {
   });
 
   it("counts every grid cell and unprinted number as agreement signals", () => {
-    const text = "Distribution\nPallepladser  Syd  Nord\n1  100,50  200,75\nMinimum  90,00  180,00";
+    const text = "Distribution\nPallepladser / Syd / Nord\n1 / 100,50 / 200,75\nMinimum / 90,00 / 180,00";
     const extract = validateAgreementExtract({
       carrier: "DAO", title: "", validFrom: "", validTo: "", currency: "DKK", rates: [], items: [], surcharges: [], conditions: [], extraField: "x",
       grids: [{ name: "Distribution", category: "", unit: "", currency: "DKK", rowLabel: "Pallepladser", note: "",
