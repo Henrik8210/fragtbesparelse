@@ -7,8 +7,8 @@ import { ownerDenial, requestMayClaimAdmin } from "./appOwner.ts";
 import { checkPassword, DatabaseError, databaseStatus, hashPassword, postgresSql, publicDbError, sql, syncAdminPassword, whenReady } from "./db.ts";
 import { acceptInvoiceMail, companyIdFromRecipient, decodeMailBody, invoiceAddress, invoiceFileCompany, invoiceMailReply, isMailFileId, listInvoiceMail, MAX_MAIL_BYTES, readInvoiceFile, storeUploadedInvoice } from "./invoiceMail.ts";
 import { checkStore, listChecks, readCheck, saveCheck } from "./invoiceCheck.ts";
-import { clearChoice, listChoices, saveChoice } from "./agreementChoices.ts";
-import { agreementStore, createAgreement, deleteAgreement, listAgreements, readAgreement, updateAgreement } from "./priceAgreements.ts";
+import { clearChoice, clearChoicesForAgreement, listChoices, saveChoice } from "./agreementChoices.ts";
+import { agreementStore, canManageAgreements, createAgreement, deleteAgreement, listAgreements, readAgreement, updateAgreement } from "./priceAgreements.ts";
 import { agreementCreateSchema, agreementPatchSchema } from "../src/pilot/agreementRecord.ts";
 import { listNotices, markNoticeSeen } from "./notifications.ts";
 import { observeAgreementEdits, observeCheckEdits, observeExtract, rememberJobFile, takeJobFile } from "./formatAlerts.ts";
@@ -795,6 +795,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 405, { error: "method" });
         return;
       }
+      if (!canManageAgreements(user, companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
       const by = { id: user.id, name: user.name || user.username };
       if (path === "/api/price-agreements/import") {
         const body = (await readJson(req)) as { agreements?: unknown };
@@ -848,8 +852,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         send(res, 200, { agreement: found, store: agreementStore() });
         return;
       }
+      if (!canManageAgreements(user, found.companyId)) {
+        send(res, 404, { error: "missing" });
+        return;
+      }
       if (method === "DELETE") {
-        send(res, 200, { deleted: found.id, store: await deleteAgreement(found) });
+        const store = await deleteAgreement(found);
+        const choices = await clearChoicesForAgreement(found.companyId, found.id);
+        send(res, 200, { deleted: found.id, store, clearedChoices: choices.cleared });
         return;
       }
       const patch = agreementPatchSchema.safeParse(await readJson(req));

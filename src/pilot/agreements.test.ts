@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agreementFromCsv, agreementState, sampleAgreement, splitAgreements, type Agreement } from "./agreements.ts";
-import { orgRateRows, ORGS } from "./orgs.ts";
+import { agreementFromCsv, agreementState, companyAgreements, splitAgreements, type Agreement } from "./agreements.ts";
+import { ORGS } from "./orgs.ts";
 
 function agreement(fields: Partial<Agreement>): Agreement {
   return {
@@ -35,13 +35,20 @@ describe("agreementState", () => {
   });
 });
 
-describe("sampleAgreement", () => {
-  it("spans the sample rate rows and is active in November 2026", () => {
-    const org = ORGS[0];
-    const sample = sampleAgreement(org.id, org.carrier, orgRateRows(org));
-    expect(sample?.from).toBe("2026-10-01");
-    expect(sample?.to).toBe("2026-12-31");
-    expect(sample && agreementState(sample, [sample], "2026-11-19")).toBe("active");
+describe("companyAgreements", () => {
+  it("lists no agreement for a sample company whose price_agreements rows are empty", () => {
+    const nordhavn = ORGS.find((org) => org.id === "nordhavn-living");
+    expect(nordhavn?.carrier).toBe("GLS");
+    const listed = companyAgreements("nordhavn-living", []);
+    expect(listed).toEqual([]);
+    expect(splitAgreements(listed, "2026-11-26").active).toEqual([]);
+  });
+
+  it("keeps only that company's stored rows", () => {
+    const mine = agreement({ id: "db-1", orgId: "nordhavn-living", carrier: "GLS", from: "2026-01-01" });
+    const theirs = agreement({ id: "db-2", orgId: "vesterbro-cloth", carrier: "GLS", from: "2026-01-01" });
+    const stale = agreement({ id: "sample:nordhavn-living", orgId: "nordhavn-living", carrier: "GLS", sample: true });
+    expect(companyAgreements("nordhavn-living", [mine, theirs, stale]).map((item) => item.id)).toEqual(["db-1"]);
   });
 });
 

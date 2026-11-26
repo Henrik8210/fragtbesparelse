@@ -101,3 +101,19 @@ export async function clearChoice(companyId: string, fileId: string): Promise<{ 
   memory.delete(key(companyId, fileId));
   return { store: stored.done ? "postgres" : "memory" };
 }
+
+export const CLEAR_AGREEMENT_SQL = "delete from public.invoice_agreement_choices where company_id = $1 and agreement_id = $2 returning file_id";
+
+/** Drops every choice of a deleted agreement in that company, so those invoices are matched on their dates again. */
+export async function clearChoicesForAgreement(companyId: string, agreementId: string): Promise<{ cleared: string[]; store: ChoiceStore }> {
+  const cleared = new Set<string>();
+  for (const [id, choice] of memory) {
+    if (choice.companyId === companyId && choice.agreementId === agreementId) {
+      memory.delete(id);
+      cleared.add(choice.fileId);
+    }
+  }
+  const stored = await attempt(() => postgresSql<{ file_id: string }>(CLEAR_AGREEMENT_SQL, [companyId, agreementId]));
+  if (stored.done) for (const row of stored.value) cleared.add(row.file_id);
+  return { cleared: [...cleared], store: stored.done ? "postgres" : "memory" };
+}

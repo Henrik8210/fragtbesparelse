@@ -1,4 +1,4 @@
-export const REVISION = "prisaftale-save-fix";
+export const REVISION = "prisaftale-delete";
 
 export function healthMatchesRevision(body: string): boolean {
   return body.split(/\s+/).includes(REVISION);

@@ -37,6 +37,11 @@ async function withTable<T>(run: () => Promise<T>): Promise<T | null> {
   }
 }
 
+/** Who may add, change, end or delete a company's agreements: an admin, or a seat on that company. */
+export function canManageAgreements(user: { role: string; company_id: string | null }, companyId: string): boolean {
+  return Boolean(companyId) && (user.role === "admin" || user.company_id === companyId);
+}
+
 export function agreementStore(): AgreementStore {
   return tableUsable() ? "postgres" : "memory";
 }

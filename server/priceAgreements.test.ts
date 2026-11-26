@@ -8,7 +8,7 @@ delete process.env.DATABASE_URL;
 delete process.env.CLOUDFLARE_AI_TOKEN;
 
 const {
-  agreementStore, createAgreement, deleteAgreement, fromRow, insertParams, listAgreements, readAgreement, updateAgreement,
+  agreementStore, canManageAgreements, createAgreement, deleteAgreement, fromRow, insertParams, listAgreements, readAgreement, updateAgreement,
   INSERT_SQL, UPDATE_SQL, updateParams,
 } = await import("./priceAgreements.ts");
 const { extractAgreement } = await import("./invoiceExtract.ts");
@@ -136,4 +136,12 @@ test("a 3PL agreement with only terms is stored, and edits to a grid cell count 
   expect(changed.agreement.changed).toBe(true);
   expect(changed.agreement.original.grids).toHaveLength(1);
   await expect(createAgreement("kolding-table-co", input({ rows: [] }), henrik)).rejects.toThrow(/mindst én pris/);
+});
+
+test("only an admin or a seat on that company may create or delete its agreements", () => {
+  expect(canManageAgreements({ role: "admin", company_id: null }, "nordhavn-living")).toBe(true);
+  expect(canManageAgreements({ role: "customer", company_id: "nordhavn-living" }, "nordhavn-living")).toBe(true);
+  expect(canManageAgreements({ role: "customer", company_id: "vesterbro-cloth" }, "nordhavn-living")).toBe(false);
+  expect(canManageAgreements({ role: "customer", company_id: null }, "nordhavn-living")).toBe(false);
+  expect(canManageAgreements({ role: "admin", company_id: null }, "")).toBe(false);
 });

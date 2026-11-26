@@ -55,7 +55,7 @@ export function AuditFlow({
   const [localChoice, setLocalChoice] = useState("");
   const saved = useAgreementChoice(companyId, invoice?.fileId ?? "");
   const choice = invoice?.fileId ? saved.choice?.agreementId ?? "" : localChoice;
-  const dated = !rates && agreements.some((item) => item.sample || item.rows.length);
+  const dated = !rates && agreements.some((item) => item.rows.length);
   const invoiceRows = useMemo(() => {
     if (!invoice) return null;
     try { return importRows("invoice", invoice.sheet, invoice.mapping); } catch { return null; }
@@ -139,7 +139,7 @@ export function AuditFlow({
             value={rates}
             past={pastRates}
             companyId={companyId}
-            optional={agreements.some((item) => item.sample || item.rows.length)}
+            optional={agreements.some((item) => item.rows.length)}
             onChange={(file) => { setRates(file); setError(""); }}
           />
         </div>

@@ -381,6 +381,7 @@ small { font-size: .8rem; }
 .agreement-name small { display: block; margin-top: 3px; color: var(--muted); font-size: .76rem; }
 .agreement-detail { padding: 0 10px 10px; }
 .agreement-actions { display: flex; gap: 16px; justify-content: flex-end; padding: 0 12px 4px; }
+.confirm-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 .agreement-empty { padding: 0 18px 16px; }
 .file-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px; border: 1px dashed var(--line-dark); border-radius: 12px; background: #f8fbf9; }
 .agreement-progress { display: grid; gap: 6px; margin-top: 12px; }
@@ -469,6 +470,8 @@ small { font-size: .8rem; }
 }
 .button.primary { background: #176650; border-color: #176650; color: #fff; }
 .button.primary:hover:not(:disabled) { background: #105340; border-color: #105340; }
+.button.primary.danger { background: #a3352b; border-color: #a3352b; color: #fff; }
+.button.primary.danger:hover:not(:disabled) { background: #862a22; border-color: #862a22; }
 .button.secondary { background: #fff; border-color: var(--line-dark); color: #2d4c45; }
 .button.secondary:hover:not(:disabled) { background: #f2f8f5; border-color: #a0c1b3; }
 .button.hero-primary { background: #a9efd8; color: #143e31; border-color: #a9efd8; }

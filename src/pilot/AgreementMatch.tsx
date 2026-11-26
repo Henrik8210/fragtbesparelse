@@ -23,10 +23,10 @@ export function AgreementMatch({ match, agreements, carrier, choice, saving = fa
   onAdd: (carrier: string) => void;
 }) {
   const byId = new Map(agreements.map((item) => [item.id, item]));
-  const priced = agreements.filter((item) => item.sample || item.rows.length)
+  const priced = agreements.filter((item) => item.rows.length)
     .sort((left, right) => Number(sameCarrier(right.carrier, carrier)) - Number(sameCarrier(left.carrier, carrier))
       || (right.from || "").localeCompare(left.from || ""));
-  const name = (item: Agreement) => item.sample ? `${item.carrier || "Prøveaftale"} (prøveaftale)` : item.name;
+  const name = (item: Agreement) => item.name;
   const unmatched = OTHER_REASONS.filter((reason) => match.missing[reason]);
   const who = carrier.trim() || "transportøren";
   return (
