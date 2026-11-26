@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Plus, Trash2 } from "lucide-react";
 import { ApiError } from "../api.ts";
 import { agreementFromRows, type Agreement } from "./agreements.ts";
@@ -8,10 +8,10 @@ import {
 } from "./agreementFormat.ts";
 import { agreementRatesToRows, type AgreementExtract, type AgreementRate, type ExtractGrid } from "./agreementExtract.ts";
 import { kronerText, parseKroner, parseWeight } from "./invoiceCheck.ts";
+import { fromRate, parsePct, RATE_FIELD_LABELS, rateProblem, rateProblemText, type RateDraft, type RateField } from "./rateDraft.ts";
 import { CONFIDENCE_LABELS } from "./invoiceExtract.ts";
 import { agreementName } from "./agreementAuto.ts";
 
-type RateDraft = { service: string; zone: string; weight: string; base: string; fuel: string; fixed: string; issues: string[] };
 type ItemDraft = { category: string; description: string; unit: string; price: string; currency: string; note: string; issues: string[] };
 type GridDraft = {
   name: string; category: string; unit: string; currency: string; rowLabel: string; note: string;
@@ -44,23 +44,6 @@ const toGrid = (grid: ExtractGrid): GridDraft => ({
   minimum: grid.minimum.map((value) => decimalText(value)),
   maximum: grid.maximum.map((value) => decimalText(value)),
 });
-
-function parsePct(value: string): number | null {
-  const clean = value.trim().replace(/\s|%$/g, "").replace(",", ".");
-  if (!clean) return 0;
-  if (!/^\d+(?:\.\d+)?$/.test(clean)) return null;
-  const pct = Number(clean);
-  return pct <= 300 ? pct : null;
-}
-
-function fromRate(draft: RateDraft): Omit<AgreementRate, "issues"> | null {
-  const maxWeight = parseWeight(draft.weight);
-  const baseOre = parseKroner(draft.base);
-  const fuelPct = parsePct(draft.fuel);
-  const fixedOre = draft.fixed.trim() ? parseKroner(draft.fixed) : 0;
-  if (!draft.service.trim() || !maxWeight || baseOre === null || baseOre < 0 || fuelPct === null || fixedOre === null || fixedOre < 0) return null;
-  return { service: draft.service, zone: draft.zone, maxWeight, baseOre, fuelPct, fixedOre };
-}
 
 const bad = (value: string) => parseDecimal(value) === undefined;
 const filled = (values: string[]) => values.some((value) => value.trim());
@@ -132,6 +115,8 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
   const [from, setFrom] = useState(extract.validFrom);
   const [to, setTo] = useState(extract.validTo);
   const [problem, setProblem] = useState("");
+  const [focusRate, setFocusRate] = useState<{ index: number; field: RateField } | null>(null);
+  const rateInputs = useRef(new Map<string, HTMLInputElement>());
   const [saving, setSaving] = useState(false);
   const name = agreementName(carrier, from, to);
 
@@ -166,8 +151,12 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
     setProblem("");
     const badRate = parsedRates.findIndex((rate) => rate === null);
     if (badRate >= 0) {
-      setProblem(`Pakkepris ${badRate + 1}. Udfyld leveringsform, vægttrin og grundpris med gyldige tal.`);
-      return;
+      const found = rateProblem(rates[badRate]);
+      if (found) {
+        setProblem(rateProblemText(rates[badRate], badRate, found));
+        setFocusRate({ index: badRate, field: found.field });
+        return;
+      }
     }
     if (from && to && to < from) {
       setProblem("Slutdatoen skal ligge på eller efter startdatoen.");
@@ -194,6 +183,18 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
       setSaving(false);
     }
   }
+
+  const bindRate = (index: number, field: RateField) => (input: HTMLInputElement | null) => {
+    if (input) rateInputs.current.set(`${index}:${field}`, input);
+    else rateInputs.current.delete(`${index}:${field}`);
+  };
+
+  useEffect(() => {
+    if (!focusRate) return;
+    const input = rateInputs.current.get(`${focusRate.index}:${focusRate.field}`);
+    input?.scrollIntoView({ block: "center" });
+    input?.focus();
+  }, [focusRate]);
 
   const coverage = extract.coverage.printed ? Math.round((extract.coverage.captured / extract.coverage.printed) * 100) : null;
 
@@ -222,7 +223,7 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
       ) : null}
       <datalist id="review-units">{UNIT_SUGGESTIONS.map((unit) => <option key={unit} value={unit} />)}</datalist>
       {!reasons.length && extract.issues.length ? <p className="check-problem" role="status"><CircleAlert size={14} /> {extract.issues.join(" ")}</p> : null}
-      <p className="review-note">Felter markeret med gult står ikke ordret i PDF'ens tekst. Ret dem, eller slet dem, før aftalen gemmes.</p>
+      <p className="review-note">Felter markeret med gult står ikke ordret i PDF'ens tekst. Tjek dem; aftalen kan gemmes med markeringer, når alle felter er udfyldt med gyldige tal.</p>
 
       <div className="check-scroll review-sections">
         {rates.length ? (
@@ -239,13 +240,13 @@ export function AgreementReview({ extract, reasons = [], orgId, carriers, onBack
                   const flag = draft.issues.length ? { className: "edited", title: draft.issues.join(" ") } : {};
                   return (
                     <tr key={index}>
-                      <td className="check-index" title={draft.issues.join(" ") || undefined}>{draft.issues.length ? <CircleAlert size={13} className="review-flag" /> : index + 1}</td>
-                      <td {...flag}><input className={draft.service.trim() ? undefined : "invalid"} value={draft.service} maxLength={64} aria-label={`Leveringsform, række ${index + 1}`} onChange={(event) => editRate(index, "service", event.target.value)} /></td>
+                      <td className="check-index" title={draft.issues.join(" ") || undefined}>{index + 1}{draft.issues.length ? <CircleAlert size={12} className="review-flag" /> : null}</td>
+                      <td {...flag}><input className={draft.service.trim() ? undefined : "invalid"} value={draft.service} maxLength={64} ref={bindRate(index, "service")} aria-label={`${RATE_FIELD_LABELS.service}, række ${index + 1}`} onChange={(event) => editRate(index, "service", event.target.value)} /></td>
                       <td {...flag}><input value={draft.zone} maxLength={40} aria-label={`Zone, række ${index + 1}`} onChange={(event) => editRate(index, "zone", event.target.value)} /></td>
-                      <td {...flag}><input className={parseWeight(draft.weight) ? "num" : "num invalid"} inputMode="decimal" value={draft.weight} aria-label={`Maks. kg, række ${index + 1}`} onChange={(event) => editRate(index, "weight", event.target.value)} /></td>
-                      <td {...flag}><input className={parseKroner(draft.base) === null ? "num invalid" : "num"} inputMode="decimal" value={draft.base} aria-label={`Grundpris, række ${index + 1}`} onChange={(event) => editRate(index, "base", event.target.value)} /></td>
-                      <td {...flag}><input className={parsePct(draft.fuel) === null ? "num invalid" : "num"} inputMode="decimal" value={draft.fuel} aria-label={`Brændstof, række ${index + 1}`} onChange={(event) => editRate(index, "fuel", event.target.value)} /></td>
-                      <td {...flag}><input className={draft.fixed.trim() && parseKroner(draft.fixed) === null ? "num invalid" : "num"} inputMode="decimal" value={draft.fixed} aria-label={`Fast tillæg, række ${index + 1}`} onChange={(event) => editRate(index, "fixed", event.target.value)} /></td>
+                      <td {...flag}><input className={parseWeight(draft.weight) ? "num" : "num invalid"} inputMode="decimal" value={draft.weight} ref={bindRate(index, "weight")} aria-label={`${RATE_FIELD_LABELS.weight}, række ${index + 1}`} onChange={(event) => editRate(index, "weight", event.target.value)} /></td>
+                      <td {...flag}><input className={parseKroner(draft.base) === null ? "num invalid" : "num"} inputMode="decimal" value={draft.base} ref={bindRate(index, "base")} aria-label={`${RATE_FIELD_LABELS.base}, række ${index + 1}`} onChange={(event) => editRate(index, "base", event.target.value)} /></td>
+                      <td {...flag}><input className={parsePct(draft.fuel) === null ? "num invalid" : "num"} inputMode="decimal" value={draft.fuel} ref={bindRate(index, "fuel")} aria-label={`${RATE_FIELD_LABELS.fuel}, række ${index + 1}`} onChange={(event) => editRate(index, "fuel", event.target.value)} /></td>
+                      <td {...flag}><input className={draft.fixed.trim() && parseKroner(draft.fixed) === null ? "num invalid" : "num"} inputMode="decimal" value={draft.fixed} ref={bindRate(index, "fixed")} aria-label={`${RATE_FIELD_LABELS.fixed}, række ${index + 1}`} onChange={(event) => editRate(index, "fixed", event.target.value)} /></td>
                       <td><button type="button" className="icon-button" aria-label={`Fjern pakkepris ${index + 1}`} onClick={() => setRates((current) => current.filter((_, at) => at !== index))}><Trash2 size={14} /></button></td>
                     </tr>
                   );
