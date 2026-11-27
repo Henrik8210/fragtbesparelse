@@ -98,7 +98,7 @@ export function ReportView({
         <div>
           <span className="eyebrow"><i /> FAKTURARAPPORT</span>
           <h1>{name}</h1>
-          <p>{carrier ? `${carrier} · ` : ""}{report.lines.length.toLocaleString("da-DK")} forsendelser · DKK ekskl. moms</p>
+          <p>{carrier ? `${carrier} · ` : ""}{report.lines.length.toLocaleString("da-DK")} linjer · DKK ekskl. moms</p>
         </div>
         <div className="actions">
           <button type="button" className="button secondary" onClick={() => downloadCsv("freightlytics-fakturarapport.csv", reportCsv(report))}><ArrowDownToLine size={17} /> Eksportér CSV</button>

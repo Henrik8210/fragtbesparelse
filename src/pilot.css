@@ -405,12 +405,15 @@ small { font-size: .8rem; }
 .agreement-progress p { margin: 0; overflow-wrap: anywhere; }
 .progress-track { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
 .progress-track span { display: block; height: 100%; background: var(--ink); border-radius: inherit; transition: width .4s ease; }
+.progress-track.busy span { width: 35%; animation: progress-slide 1.4s ease-in-out infinite; }
+@keyframes progress-slide { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
 .file-pick span { flex: 1; min-width: 120px; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
 .modal-card form .file-pick .button { width: auto; }
 .date-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .rate-scroll { overflow: auto; padding: 0 8px 12px; }
 .rate-table { width: 100%; border-collapse: collapse; font-size: .86rem; }
 .rate-table th, .rate-table td { text-align: left; padding: 10px 12px; border-top: 1px solid var(--line); white-space: nowrap; }
+.rate-table td small { display: block; margin-top: 2px; font-weight: 400; white-space: normal; }
 .rate-table th { color: var(--muted); font-size: .75rem; font-weight: 700; }
 .invoice-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin-top: 12px; }
 .download-progress { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .82rem; font-weight: 650; }

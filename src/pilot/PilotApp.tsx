@@ -30,7 +30,8 @@ import { carrierPeers, loadOrgId, orgAudit, orgFromCompany, ORGS, peerCount, sav
 import { invoiceCsv, invoicesFromReport, rateCsv, ratesFromReport, type PastSource } from "./past.ts";
 import { loadMailFile, saveBlob } from "./mailFiles.ts";
 import { CheckedNote, ExtractPanel } from "./ExtractPanel.tsx";
-import { extractAgreementUpload } from "./extractClient.ts";
+import { extractAgreementUpload, extractMailFile, uploadWithProgress } from "./extractClient.ts";
+import { ReadBar } from "./ReadBar.tsx";
 import { rowsFromLines, type CheckSummary, type InvoiceCheck } from "./invoiceCheck.ts";
 import { HeroMotion } from "./HeroMotion.tsx";
 import { groupByDay, noticeTarget, noticeText, noticeTime, type Notice } from "./notices.ts";
@@ -1261,10 +1262,18 @@ function CarrierFilter({ value, carriers, unknown, onChange }: {
 const UPLOAD_ACCEPT = ".pdf,.csv,.tsv,.txt,.xml,.xls,.xlsx,application/pdf,text/csv,text/tab-separated-values,text/plain";
 
 function AddInvoiceModal({ orgId, onClose, onAdded }: { orgId: string; onClose: () => void; onAdded: (mail: MailRow) => void }) {
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<{ name: string; started: number; stage: "upload" | "read" | "done"; upload: number; done: number; total: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [problem, setProblem] = useState("");
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const busy = phase !== null && phase.stage !== "done";
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   async function upload(file: File) {
     setProblem("");
@@ -1276,18 +1285,32 @@ function AddInvoiceModal({ orgId, onClose, onAdded }: { orgId: string; onClose: 
       setProblem("Filen må fylde højst 8 MB.");
       return;
     }
-    setBusy(true);
+    setPhase({ name: file.name, started: Date.now(), stage: "upload", upload: 0, done: 0, total: 0 });
+    setNow(Date.now());
     try {
-      const body = await api<{ mail: MailRow }>(
+      const body = await uploadWithProgress<{ mail: MailRow }>(
         `/api/invoice-mail/upload?company=${encodeURIComponent(orgId)}&name=${encodeURIComponent(file.name.slice(0, 120))}`,
-        { method: "POST", body: file, headers: { "content-type": file.type || "application/octet-stream" } },
+        file,
+        (loaded, total) => setPhase((current) => current && { ...current, upload: total ? Math.min(100, Math.round((loaded / total) * 100)) : current.upload }),
       );
+      const pdf = body.mail.files.find((item) => /\.pdf$/i.test(item.filename));
+      if (pdf) {
+        setPhase((current) => current && { ...current, stage: "read", upload: 100 });
+        try {
+          await extractMailFile(pdf.id, orgId, (progress) => {
+            setPhase((current) => current && { ...current, stage: "read", done: progress.done, total: progress.total });
+          });
+        } catch {
+          // The file is stored. The invoice viewer reports the read if it fails again.
+        }
+      }
+      setPhase((current) => current && { ...current, stage: "done" });
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
       onAdded(body.mail);
     } catch (error) {
-      const message = error instanceof ApiError && error.message !== error.code ? error.message : "";
+      setPhase(null);
+      const message = error instanceof ApiError && error.message !== error.code ? error.message : error instanceof Error ? error.message : "";
       setProblem(message || "Fakturaen blev ikke gemt. Prøv igen.");
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -1319,7 +1342,9 @@ function AddInvoiceModal({ orgId, onClose, onAdded }: { orgId: string; onClose: 
           }}
         />
         <div className="drop-icon"><UploadCloud size={23} /></div>
-        {busy ? <span role="status">Gemmer fakturaen…</span> : (
+        {phase ? (
+          <ReadBar name={phase.name} stage={phase.stage} uploadPercent={phase.upload} done={phase.done} total={phase.total} elapsedMs={now - phase.started} />
+        ) : (
           <>
             <button type="button" className="text-button" onClick={() => input.current?.click()}>Vælg fil</button>
             <span>eller slip den her · PDF, CSV, TSV, TXT, XML eller Excel · maks. 8 MB</span>
