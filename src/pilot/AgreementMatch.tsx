@@ -1,5 +1,5 @@
 import { CalendarClock, CircleAlert, FileWarning, Plus } from "lucide-react";
-import { matchable, NO_MATCH_LABELS, periodLabel, sameCarrier, TERMS_ONLY_REASON, type InvoiceMatch, type NoMatchReason } from "./agreementDating.ts";
+import { matchable, NO_MATCH_LABELS, periodLabel, sameCarrier, type InvoiceMatch, type NoMatchReason } from "./agreementDating.ts";
 import type { Agreement } from "./agreements.ts";
 
 const DAY = new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Copenhagen" });
@@ -64,7 +64,6 @@ export function AgreementMatch({ match, agreements, carrier, choice, saving = fa
               })}
             </ul>
           )}
-          {match.used.some(({ agreementId }) => byId.get(agreementId)?.rows.length === 0) ? <p className="quiet">{TERMS_ONLY_REASON}</p> : null}
           {match.override ? <p className="quiet">Valgt manuelt{choice ? ` af ${choice.chosenByName}` : ""}. Alle linjer sammenlignes med denne aftale.</p> : null}
           {!match.override && match.used.length > 1 ? <p className="quiet">Fakturaen dækker flere aftaleperioder. Hver linje sammenlignes med aftalen på sin dato.</p> : null}
           {match.overlap ? <p className="match-flag"><CircleAlert size={14} /> Flere prisaftaler gælder på samme dato. Aftalen med den seneste startdato er valgt. Vælg en anden nedenfor, hvis det er forkert.</p> : null}

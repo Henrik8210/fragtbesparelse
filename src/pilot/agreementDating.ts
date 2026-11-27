@@ -1,6 +1,7 @@
 import { hasTerms } from "./agreementFormat.ts";
 import type { Agreement } from "./agreements.ts";
-import { normalizedText, runAudit, type AuditLine, type AuditReport, type AuditSummary, type InvoiceRow, type RateRow } from "./freight.ts";
+import { normalizedText, runAudit, type AuditLine, type AuditReport, type AuditSummary, type RateRow } from "./freight.ts";
+import { priceTerms, type TermsLine } from "./termsAudit.ts";
 
 /** The fields of an agreement that decide whether it was valid on a date. */
 export type DatedAgreement = Pick<Agreement, "id" | "name" | "carrier" | "from" | "to" | "rows"> & Partial<Pick<Agreement, "ended" | "sample" | "terms">>;
@@ -9,8 +10,6 @@ export type DatedAgreement = Pick<Agreement, "id" | "name" | "carrier" | "from" 
 export function matchable(agreement: DatedAgreement): boolean {
   return agreement.rows.length > 0 || hasTerms(agreement.terms);
 }
-
-export const TERMS_ONLY_REASON = "Prisaftalen har ingen pakkepriser. Lager-, palle- og tillægspriser sammenlignes ikke endnu.";
 
 /**
  * Why a line has no agreement:
@@ -156,7 +155,7 @@ function emptySummary(): AuditSummary {
  * Runs the check per matched agreement and puts the lines back in invoice order. Lines with no agreement are
  * left for review and never compared. A held invoice is not checked at all.
  */
-export function datedAudit(invoice: InvoiceRow[], match: InvoiceMatch, agreements: DatedAgreement[]): AuditReport {
+export function datedAudit(invoice: TermsLine[], match: InvoiceMatch, agreements: DatedAgreement[]): AuditReport {
   if (match.held) throw new Error("Fakturaen venter på en ny prisaftale. Tilføj prisaftalen først.");
   const byId = new Map(agreements.map((item) => [item.id, item]));
   const lines: AuditLine[] = new Array(invoice.length);
@@ -175,9 +174,16 @@ export function datedAudit(invoice: InvoiceRow[], match: InvoiceMatch, agreement
   for (const row of invoice) repeated.set(row.shipment, (repeated.get(row.shipment) ?? 0) + 1);
   for (const [id, indexes] of groups) {
     const agreement = byId.get(id) as DatedAgreement;
+    if (hasTerms(agreement.terms)) {
+      const priced = priceTerms(indexes.map((index) => invoice[index]), agreement.terms ?? { items: [], grids: [], surcharges: [], conditions: [] }, agreement.rows);
+      priced.forEach((line, position) => {
+        lines[indexes[position]] = { ...line, key: String(indexes[position] + 1) };
+      });
+      continue;
+    }
     if (!agreement.rows.length) {
       for (const index of indexes) {
-        lines[index] = { ...invoice[index], key: String(index + 1), status: "review", expectedOre: null, differenceOre: null, reason: TERMS_ONLY_REASON, rate: null };
+        lines[index] = { ...invoice[index], key: String(index + 1), status: "review", expectedOre: null, differenceOre: null, reason: "Prisaftalen har ingen priser, der kan sammenlignes.", rate: null };
       }
       continue;
     }

@@ -4,6 +4,7 @@ import { fetchInvoiceCheck } from "./checkClient.ts";
 import { extractMailFile } from "./extractClient.ts";
 import { checkedExtract, lineChanges, type InvoiceCheck } from "./invoiceCheck.ts";
 import { CONFIDENCE_LABELS, lineFee, lineTotalOre, type InvoiceExtract } from "./invoiceExtract.ts";
+import { ReadBar } from "./ReadBar.tsx";
 
 const dkk = new Intl.NumberFormat("da-DK", { style: "currency", currency: "DKK" });
 const money = (ore: number) => dkk.format(ore / 100);
@@ -35,21 +36,29 @@ export function CheckedNote({ check }: { check: InvoiceCheck }) {
 
 export function ExtractPanel({ fileId, companyId, checked = "" }: { fileId: string; companyId: string; checked?: string }) {
   const [state, setState] = useState<{ key: string; extract?: InvoiceExtract; check?: InvoiceCheck | null; error?: string } | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const key = `${companyId}\n${fileId}\n${checked}`;
+  const [seen, setSeen] = useState(key);
+  if (seen !== key) {
+    setSeen(key);
+    setElapsed(0);
+  }
   useEffect(() => {
+    const startedAt = Date.now();
     let gone = false;
+    const timer = window.setInterval(() => { if (!gone) setElapsed(Date.now() - startedAt); }, 1000);
     Promise.all([extractMailFile(fileId, companyId), checked ? fetchInvoiceCheck(fileId, companyId).catch(() => null) : null]).then(
       ([extract, check]) => { if (!gone) setState({ key, extract, check }); },
       (error: unknown) => { if (!gone) setState({ key, error: (error as Error).message }); },
     );
-    return () => { gone = true; };
+    return () => { gone = true; window.clearInterval(timer); };
   }, [fileId, companyId, checked, key]);
 
   const current = state?.key === key ? state : null;
   if (!current) {
     return (
       <section className="extract-panel" aria-busy="true">
-        <p className="extract-status"><Sparkles size={15} /> Læser fakturalinjer med Workers AI…</p>
+        <ReadBar name="fakturaen" stage="read" elapsedMs={elapsed} />
       </section>
     );
   }

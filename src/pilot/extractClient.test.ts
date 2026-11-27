@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { extractAgreementUpload, readLines } from "./extractClient.ts";
+import { extractAgreementUpload, noteStream, readLines } from "./extractClient.ts";
 
 const stream = (chunks: string[]) => new ReadableStream<Uint8Array>({
   start(controller) {
@@ -18,6 +18,17 @@ describe("readLines", () => {
     const lines: unknown[] = [];
     await readLines(stream(['{"progress":{"done":0,', '"total":2}}\n{"progress":{"done":1}}\n{"sta', 'tus":200}\n{"torn"']), (line) => lines.push(line));
     expect(lines).toEqual([{ progress: { done: 0, total: 2 } }, { progress: { done: 1 } }, { status: 200 }]);
+  });
+});
+
+describe("noteStream", () => {
+  it("keeps the part count and the final status, and ignores a heartbeat", () => {
+    const start = { done: 0, total: 0, result: null };
+    const reading = noteStream({ progress: { done: 0, total: 1 } }, start);
+    const beat = noteStream({ progress: { waitingMs: 15000 } }, reading);
+    const done = noteStream({ status: 200, body: { extract: { kind: "invoice" } } }, beat);
+    expect(beat).toMatchObject({ done: 0, total: 1, result: null });
+    expect(done.result).toEqual({ status: 200, body: { extract: { kind: "invoice" } } });
   });
 });
 

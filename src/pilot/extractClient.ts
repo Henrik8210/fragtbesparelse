@@ -56,17 +56,35 @@ function remember(key: string, load: () => Promise<InvoiceExtract>): Promise<Inv
   return promise;
 }
 
-export function extractMailFile(fileId: string, companyId: string): Promise<InvoiceExtract> {
-  return remember(`file\n${companyId}\n${fileId}`, () =>
-    request(`/api/invoice-extract?company=${encodeURIComponent(companyId)}&file=${encodeURIComponent(fileId)}`));
+export function extractMailFile(fileId: string, companyId: string, onProgress?: (progress: ReadProgress) => void): Promise<InvoiceExtract> {
+  const url = `/api/invoice-extract?company=${encodeURIComponent(companyId)}&file=${encodeURIComponent(fileId)}`;
+  return remember(`file\n${companyId}\n${fileId}`, () => onProgress ? postExtract(url, null, onProgress) : request(url));
 }
 
-export function extractUpload(file: File, companyId: string): Promise<InvoiceExtract> {
+export function extractUpload(file: File, companyId: string, onProgress?: (progress: ReadProgress) => void): Promise<InvoiceExtract> {
+  const url = `/api/invoice-extract?company=${encodeURIComponent(companyId)}&name=${encodeURIComponent(file.name.slice(0, 120))}`;
   return remember(`upload\n${companyId}\n${file.name}\n${file.size}\n${file.lastModified}`, () =>
-    request(`/api/invoice-extract?company=${encodeURIComponent(companyId)}&name=${encodeURIComponent(file.name.slice(0, 120))}`, file));
+    onProgress ? postExtract(url, file, onProgress) : request(url, file));
 }
 
-export type ReadProgress = { done: number; total: number; elapsedMs: number };
+type StreamState = { done: number; total: number; result: { status: number; body: unknown } | null };
+
+/** One NDJSON line from a PDF read: part progress, or the final status. */
+export function noteStream(line: StreamLine, state: StreamState): StreamState {
+  if (typeof line.status === "number") return { ...state, result: { status: line.status, body: line.body } };
+  if (!line.progress) return state;
+  return { ...state, total: line.progress.total ?? state.total, done: line.progress.done ?? state.done };
+}
+
+export type ReadProgress = {
+  done: number;
+  total: number;
+  elapsedMs: number;
+  /** Upload of the file, then the read. A missing stage is the read. */
+  stage?: "upload" | "read";
+  loaded?: number;
+  size?: number;
+};
 
 type StreamLine = { progress?: { done?: number; total?: number; elapsedMs?: number; waitingMs?: number }; status?: number; body?: unknown };
 
@@ -100,6 +118,109 @@ export async function readLines(stream: ReadableStream<Uint8Array>, onLine: (lin
 
 // Twelve parts four at a time, each stopped after 150 s on the server, end well inside this.
 export const AGREEMENT_READ_LIMIT_MS = 10 * 60 * 1000;
+
+function fromBody(payload: { extract?: InvoiceExtract; error?: string; message?: string } | null, status: number): InvoiceExtract {
+  if (status >= 200 && status < 300 && payload?.extract) return payload.extract;
+  throw failure(payload, status);
+}
+
+/**
+ * Posts a PDF and reads the NDJSON the server writes while Workers AI runs. Upload progress is the bytes sent.
+ * A JSON body (a cached extract, or an error) is accepted too.
+ */
+export function postExtract(url: string, file: Blob | null, onProgress?: (progress: ReadProgress) => void): Promise<InvoiceExtract> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const started = Date.now();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("accept", "application/x-ndjson, application/json");
+    if (file) xhr.setRequestHeader("content-type", file.type || "application/pdf");
+    let parsed = 0;
+    let state: StreamState = { done: 0, total: 0, result: null };
+    const report = (stage: "upload" | "read", extra: Partial<ReadProgress> = {}) => {
+      onProgress?.({ stage, done: state.done, total: state.total, elapsedMs: Date.now() - started, ...extra });
+    };
+    const consume = (final: boolean) => {
+      const text = xhr.responseText ?? "";
+      const slice = text.slice(parsed);
+      const parts = slice.split("\n");
+      if (!final) parsed += slice.length - (parts.pop()?.length ?? 0);
+      else parsed = text.length;
+      if (final && text.trim().startsWith("{") && !text.includes("\n")) return;
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        try {
+          state = noteStream(JSON.parse(trimmed) as StreamLine, state);
+        } catch {
+          // A torn line is completed on the next event.
+        }
+      }
+      report("read");
+    };
+    xhr.upload.onprogress = (event) => {
+      report("upload", { loaded: event.loaded, size: event.lengthComputable ? event.total : file?.size });
+    };
+    xhr.onprogress = () => consume(false);
+    xhr.onerror = () => reject(new ExtractError("network", "Forbindelsen til serveren svigtede. Prøv igen."));
+    xhr.onload = () => {
+      try {
+        consume(true);
+      } catch {
+        reject(new ExtractError("network", "Svaret fra serveren kunne ikke læses. Prøv igen."));
+        return;
+      }
+      const type = xhr.getResponseHeader("content-type") ?? "";
+      if (!/ndjson/.test(type)) {
+        try {
+          const payload = xhr.responseText ? JSON.parse(xhr.responseText) as { extract?: InvoiceExtract; error?: string; message?: string } : null;
+          resolve(fromBody(payload, xhr.status));
+        } catch (error) {
+          reject(error instanceof ExtractError ? error : new ExtractError("network", "Svaret fra serveren kunne ikke læses. Prøv igen."));
+        }
+        return;
+      }
+      const result = state.result;
+      if (!result) {
+        reject(new ExtractError("network", "Forbindelsen til serveren svigtede under læsningen. Prøv igen."));
+        return;
+      }
+      try {
+        resolve(fromBody(result.body as { extract?: InvoiceExtract; error?: string; message?: string } | null, result.status));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    if (!file) report("read");
+    xhr.send(file);
+  });
+}
+
+/** Uploads one invoice file and reports how many bytes have been sent. */
+export function uploadWithProgress<T>(url: string, file: File, onProgress: (loaded: number, total: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = (event) => onProgress(event.loaded, event.lengthComputable ? event.total : file.size);
+    xhr.onerror = () => reject(new ExtractError("network", "Forbindelsen til serveren svigtede. Prøv igen."));
+    xhr.onload = () => {
+      try {
+        const payload = xhr.responseText ? JSON.parse(xhr.responseText) as { error?: string; message?: string } : null;
+        if (xhr.status >= 200 && xhr.status < 300 && payload) {
+          resolve(payload as T);
+          return;
+        }
+        reject(failure(payload, xhr.status));
+      } catch {
+        reject(new ExtractError("network", "Svaret fra serveren kunne ikke læses. Prøv igen."));
+      }
+    };
+    xhr.send(file);
+  });
+}
 
 function failure(payload: { error?: string; message?: string } | null, status: number): ExtractError {
   const code = payload?.error ?? `http-${status}`;

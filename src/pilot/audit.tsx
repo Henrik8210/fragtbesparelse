@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp, ClipboardList,
   FileSpreadsheet, FileText, ShieldCheck, UploadCloud, X,
@@ -10,12 +10,15 @@ import {
 import { DEMO_INVOICE, DEMO_RATES } from "./demo.ts";
 import { ExtractTable } from "./ExtractPanel.tsx";
 import { extractMailFile, extractUpload } from "./extractClient.ts";
+import { ReadBar } from "./ReadBar.tsx";
 import { MAX_FILE_BYTES, runAudit, type AuditInput, type AuditReport } from "./freight.ts";
 import { CONFIDENCE_LABELS, extractToInvoiceRows, sharedSurchargeOre, type InvoiceExtract } from "./invoiceExtract.ts";
 import { fetchInvoiceCheck } from "./checkClient.ts";
 import { checkedExtract, rowsFromLines, type InvoiceCheck } from "./invoiceCheck.ts";
 import { invoiceCsv, type PastSource } from "./past.ts";
+import { hasTerms } from "./agreementFormat.ts";
 import { datedAudit, matchable, matchInvoice } from "./agreementDating.ts";
+import { linesFromExtractForAudit } from "./termsAudit.ts";
 import { AgreementMatch } from "./AgreementMatch.tsx";
 import type { Agreement } from "./agreements.ts";
 import { useAgreementChoice } from "./useAgreementChoice.ts";
@@ -81,7 +84,13 @@ export function AuditFlow({
       };
       const invoiceRows = parse("Fragtfaktura", () => importRows("invoice", invoice.sheet, invoice.mapping));
       if (!rates && match?.held) throw new Error("Fakturaen venter på en ny prisaftale. Tilføj prisaftalen først.");
-      const used = new Set(match?.used.map((item) => item.agreementId) ?? []);
+      const sourceExtract = invoice.extract && invoice.checked ? checkedExtract(invoice.extract, invoice.checked.lines) : invoice.extract;
+      const priced = sourceExtract ? linesFromExtractForAudit(sourceExtract) : null;
+      const pricedMatch = !rates && priced ? matchInvoice(priced, { invoiceDate: sourceExtract?.invoiceDate, carrier: matchCarrier, agreements, override: choice || null }) : null;
+      if (pricedMatch?.held) throw new Error("Fakturaen venter på en ny prisaftale. Tilføj prisaftalen først.");
+      const pricedIds = new Set(pricedMatch?.used.map((item) => item.agreementId) ?? []);
+      const comparesTerms = Boolean(pricedMatch && agreements.some((item) => pricedIds.has(item.id) && hasTerms(item.terms)));
+      const used = new Set((comparesTerms ? pricedMatch : match)?.used.map((item) => item.agreementId) ?? []);
       const rateRows = rates
         ? parse("Prisaftale", () => importRows("rates", rates.sheet, rates.mapping))
         : agreements.filter((item) => used.has(item.id)).flatMap((item) => item.rows);
@@ -93,7 +102,10 @@ export function AuditFlow({
         contribution: null,
       };
       setError("");
-      onReport(input, rates || !match ? runAudit(invoiceRows, rateRows) : datedAudit(invoiceRows, match, agreements));
+      const report = rates || !match ? runAudit(invoiceRows, rateRows)
+        : comparesTerms && priced && pricedMatch ? datedAudit(priced, pricedMatch, agreements)
+          : datedAudit(invoiceRows, match, agreements);
+      onReport({ ...input, invoice: comparesTerms && priced ? priced : invoiceRows, rates: rateRows.length ? rateRows : input.rates }, report);
     } catch (cause) {
       setError((cause as Error).message);
     }
@@ -258,11 +270,18 @@ function UploadCard({
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState("");
   const [busy, setBusy] = useState("");
+  const [reading, setReading] = useState<{ name: string; started: number; stage: "upload" | "read" | "done"; upload: number; done: number; total: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [dragging, setDragging] = useState(false);
   const [showMapping, setShowMapping] = useState(false);
   const [error, setError] = useState("");
   const uploadId = useRef(0);
   const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!reading) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [reading]);
   const needle = query.trim().toLowerCase();
   const library = past
     .filter((source) => !needle || `${source.name} ${source.carrier} ${source.note} ${shortDate(source.date)}`.toLowerCase().includes(needle))
@@ -273,6 +292,7 @@ function UploadCard({
     uploadId.current += 1;
     setPicked("");
     setBusy("");
+    setReading(null);
     onChange(null);
     setError("");
   }
@@ -310,7 +330,22 @@ function UploadCard({
         if (!companyId) throw new Error("Vælg en organisation, før en PDF kan læses.");
         if (file.size > 8_000_000) throw new Error("PDF'en må fylde højst 8 MB.");
         setBusy("upload");
-        const extract = await extractUpload(file, companyId);
+        setReading({ name: file.name, started: Date.now(), stage: "upload", upload: 0, done: 0, total: 0 });
+        setNow(Date.now());
+        const extract = await extractUpload(file, companyId, (progress) => {
+          if (id !== uploadId.current) return;
+          setReading((current) => current && {
+            ...current,
+            stage: progress.stage ?? "read",
+            upload: progress.size ? Math.min(100, Math.round(((progress.loaded ?? 0) / progress.size) * 100)) : current.upload,
+            done: progress.done,
+            total: progress.total,
+          });
+        });
+        if (id === uploadId.current) {
+          setReading((current) => current && { ...current, stage: "done" });
+          await new Promise((resolve) => window.setTimeout(resolve, 700));
+        }
         if (id !== uploadId.current) return;
         const sheet = extractSheet(extract);
         const mapping = suggestMapping(kind, sheet.headers);
@@ -332,7 +367,10 @@ function UploadCard({
       if (id !== uploadId.current) return;
       setError((cause as Error).message);
     } finally {
-      if (id === uploadId.current) setBusy((now) => (now === "upload" ? "" : now));
+      if (id === uploadId.current) {
+        setReading(null);
+        setBusy((now) => (now === "upload" ? "" : now));
+      }
     }
   }
 
@@ -408,10 +446,10 @@ function UploadCard({
               <button type="button" className="icon-button" aria-label="Fjern fil" onClick={clear}><X size={15} /></button>
             </div>
           </>
-        ) : busy === "upload" ? (
+        ) : reading ? (
           <>
             <div className="drop-icon"><UploadCloud size={23} /></div>
-            <span role="status">Læser PDF'ens linjer med Workers AI…</span>
+            <ReadBar name={reading.name} stage={reading.stage} uploadPercent={reading.upload} done={reading.done} total={reading.total} elapsedMs={now - reading.started} />
           </>
         ) : (
           <>
