@@ -120,7 +120,7 @@ export function acceptIssue(drafts: ReviewDrafts, key: string): Partial<ReviewDr
 }
 
 /** The issue to show after `key`: the next one in screen order, wrapping, or null when none is left. */
-export function nextIssue(issues: ReviewIssue[], key: string | null, step: 1 | -1 = 1, order: string[] = []): ReviewIssue | null {
+export function nextIssue<T extends { key: string }>(issues: T[], key: string | null, step: 1 | -1 = 1, order: string[] = []): T | null {
   if (!issues.length) return null;
   const at = key ? issues.findIndex((issue) => issue.key === key) : -1;
   if (at >= 0) return issues[(at + step + issues.length) % issues.length];

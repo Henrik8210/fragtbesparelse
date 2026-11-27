@@ -147,6 +147,28 @@ const LAGER_TEXT = [
   "I alt DKK at betale  14.884,11",
 ].join("\n");
 
+test("a pallet line without its own weight is a fee, and a distribution line keeps route, weight and amount", () => {
+  const text = [
+    "02.10.2026  4500803  Jylland/Fyn A – COOP, 5260 Odense (4-6 ppl)  6  ppl  2840  161,87  971,22",
+    "31.10.2026  PAL-2510  Pallebytte, pr. bundpalleplads ved levering  102  ppl  9,86  1.005,72",
+    "Subtotal ekskl. moms  1.976,94",
+  ].join("\n");
+  const extract = validateExtract({
+    carrier: "Test", invoiceNumber: "1", invoiceDate: "2026-10-31", currency: "DKK", subtotal: 1976.94, vat: 0, total: 1976.94, lines: [],
+  }, text, { sha256: "x", filename: "x.pdf" });
+  const [shipment, fee] = extract.lines;
+  assert.equal(extract.lines.length, 2);
+  assert.deepEqual(
+    { kind: shipment.kind, service: shipment.service, zone: shipment.zone, weightKg: shipment.weightKg, quantity: shipment.quantity, unit: shipment.unit, unitPriceOre: shipment.unitPriceOre, amountOre: shipment.amountOre },
+    { kind: "shipment", service: "Jylland/Fyn A – COOP, 5260 Odense (4-6 ppl)", zone: "Jylland/Fyn A", weightKg: 2840, quantity: 6, unit: "ppl", unitPriceOre: 16187, amountOre: 97122 },
+  );
+  assert.equal(shipment.issues.length, 0);
+  assert.deepEqual(
+    { kind: fee.kind, weightKg: fee.weightKg, quantity: fee.quantity, unit: fee.unit, amountOre: fee.amountOre },
+    { kind: "fee", weightKg: 0, quantity: 102, unit: "ppl", amountOre: 100572 },
+  );
+});
+
 test("reads a 3PL invoice's lines from the text layer when the model returns none", () => {
   const header = { carrier: "Lagerhus Test A/S", invoiceNumber: "9000123", invoiceDate: "2026-10-31", currency: "DKK", subtotal: 11907.29, vat: 2976.82, total: 14884.11, unmapped: [] };
   const extract = validateExtract({ ...header, lines: [] }, LAGER_TEXT, { sha256: "lager", filename: "lager.pdf" });
@@ -157,16 +179,18 @@ test("reads a 3PL invoice's lines from the text layer when the model returns non
   const [storage, rent, odense, hamburg, oil] = extract.lines;
   assert.deepEqual(
     { kind: storage.kind, date: storage.date, reference: storage.reference, quantity: storage.quantity, unit: storage.unit, unitPriceOre: storage.unitPriceOre, amountOre: storage.amountOre },
-    { kind: "shipment", date: "2026-10-01", reference: "IND-2610", quantity: 10, unit: "pll", unitPriceOre: 3000, amountOre: 30000 },
+    { kind: "fee", date: "2026-10-01", reference: "IND-2610", quantity: 10, unit: "pll", unitPriceOre: 3000, amountOre: 30000 },
   );
   assert.equal(rent.quantity, 1000);
-  assert.deepEqual([odense.shipment, odense.weightKg, odense.zone, odense.destination], ["4500803", 760, "Jylland/Fyn A", "DK"]);
-  assert.deepEqual([hamburg.weightKg, hamburg.destination], [0, "DE"]);
+  assert.equal(rent.kind, "fee");
+  assert.deepEqual([odense.shipment, odense.weightKg, odense.zone, odense.service, odense.destination], ["4500803", 760, "Jylland/Fyn A", "Jylland/Fyn A – Butik, 5260 Odense (2-3 ppl)", "DK"]);
+  assert.deepEqual([hamburg.weightKg, hamburg.destination], [9240, "DE"]);
   assert.deepEqual([oil.kind, oil.percent, oil.quantity], ["surcharge", 20, 2672.74]);
-  assert.equal(extractToInvoiceRows(extract).length, 4);
+  assert.equal(extractToInvoiceRows(extract).length, 2, "priced fees stay off the parcel rows; the oil surcharge is spread over the two shipments");
 
-  const kept = validateExtract({ ...header, lines: extract.lines.map((line) => ({ ...line, amount: line.amountOre / 100 })) }, LAGER_TEXT, { sha256: "lager", filename: "lager.pdf" });
-  assert.ok(!kept.issues.some((issue) => /tabel/.test(issue)), "a model reply that sums is kept");
+  const kept = validateExtract({ ...header, lines: extract.lines.map((line) => ({ ...line, amount: line.amountOre / 100, weightKg: line.weightKg })) }, LAGER_TEXT, { sha256: "lager", filename: "lager.pdf" });
+  assert.ok(kept.issues.some((issue) => /tabel/.test(issue)), "the printed table wins even when the model also sums");
+  assert.equal(kept.lines[3].weightKg, 9240);
 });
 
 test("finds printed amounts across pdf.js splits, kr. suffixes and thousand separators", () => {

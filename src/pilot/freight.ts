@@ -26,7 +26,10 @@ export const CONSENT_TEXT =
   "Jeg bekræfter, at virksomheden må bidrage med de kontrollerede prisdata fra denne rapport til fremtidige, samlede markedsbenchmarks.";
 
 const oreSchema = z.number().int().min(-100000000).max(100000000);
-const weightSchema = z.number().finite().min(0).max(1000);
+/** Parcel rate steps stay within 1,000 kg. A 3PL line can weigh a whole load, up to a full trailer. */
+const parcelKg = z.number().finite().min(0).max(1000);
+export const SHIPMENT_MAX_KG = 40_000;
+const shipmentKg = z.number().finite().min(0).max(SHIPMENT_MAX_KG);
 const countrySchema = z.string().regex(/^[A-Z]{2}$/);
 
 function isDate(value: string) {
@@ -41,7 +44,7 @@ export const invoiceRowSchema = z.object({
   shipment: z.string().trim().min(1).max(96),
   date: dateSchema,
   service: z.string().trim().min(1).max(64),
-  weight: weightSchema,
+  weight: shipmentKg,
   billedOre: oreSchema,
   origin: countrySchema.default("DK"),
   destination: countrySchema.default("DK"),
@@ -49,7 +52,7 @@ export const invoiceRowSchema = z.object({
 
 export const rateRowSchema = z.object({
   service: z.string().trim().min(1).max(64),
-  maxWeight: weightSchema.positive(),
+  maxWeight: parcelKg.positive(),
   baseOre: oreSchema.nonnegative(),
   fuelPct: z.number().finite().min(0).max(300).default(0),
   fixedOre: oreSchema.nonnegative().default(0),
