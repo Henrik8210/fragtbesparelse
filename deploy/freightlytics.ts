@@ -5,7 +5,11 @@ import { REVISION, healthMatchesRevision } from "./revision.ts";
 import { readParts, type PartPlan, type PartReport } from "../src/pilot/agreementParts.ts";
 
 const PORT = 8080;
-const INACTIVITY_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+// basic is 1 GiB of memory, 4 GB of disk and a quarter of a vCPU. Memory and disk are billed for every second the
+// container is awake, at that size, so the previous 4 GiB instance was most of the Cloudflare bill while the app sat idle.
+const CONTAINER_INSTANCE = "basic";
+// Ten minutes of quiet, then it sleeps. The next visit waits for boot. A tab left open keeps polling and stays awake.
+const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_KEY = "container-image";
 const SECRET_KEY = "admin-secret-fingerprint";
 const TOKEN_KEY = "admin-sync-token";
@@ -198,7 +202,7 @@ export class FreightlyticsContainer extends DurableObject<Env> {
     if (fingerprint) env.FRAGTBLIK_ADMIN_PASSWORD = config.adminPassword;
     container.start({
       image,
-      instance: "standard-1",
+      instance: CONTAINER_INSTANCE,
       enableInternet: true,
       env,
     });

@@ -17,6 +17,14 @@ describe("health revision", () => {
     expect(healthMatchesRevision("")).toBe(false);
   });
 
+  it("runs the basic instance and sleeps after ten minutes of quiet", () => {
+    const worker = readFileSync(new URL("./freightlytics.ts", import.meta.url), "utf8");
+    expect(worker).toContain('const CONTAINER_INSTANCE = "basic"');
+    expect(worker).toContain("const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000");
+    expect(worker).toContain("instance: CONTAINER_INSTANCE");
+    expect(worker).not.toContain("standard-1");
+  });
+
   it("is what the Node server answers on /health", () => {
     const server = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
     expect(server).toContain('import { REVISION } from "../deploy/revision.ts"');
