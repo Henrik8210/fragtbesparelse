@@ -119,7 +119,7 @@ No further SQL is required for a mail that was rejected. After `npx wrangler dep
 
 ## PDF-linjer med Workers AI
 
-A PDF on Fakturaer (received by mail or added there with Tilføj faktura) or a PDF uploaded in Nyt fakturatjek is read into invoice lines. The container reads the PDF's text layer with pdfjs and builds a JSON-schema request. The Durable Object runs it on the `AI` binding (`"ai": { "binding": "AI" }` in `wrangler.jsonc`) with `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, then posts the model output back to the container on `/api/internal/invoice-extract` with the sync token. The container validates the lines, checks their sum against the invoice total, sets a confidence, and caches the result per company and file hash. A scanned PDF with no text layer is not read.
+A PDF on Fakturaer (received by mail or added there with Tilføj faktura) or a PDF uploaded in Nyt fakturatjek is read into invoice lines. When the PDF's own table sums to the total, those columns are the lines: amount in Beløb, weight in Vægt, and a distribution row keeps its route as the delivery form. A priced fee (quantity and unit, no weight) stays a fee line and is not spread over the shipments. An invoice-level surcharge still is. The container reads the PDF's text layer with pdfjs and builds a JSON-schema request. The Durable Object runs it on the `AI` binding (`"ai": { "binding": "AI" }` in `wrangler.jsonc`) with `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, then posts the model output back to the container on `/api/internal/invoice-extract` with the sync token. The container validates the lines, checks their sum against the invoice total, sets a confidence, and caches the result per company and file hash. A scanned PDF with no text layer is not read.
 
 The binding needs no secret. Workers AI must be available on the Cloudflare account. Usage above the free 10,000 neurons a day needs the Workers Paid plan. One small invoice costs about $0.001 to $0.005. Each user can start at most 60 new reads an hour.
 
@@ -148,7 +148,7 @@ Price tables and "description  price  DKK" lines are also read straight from the
 
 A read of a 17-page, 22,000-character agreement is about 8 parts, run four at a time; at Workers AI's output speed for this model that is roughly 1–3 minutes, plus one retry round when a part comes back short. The browser asks for `application/x-ndjson`, and both the Durable Object and the REST fallback then answer with one progress line per finished part (plus a heartbeat every 15 seconds) and a final line with the status and the body. Each model call is stopped after 150 seconds and the part is read again. The container keeps the job for 15 minutes, and the browser gives up after 10 minutes with a message. A PDF that is only an image is refused before the model is called.
 
-The validation only keeps a subtotal or VAT amount the PDF prints. Each line is matched to the PDF text line that carries its amount, and a reference, route, service, weight, or surcharge description the model left empty is taken from that line. `EXTRACT_VERSION` 3 reads an older cache row again once. Version 3 adds `unmapped` (printed fields the schema has no place for, plus any key the model returned outside the schema) and `layout` (normalized labels from the text layer) to each extract.
+The validation only keeps a subtotal or VAT amount the PDF prints. Each line is matched to the PDF text line that carries its amount, and a reference, route, service, weight, or surcharge description the model left empty is taken from that line. `EXTRACT_VERSION` 3 reads an older cache row again once. Version 5 reads it again and prefers the printed table when that table sums. Version 3 adds `unmapped` (printed fields the schema has no place for, plus any key the model returned outside the schema) and `layout` (normalized labels from the text layer) to each extract.
 
 ## Formatændringer
 
@@ -164,7 +164,7 @@ A price agreement PDF goes through the same hook with kind `agreement` (`observe
 
 ## Check faktura
 
-Each invoice on Fakturaer has a Check faktura button. It opens the invoice lines in an editor. Checked saves them as they are. Gem ændringer saves the edited values. The edited lines then replace the extract or the CSV rows in the viewer and in Nyt fakturatjek. The original lines, who checked, when, and each change are kept. An unchecked invoice is used as read. The app does not create the table. Without it, checks are kept in the running container until it restarts, and Fakturaer says so. Run this in the Supabase SQL editor to keep them:
+Each invoice on Fakturaer has a Check faktura button. It opens the invoice lines in an editor. Each field that blocks saving is listed at the top, and Næste scrolls to it and says what is wrong. Checked saves them as they are. Gem ændringer saves the edited values. The edited lines then replace the extract or the CSV rows in the viewer and in Nyt fakturatjek. The original lines, who checked, when, and each change are kept. An unchecked invoice is used as read. The app does not create the table. Without it, checks are kept in the running container until it restarts, and Fakturaer says so. Run this in the Supabase SQL editor to keep them:
 
 ```sql
 create table if not exists public.invoice_checks (

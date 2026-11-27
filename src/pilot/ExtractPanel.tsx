@@ -3,7 +3,7 @@ import { CircleAlert, CircleCheck, Sparkles } from "lucide-react";
 import { fetchInvoiceCheck } from "./checkClient.ts";
 import { extractMailFile } from "./extractClient.ts";
 import { checkedExtract, lineChanges, type InvoiceCheck } from "./invoiceCheck.ts";
-import { CONFIDENCE_LABELS, lineTotalOre, type InvoiceExtract } from "./invoiceExtract.ts";
+import { CONFIDENCE_LABELS, lineFee, lineTotalOre, type InvoiceExtract } from "./invoiceExtract.ts";
 
 const dkk = new Intl.NumberFormat("da-DK", { style: "currency", currency: "DKK" });
 const money = (ore: number) => dkk.format(ore / 100);
@@ -94,16 +94,18 @@ export function ExtractTable({ extract }: { extract: InvoiceExtract }) {
           </thead>
           <tbody>
             {extract.lines.map((line, index) => {
-              const invoiceLevel = line.kind === "surcharge" || line.kind === "fee";
+              const ownFee = lineFee(line);
+              const invoiceLevel = (line.kind === "surcharge" || line.kind === "fee") && !ownFee;
               const surcharges = invoiceLevel
                 ? [{ label: line.service || KIND_LABELS[line.kind], amountOre: line.amountOre }, ...line.surcharges]
                 : line.surcharges;
+              const measure = [line.weightKg ? `${line.weightKg.toLocaleString("da-DK")} kg` : "", line.zone].filter(Boolean).join(" · ");
               return (
                 <tr key={index} className={line.issues.length ? "flagged" : undefined} title={line.issues.join(" ") || undefined}>
                   <td>
                     {line.shipment || line.reference || `Linje ${index + 1}`}
                     {line.shipment && line.reference ? <small>{line.reference}</small> : null}
-                    {invoiceLevel
+                    {ownFee ? <small>Gebyr</small> : invoiceLevel
                       ? <small>{line.kind === "fee" ? "Gebyr på hele fakturaen" : "Tillæg på hele fakturaen"}</small>
                       : KIND_LABELS[line.kind] ? <small>{KIND_LABELS[line.kind]}</small> : null}
                   </td>
@@ -115,8 +117,8 @@ export function ExtractTable({ extract }: { extract: InvoiceExtract }) {
                     {invoiceLevel ? "—" : line.service || <span className="soft-hint" title="Fakturaen angiver ikke leveringsform for linjen.">Ikke angivet</span>}
                   </td>
                   <td>
-                    {[line.weightKg ? `${line.weightKg.toLocaleString("da-DK")} kg` : "", line.zone].filter(Boolean).join(" · ") || (line.quantity === undefined ? "—" : "")}
-                    {line.quantity !== undefined ? <small>{quantityLabel(line)}</small> : null}
+                    {measure || (line.quantity === undefined ? "—" : quantityLabel(line))}
+                    {measure && line.quantity !== undefined ? <small>{quantityLabel(line)}</small> : null}
                   </td>
                   <td className="num">{invoiceLevel ? "—" : money(line.amountOre)}</td>
                   <td>{surcharges.length ? surcharges.map((item) => `${item.label} ${money(item.amountOre)}`).join(", ") : "—"}</td>

@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { invoiceRowSchema, type InvoiceRow } from "./freight.ts";
+import { invoiceRowSchema, SHIPMENT_MAX_KG, type InvoiceRow } from "./freight.ts";
 import { layoutFingerprint, type LayoutFingerprint } from "./formatDrift.ts";
 
 export const EXTRACT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-export const EXTRACT_VERSION = 4;
+export const EXTRACT_VERSION = 5;
 export const MAX_PROMPT_CHARS = 36_000;
 export const MAX_EXTRACT_LINES = 400;
 const SUM_TOLERANCE_ORE = 100;
@@ -365,7 +365,8 @@ const PERCENT_CELL = /^(\d+(?:,\d+)?) ?%$/;
 const LINE_START = /^(\d{1,2}[./-]\d{1,2}[./-]\d{4})$/;
 const FUEL = /\b(?:olie|br(?:æ|ae)ndstof|fuel|diesel)/i;
 const FOREIGN_POSTCODE = /\b(SE|DE|NO|FI|NL|PL|EE|LV|LT)-\d{4,5}\b/;
-const WEIGHT_UNITS = /^(?:ppl|pll|læs|kolli|palle|paller|stk|forsendelse)$/i;
+/** A unit that, together with its own weight, is a distribution line rather than a priced fee. */
+const TRANSPORT_UNIT = /^(?:ppl|pll|læs)$/i;
 
 const danishNumber = (cell: string) => Number(cell.replaceAll(".", "").replace(",", "."));
 
@@ -393,14 +394,16 @@ export function printedLines(pdfText: string): ExtractLine[] {
     const unit = rest.find((cell) => !DANISH_NUMBER.test(cell) && !PERCENT_CELL.test(cell)) ?? "";
     const percentCell = rest.map((cell) => PERCENT_CELL.exec(cell)).find(Boolean);
     const fuel = FUEL.test(description);
-    const kind: LineKind = amountOre < 0 ? "credit" : fuel ? "surcharge" : "shipment";
+    // "6 ppl  2840  161,87" is a distribution line: quantity, weight, unit price. "186 pll  30,68" is a fee: quantity and unit price.
+    const weighed = !percentCell && numbers.length >= 3 && TRANSPORT_UNIT.test(unit) && numbers[1] > 0 && numbers[1] <= SHIPMENT_MAX_KG;
+    const kind: LineKind = amountOre < 0 ? "credit" : fuel ? "surcharge" : weighed ? "shipment" : "fee";
     const line: ExtractLine = {
       kind,
       shipment: reference && kind === "shipment" && /^\d{5,}$/.test(reference) ? reference : "",
       date,
       reference,
       service: description.slice(0, 64),
-      weightKg: 0,
+      weightKg: weighed ? numbers[1] : 0,
       zone: "",
       origin: "DK",
       destination: FOREIGN_POSTCODE.exec(description)?.[1] ?? "DK",
@@ -416,11 +419,10 @@ export function printedLines(pdfText: string): ExtractLine[] {
       line.quantity = numbers[0];
       line.unit = unit;
       line.unitPriceOre = ore(numbers.at(-1) as number);
-      // Invoice rows and checks hold parcel weights up to 1000 kg; a heavier pallet weight is left out, as on the model path.
-      if (numbers.length >= 3 && WEIGHT_UNITS.test(unit) && numbers[1] > 0 && numbers[1] <= 1000) line.weightKg = numbers[1];
     }
     const zone = /^([^–,(]+?) – /.exec(description)?.[1] ?? "";
-    if (zone && WEIGHT_UNITS.test(line.unit ?? "")) line.zone = zone.slice(0, 40);
+    if (zone && kind === "shipment") line.zone = zone.slice(0, 40);
+    if (kind === "shipment" && !line.weightKg) line.issues.push("Vægt mangler.");
     found.push(line);
   }
   return found;
@@ -462,8 +464,8 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
     if (kind === "surcharge" || kind === "fee") service = surchargeName(service);
     const reference = line.reference || fill?.reference || "";
     const zone = line.zone || fill?.zone || "";
-    const modelWeight = line.weightKg > 0 && line.weightKg <= 1000 ? line.weightKg : 0;
-    const sourceWeight = fill && fill.weightKg > 0 && fill.weightKg <= 1000 && (kind === "shipment" || kind === "credit") ? fill.weightKg : 0;
+    const modelWeight = line.weightKg > 0 && line.weightKg <= SHIPMENT_MAX_KG ? line.weightKg : 0;
+    const sourceWeight = fill && fill.weightKg > 0 && fill.weightKg <= SHIPMENT_MAX_KG && (kind === "shipment" || kind === "credit") ? fill.weightKg : 0;
     const weightKg = Math.round((modelWeight || sourceWeight) * 1000) / 1000;
     if (kind === "shipment" && !weightKg) lineIssues.push("Vægt mangler.");
     const date = line.date ? isoDate(line.date) : "";
@@ -490,17 +492,17 @@ export function validateExtract(raw: unknown, pdfText: string, meta: ExtractMeta
   const subtotalOre = data.subtotal > 0 && printed(ore(data.subtotal)) ? ore(data.subtotal) : null;
   const vatOre = data.vat > 0 && printed(ore(data.vat)) ? ore(data.vat) : null;
   const totalOre = data.total !== 0 ? ore(data.total) : null;
-  // When the model's lines miss the printed total but the dated table rows on the text layer meet it, the rows win.
+  // A dated table whose columns sum to the total is the invoice. A model reply that also sums can still put the amount
+  // in the wrong field, so the table wins whenever it matches.
   let lines = modelLines;
   let check = sumCheck(lines, subtotalOre, vatOre, totalOre);
-  if (check.status !== "match") {
-    const table = printedLines(pdfText).slice(0, MAX_EXTRACT_LINES);
-    const tableCheck = sumCheck(table, subtotalOre, vatOre, totalOre);
-    if (table.length >= 2 && tableCheck.status === "match") {
-      lines = table;
-      check = tableCheck;
-      issues.push(`Workers AI læste ${modelLines.length} af ${table.length} linjer. Linjerne er læst direkte fra PDF'ens tabel og summer til totalen.`);
-    }
+  const table = printedLines(pdfText).slice(0, MAX_EXTRACT_LINES);
+  const tableCheck = sumCheck(table, subtotalOre, vatOre, totalOre);
+  const structured = table.filter((line) => line.quantity !== undefined).length >= 2;
+  if (structured && tableCheck.status === "match") {
+    lines = table;
+    check = tableCheck;
+    issues.push(`Workers AI læste ${modelLines.length} af ${table.length} linjer. Linjerne er læst direkte fra PDF'ens tabel og summer til totalen.`);
   }
   const shipments = lines.filter((line) => line.kind === "shipment" || line.kind === "credit");
   if (shipments.length === 0) issues.push("Der blev ikke fundet forsendelseslinjer.");
@@ -562,12 +564,17 @@ export function sumCheck(lines: ExtractLine[], subtotalOre: number | null, vatOr
   };
 }
 
+/** A fee with its own quantity is a priced line (warehouse, handling). An invoice-level fee has none, and is spread. */
+export function lineFee(line: Pick<ExtractLine, "kind" | "quantity">): boolean {
+  return line.kind === "fee" && line.quantity !== undefined;
+}
+
 /** Invoice-level surcharges and fees are spread over the shipments by amount so each row carries its full price. */
 export function extractToInvoiceRows(extract: Pick<InvoiceExtract, "lines" | "invoiceNumber" | "invoiceDate">): InvoiceRow[] {
   const shipments = extract.lines.filter((line) => line.kind === "shipment" || line.kind === "credit");
   if (shipments.length === 0) throw new Error("PDF'en har ingen forsendelseslinjer, der kan kontrolleres.");
   const sharedOre = extract.lines
-    .filter((line) => line.kind === "surcharge" || line.kind === "fee")
+    .filter((line) => (line.kind === "surcharge" || line.kind === "fee") && !lineFee(line))
     .reduce((sum, line) => sum + lineTotalOre(line), 0);
   const own = shipments.map(lineTotalOre);
   const basis = own.reduce((sum, value) => sum + Math.max(0, value), 0);
@@ -592,6 +599,6 @@ export function extractToInvoiceRows(extract: Pick<InvoiceExtract, "lines" | "in
 
 export function sharedSurchargeOre(extract: InvoiceExtract): number {
   return extract.lines
-    .filter((line) => line.kind === "surcharge" || line.kind === "fee")
+    .filter((line) => (line.kind === "surcharge" || line.kind === "fee") && !lineFee(line))
     .reduce((sum, line) => sum + lineTotalOre(line), 0);
 }

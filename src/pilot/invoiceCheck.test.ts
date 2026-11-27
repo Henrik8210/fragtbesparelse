@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  checkedExtract, checkLinesSchema, isFieldEdited, lineChanges, lineProblems, linesFromExtract, linesFromRows,
+  checkedExtract, checkIssues, checkLinesSchema, isFieldEdited, lineChanges, lineProblems, linesFromExtract, linesFromRows,
   nextCheck, parseKroner, parseWeight, rowsFromLines, type CheckLine,
 } from "./invoiceCheck.ts";
-import { validateExtract } from "./invoiceExtract.ts";
+import { lineFee, validateExtract } from "./invoiceExtract.ts";
 
 const PDF_TEXT = `Freightlytics testfaktura
 Fakturanr: NL-2026-001
@@ -101,6 +101,7 @@ describe("input", () => {
     expect(parseWeight("2,5")).toBe(2.5);
     expect(parseWeight("")).toBe(0);
     expect(parseWeight("1001")).toBeNull();
+    expect(parseWeight("17650", 40_000)).toBe(17650);
   });
 
   it("names lines that cannot be used and rejects malformed payloads", () => {
@@ -108,9 +109,32 @@ describe("input", () => {
     expect(lineProblems([{ ...line, service: " " }], "2026-11-16")).toEqual(["Linje 1: leveringsform mangler."]);
     expect(lineProblems([{ ...line, date: "" }], "")).toEqual(["Linje 1: dato mangler."]);
     expect(lineProblems([{ ...line, kind: "fee" }], "2026-11-16")).toEqual(["Fakturaen skal have mindst én forsendelse."]);
+    const blank = { kind: "shipment" as const, date: "2026-10-02", service: "", weight: "", amount: "971,22" };
+    const issues = checkIssues([blank, { ...blank, service: "Jylland/Fyn A – COOP", weight: "2840" }, { ...blank, service: "", weight: "x" }], "2026-10-31");
+    expect(issues.map((issue) => issue.key)).toEqual(["line:0:service", "line:2:service", "line:2:weight"]);
+    expect(issues[0].message).toMatch(/Leveringsform mangler/);
+    expect(checkLinesSchema.safeParse([{ ...line, weightKg: 2840 }]).success).toBe(true);
     expect(checkLinesSchema.safeParse([{ ...line, date: "2026-02-30" }]).success).toBe(false);
     expect(checkLinesSchema.safeParse([{ ...line, amountOre: 1.5 }]).success).toBe(false);
     expect(checkLinesSchema.safeParse([]).success).toBe(false);
     expect(checkLinesSchema.parse([{ ...line, service: "  Pakke\n shop " }])[0].service).toBe("Pakke shop");
+  });
+
+  it("keeps a priced fee's quantity through a saved check, so it is not spread over the shipments", () => {
+    const source = {
+      ...extract,
+      lines: [
+        { ...extract.lines[0], kind: "fee" as const, quantity: 186, unit: "pll", unitPriceOre: 3068, amountOre: 570648, weightKg: 0, service: "Indlagring", shipment: "", surcharges: [] },
+        extract.lines[1],
+      ],
+    };
+    const saved = checkLinesSchema.parse(linesFromExtract(source));
+    expect(saved[0].quantity).toBe(186);
+    expect(saved[0].unit).toBe("pll");
+    const shown = checkedExtract(source, saved);
+    expect(lineFee(shown.lines[0])).toBe(true);
+    const rows = rowsFromLines(saved, { invoiceDate: "2026-11-16" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].billedOre).toBe(extract.lines[1].amountOre + extract.lines[1].surcharges.reduce((sum, item) => sum + item.amountOre, 0));
   });
 });

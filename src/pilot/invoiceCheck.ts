@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { InvoiceRow } from "./freight.ts";
+import { SHIPMENT_MAX_KG, type InvoiceRow } from "./freight.ts";
 import { extractToInvoiceRows, lineTotalOre, sumCheck, type ExtractLine, type InvoiceExtract, type LineKind } from "./invoiceExtract.ts";
 
 export const MAX_CHECK_LINES = 1200;
@@ -16,6 +16,10 @@ export type CheckLine = {
   amountOre: number;
   origin: string;
   destination: string;
+  /** Kept so a priced fee stays a line after the check is saved, and is not spread over the shipments. */
+  quantity?: number;
+  unit?: string;
+  unitPriceOre?: number;
 };
 
 export type CheckField = "kind" | "shipment" | "reference" | "date" | "service" | "zone" | "weightKg" | "amountOre";
@@ -57,10 +61,13 @@ export const checkLineSchema = z.object({
   date: z.string().refine((value) => value === "" || realDate(value), "Datoen skal være ÅÅÅÅ-MM-DD."),
   service: short(64),
   zone: short(40).default(""),
-  weightKg: z.number().finite().min(0).max(1000),
+  weightKg: z.number().finite().min(0).max(SHIPMENT_MAX_KG),
   amountOre: z.number().int().min(-100_000_000).max(100_000_000),
   origin: z.string().regex(/^([A-Z]{2})?$/).default(""),
   destination: z.string().regex(/^([A-Z]{2})?$/).default(""),
+  quantity: z.number().finite().min(0).max(1_000_000).optional(),
+  unit: short(32).optional(),
+  unitPriceOre: z.number().int().min(-100_000_000).max(100_000_000).optional(),
 });
 
 export const checkLinesSchema = z.array(checkLineSchema).min(1).max(MAX_CHECK_LINES);
@@ -77,6 +84,9 @@ export function linesFromExtract(extract: Pick<InvoiceExtract, "lines">): CheckL
     amountOre: lineTotalOre(line),
     origin: line.origin,
     destination: line.destination,
+    quantity: line.quantity,
+    unit: line.unit,
+    unitPriceOre: line.unitPriceOre,
   }));
 }
 
@@ -134,6 +144,9 @@ function asExtractLine(line: CheckLine): ExtractLine {
     amountOre: line.amountOre,
     surcharges: [],
     issues: [],
+    quantity: line.quantity,
+    unit: line.unit,
+    unitPriceOre: line.unitPriceOre,
   };
 }
 
@@ -175,12 +188,31 @@ export function kronerText(ore: number): string {
   return (ore / 100).toLocaleString("da-DK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function parseWeight(value: string): number | null {
+export function parseWeight(value: string, maxKg = 1000): number | null {
   const clean = value.trim().replace(/\s|kg$/gi, "").replace(",", ".");
   if (!clean) return 0;
   if (!/^\d+(?:\.\d+)?$/.test(clean)) return null;
   const weight = Number(clean);
-  return weight <= 1000 ? Math.round(weight * 1000) / 1000 : null;
+  return weight <= maxKg ? Math.round(weight * 1000) / 1000 : null;
+}
+
+export type CheckIssue = { key: string; where: string; message: string; blocking: true };
+
+/** Everything that blocks saving a check, one entry per field, in line order. */
+export function checkIssues(rows: { kind: LineKind; date: string; service: string; weight: string; amount: string }[], invoiceDate = ""): CheckIssue[] {
+  const found: CheckIssue[] = [];
+  const carries = rows.some((row) => row.kind === "shipment" || row.kind === "credit");
+  if (rows.length > 0 && !carries) found.push({ key: "shipments", where: "Fakturaen", message: "Fakturaen skal have mindst én forsendelse.", blocking: true });
+  rows.forEach((row, index) => {
+    const where = `Linje ${index + 1}`;
+    const key = (field: string) => `line:${index}:${field}`;
+    if (row.date && !realDate(row.date)) found.push({ key: key("date"), where, message: "Datoen er ugyldig.", blocking: true });
+    else if ((row.kind === "shipment" || row.kind === "credit") && !row.date && !invoiceDate) found.push({ key: key("date"), where, message: "Dato mangler. Udfyld datoen, eller lad fakturadatoen gælde.", blocking: true });
+    if (row.kind === "shipment" && !row.service.trim()) found.push({ key: key("service"), where, message: "Leveringsform mangler. Skriv ruten eller ydelsen, som den står på fakturaen.", blocking: true });
+    if (parseWeight(row.weight, SHIPMENT_MAX_KG) === null) found.push({ key: key("weight"), where, message: "Vægten er ikke et tal, eller den er over 40.000 kg.", blocking: true });
+    if (parseKroner(row.amount) === null) found.push({ key: key("amount"), where, message: "Beløbet er ikke et tal.", blocking: true });
+  });
+  return found;
 }
 
 /** Problems that keep a checked invoice from being used in the invoice check. */
