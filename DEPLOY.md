@@ -4,7 +4,7 @@ This is the same Node server as the app, reached through a Cloudflare Container.
 
 Cloudflare can run the existing server in a container. Cloudflare does not host Postgres. The database is a normal Postgres connection string, passed in as `DATABASE_URL` when you deploy. Nothing in this file is a secret.
 
-A container sleeps after six hours with no visits. The next visit starts it again. That first visit waits while the server boots. The port opens before migrations. The first database request applies them, then writes the admin hash, so a slow database does not keep the port closed.
+The container is Cloudflare's basic instance: 1 GiB of memory, 4 GB of disk and a quarter of a vCPU. Memory and disk are billed for every second it is awake, at that size. It sleeps after ten minutes with no visits. The next visit starts it again, and that visit waits while the server boots. A browser tab left open keeps the notification poll running, so the container stays awake until the tab is closed. The port opens before migrations. The first database request applies them, then writes the admin hash, so a slow database does not keep the port closed.
 
 `npx wrangler deploy` uploads a new image, but a container that is already running keeps its old image until the Worker stops it. The next visit reads `/health`. The running process must answer with the revision baked into that Worker. An older page, including one whose image name still matches, is stopped and the new image is started. That visit waits until the new process answers.
 
